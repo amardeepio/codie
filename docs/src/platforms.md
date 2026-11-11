@@ -25,13 +25,14 @@ v1.0 is macOS-first. The tier-1 scope includes:
 - Clipboard through `pbcopy`/`pbpaste`, with an OSC 52 fallback over SSH.
 - PTY-based integration tests, terminal restore on panic and signals, and documented quarantine behavior.
 
-Every release is tested on both arm64 and x64. A red macOS job blocks the tag.
+Every release is built on x64 in CI and smoke-tested on arm64. A red `check` job blocks the tag.
 
 ## Linux (tier 2)
 
-Linux builds and core paths are kept green as a portability signal. The full suite runs in CI, but fixes are
-best-effort and there is no terminal compatibility guarantee at 1.0. A static musl build and a maintainer-owned
-runner are post-1.0 work. Linux is promoted to tier 1 when that runner and a terminal matrix exist.
+Linux builds and core paths are kept green as a portability signal. The full suite runs locally and before
+releases; CI is macOS x64 only. Fixes are best-effort and there is no terminal compatibility guarantee at 1.0.
+A static musl build and a maintainer-owned runner are post-1.0 work. Linux is promoted to tier 1 when that
+runner and a terminal matrix exist.
 
 ## Windows (post-1.0)
 

@@ -51,7 +51,7 @@ cargo audit
 cargo machete
 ```
 
-A change is not ready for review while any of these fail. CI runs on macOS x64; arm64 is verified locally.
+A change is not ready for review while any of these fail. CI builds the workspace; run `cargo xtask ci` before pushing.
 
 ## Spec-first workflow
 
