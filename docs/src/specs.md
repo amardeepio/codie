@@ -49,7 +49,7 @@ per `MUST`/`SHOULD`, a changelog entry, and updated docs.
 - `cargo xtask spec-check` parses specs, scans tests and `#[spec]` attributes, and fails on missing or orphaned
   requirements or duplicate declarations.
 - `cargo xtask spec-report` writes `target/spec-report.md`, a requirement-to-test matrix.
-- `cargo xtask fixtures` regenerates recorded provider fixtures offline.
+- `cargo xtask coverage` enforces 80 percent line coverage in `core`, `ai`, and `tools`.
 - `cargo xtask ci` runs the full gate.
 
 The `#[spec]` attribute is a no-op proc macro used only for discovery. The test name must also contain the
@@ -62,9 +62,17 @@ snake-case requirement ID so failures are readable.
 | [Message model](../../specs/message/0001-message-model.md) | `MSG-001`..`MSG-010`, `MSG-040`..`MSG-044` | accepted | 1 |
 | [Agent turn loop](../../specs/agent/0001-turn-loop.md) | `AGENT-001`..`AGENT-012` | accepted | 1 |
 | [OpenAI-compatible provider](../../specs/provider/0001-openai-compatible.md) | `PROV-001`..`PROV-005`, `PROV-010`..`PROV-022` | accepted | 1 |
+| [DeepSeek profile](../../specs/provider/0002-deepseek.md) | none (profile) | accepted | 1 |
+| [OpenRouter profile](../../specs/provider/0003-openrouter.md) | none (profile) | accepted | 1 |
+| [Authentication](../../specs/provider/0004-auth.md) | `PROV-030`..`PROV-034` | accepted | 1 |
+| [Tool contract](../../specs/tools/0001-tool-contract.md) | `TOOL-001`..`TOOL-008` | accepted | 1 |
+| [Session JSONL v1](../../specs/session/0001-jsonl-format.md) | `SESS-001`..`SESS-009` | accepted | 1 |
+| [System prompt](../../specs/prompt/0001-system-prompt.md) | `PRMPT-001`..`PRMPT-008` | accepted | 1 |
+| [CLI surface](../../specs/cli/0001-cli-surface.md) | `CLI-001`..`CLI-007` | accepted | 1 |
+| [JSON events](../../specs/protocol/0001-json-events.md) | `PROTO-001`, `PROTO-002`, `PROTO-004`, `PROTO-005` | accepted | 1 |
+| [Permissions](../../specs/security/0001-permissions.md) | `SEC-001`..`SEC-006` | accepted | 1 |
 
-Auth requirements `PROV-030`..`PROV-034` are reserved for a future `specs/provider/0004-auth.md`. The full
-planned index is in [`PLAN.MD`](../../PLAN.MD) Appendix D.
+The full planned index, including Phase 4–7 areas, is in [`PLAN.MD`](../../PLAN.MD) Appendix D.
 
 ## Writing a spec
 

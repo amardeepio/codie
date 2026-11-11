@@ -20,8 +20,7 @@ cargo test --workspace
 cargo run -- --help
 ```
 
-The binary is `target/debug/codie`. `cargo run -- --version` should print the workspace version. In Phase 0 the
-binary intentionally does little; features land in Phase 1.
+The binary is `target/debug/codie`. `cargo run -- --version` prints the workspace version.
 
 ## Quality gates
 
@@ -31,19 +30,23 @@ The full gate is:
 cargo xtask ci
 ```
 
-Until the xtask implementation lands, run the equivalent commands directly:
+The equivalent commands, plus the network-dependent checks that CI owns:
 
 ```bash
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+cargo xtask spec-check --strict
+cargo xtask coverage
 cargo deny check
 cargo audit
 cargo machete
 ```
 
-`cargo xtask ci` runs formatting, linting, tests, `cargo xtask spec-check`, and documentation builds in a
-fixed order. CI only builds the workspace; run `cargo xtask ci` locally before pushing. `cargo xtask spec-check` fails
+`cargo xtask ci` runs formatting, linting, tests, strict `cargo xtask spec-check`, the 80 percent coverage gate,
+and documentation builds in a fixed order. Coverage requires `cargo install cargo-llvm-cov` and the
+`llvm-tools-preview` component. CI only builds the workspace; run `cargo xtask ci` locally before pushing.
+`cargo xtask spec-check` fails
 when an `implemented` spec has an untested `MUST`/`SHOULD`, a test names an unknown requirement, an ID is
 malformed, or two specs declare the same ID. `--strict` extends coverage enforcement to `accepted` specs.
 

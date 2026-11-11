@@ -18,12 +18,19 @@ codie reads configuration from three layers. Later layers do not override earlie
 | `CODIE_THINKING` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. |
 | `CODIE_MAX_TURNS` | Maximum assistant requests per run. Must be greater than zero. |
 | `CODIE_ALLOW` | Comma-separated mutating tools allowed in headless mode. |
+| `CODIE_BASE_URL` | Provider base URL override (proxy or local test endpoint). |
 | `CODIE_CONFIG_DIR` | Config directory (default `~/.config/codie`). |
 | `CODIE_DATA_DIR` | Data directory (default `~/.local/share/codie`). |
+| `CODIE_CACHE_DIR` | Cache root, including the OpenRouter catalog (default `<data>/cache`). |
 | `CODIE_SESSION_DIR` | Session root (default `<data>/sessions`). |
 | `CODIE_ENV_FILE` | Explicit `.env` file to load when `--env-file` is absent. |
+| `CODIE_RECORD_FIXTURES` | Opt in to fixture recording when built with `--features fixtures`. |
+| `CODIE_FIXTURE_DIR` | Directory for recorded fixtures (default `target/fixtures`). |
 
 CLI flags override environment values. For example, `--thinking high` wins over `CODIE_THINKING=low`.
+
+Inspect the effective values with `codie config get`, or one key with `codie config get provider`.
+`--base-url` overrides `CODIE_BASE_URL` for a single run.
 
 ## `.env` files
 

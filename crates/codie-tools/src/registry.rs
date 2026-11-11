@@ -4,7 +4,9 @@ use std::{collections::HashSet, fmt, sync::Arc};
 
 use codie_core::{Tool, ToolDecl, Toolbox};
 
-use crate::{bash::BashTool, edit::EditTool, read::ReadTool, write::WriteTool};
+use crate::{
+    bash::BashTool, edit::EditTool, read::ReadTool, validate::ValidatedTool, write::WriteTool,
+};
 
 /// A collection of tools addressed by their wire name.
 #[derive(Clone, Default)]
@@ -14,8 +16,15 @@ pub struct Registry {
 
 impl Registry {
     /// Creates a registry from an explicit list of tools.
+    ///
+    /// Every tool is wrapped so arguments are validated against its declared
+    /// schema before execution (`TOOL-002`).
     #[must_use]
     pub fn new(tools: Vec<Arc<dyn Tool>>) -> Self {
+        let tools = tools
+            .into_iter()
+            .map(|tool| Arc::new(ValidatedTool::new(tool)) as Arc<dyn Tool>)
+            .collect();
         Self { tools }
     }
 
@@ -32,7 +41,7 @@ impl Registry {
 
     /// Adds a tool to the registry.
     pub fn register(&mut self, tool: Arc<dyn Tool>) {
-        self.tools.push(tool);
+        self.tools.push(Arc::new(ValidatedTool::new(tool)));
     }
 }
 
@@ -207,6 +216,7 @@ impl Toolbox for PolicyToolbox {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codie_testkit::spec;
 
     #[test]
     fn registry_declares_builtins_in_order() {
@@ -221,6 +231,7 @@ mod tests {
         assert!(registry.get("missing").is_none());
     }
 
+    #[spec("SEC-001")]
     #[test]
     fn read_is_always_allowed() {
         let policy = Policy::default();
@@ -237,6 +248,7 @@ mod tests {
         assert!(policy.denial("bash").is_some());
     }
 
+    #[spec("SEC-002")]
     #[test]
     fn explicit_deny_wins() {
         let policy = Policy::headless(["write"]).with_denied(["write"]);

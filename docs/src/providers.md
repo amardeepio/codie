@@ -1,8 +1,7 @@
 # Providers
 
 codie ships one OpenAI-compatible adapter and two provider presets: OpenRouter and DeepSeek. Both use HTTP with
-API-key authentication and stream responses as Server-Sent Events. Provider support is planned for Phase 1;
-nothing in this chapter is available in the Phase 0 binary.
+API-key authentication and stream responses as Server-Sent Events. Both are available in the Phase 1 binary.
 
 ## Support matrix
 
@@ -19,32 +18,29 @@ separate is what lets one adapter serve both providers without provider-specific
 
 ```toml
 # ~/.config/codie/config.toml
-default_model = "deepseek/deepseek-flash"
+default_provider = "deepseek"
+default_model = "deepseek-flash"
 thinking = "medium"
+max_turns = 200
+base_url = "" # optional proxy or test endpoint
 
-[providers.deepseek]
-api_key_env = "DEEPSEEK_API_KEY"
-base_url = "https://api.deepseek.com"
-
-[providers.openrouter]
-api_key_env = "OPENROUTER_API_KEY"
-base_url = "https://openrouter.ai/api/v1"
-referer = "https://github.com/amardeepio/codie"
-title = "codie"
+[permissions]
+allow = ["edit", "bash"]
 ```
 
-Precedence is CLI flag, environment variable, project config, user config, then built-in default.
+Precedence is CLI flag, environment variable, `config.toml`, then built-in default. `codie config get` prints
+the effective values.
 
 ## Authentication
 
 Resolution order is explicit `--api-key`, stored credential, provider environment variable, then an error.
 Stored credentials live in `auth.json` with mode `0600`, are written atomically and fsynced, and are never
-logged or placed in child-process argv. `--api-key` is ephemeral and is never written to disk. Planned commands
-are `codie auth login`, `codie auth logout`, and `codie auth status [--json]`.
+logged or placed in child-process argv. `--api-key` is ephemeral, requires an explicit `--model`, and is never
+written to disk. Use `codie auth login`, `codie auth logout`, and `codie auth status [--json]` to manage stored
+keys. `auth status` exits `2` when no provider is configured.
 
-The normative auth requirements are `PROV-030`..`PROV-034`, reserved for a future auth spec. See
-[`specs/provider/0001-openai-compatible.md`](../../specs/provider/0001-openai-compatible.md) for the current
-summary.
+The normative auth requirements are `PROV-030`..`PROV-034` in
+[`specs/provider/0004-auth.md`](../../specs/provider/0004-auth.md).
 
 ## Differences the adapter handles
 
@@ -56,7 +52,7 @@ summary.
 | Cost | Estimated from model prices | Provider-reported `usage.cost`, authoritative |
 | Routing | Fixed base URL | Optional `provider.order` / `only` / `allow_fallbacks` |
 | Attribution | None | `HTTP-Referer` and `X-Title` |
-| Catalog | Bundled TOML, refreshed only in codie releases | `GET /models`, ETag, 4-hour freshness |
+| Catalog | Bundled in the binary, updated with codie releases | `GET /models`, ETag, 4-hour freshness, stale-on-failure |
 | Session affinity | None | `x-session-id` |
 
 ## Streaming and tool calls

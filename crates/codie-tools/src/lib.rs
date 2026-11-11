@@ -16,6 +16,7 @@ pub mod path;
 pub mod read;
 pub mod registry;
 pub mod truncate;
+pub mod validate;
 pub mod write;
 
 pub use bash::{BashTool, MAX_TIMEOUT_SECONDS};
@@ -28,6 +29,7 @@ pub use truncate::{
     format_size, truncate_head, truncate_head_with_limits, truncate_line, truncate_line_with_limit,
     truncate_tail, truncate_tail_with_limits,
 };
+pub use validate::ValidatedTool;
 pub use write::WriteTool;
 
 /// Names of the built-in tools.

@@ -16,4 +16,5 @@ workspace = true
 codie-core.workspace = true
 
 [dev-dependencies]
+codie-testkit.workspace = true
 tempfile.workspace = true

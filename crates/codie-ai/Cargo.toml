@@ -9,6 +9,10 @@ repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
 
+[features]
+# Enables opt-in live fixture recording (`CODIE_RECORD_FIXTURES=1`).
+fixtures = []
+
 [lints]
 workspace = true
 
@@ -27,5 +31,7 @@ tracing.workspace = true
 [dev-dependencies]
 codie-testkit.workspace = true
 insta.workspace = true
+proptest.workspace = true
 tempfile.workspace = true
+tracing-subscriber.workspace = true
 wiremock.workspace = true

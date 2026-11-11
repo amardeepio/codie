@@ -12,9 +12,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use codie_core::{
     Agent, AgentConfig, AgentEvent, AgentEventStream, AssistantDelta, AssistantEventStream,
-    AssistantMessage, AssistantStreamSender, ChatClient, Content, ExecutionMode, Message, ModelRef,
-    QueueMode, RunStatus, StopReason, StreamOptions, Tool, ToolCall, ToolContext, ToolDecl,
-    ToolProgress, ToolResult, ToolResultMessage, Toolbox, Usage,
+    AssistantMessage, AssistantStreamSender, ChatClient, Content, ExecutionMode, HookContext,
+    Hooks, Message, ModelRef, QueueMode, RunStatus, StopReason, StreamOptions, Tool, ToolCall,
+    ToolContext, ToolDecl, ToolProgress, ToolResult, ToolResultMessage, Toolbox, Usage,
 };
 use codie_testkit::spec;
 use serde_json::{Value, json};
@@ -786,6 +786,7 @@ where
 
 #[tokio::test]
 #[spec("AGENT-005")]
+#[spec("TOOL-007")]
 async fn spec_agent_005_tool_failures_become_results() {
     let boom = Arc::new(FakeTool::error("boom", "kaboom"));
     let client = Arc::new(FakeClient::new(vec![
@@ -1197,4 +1198,248 @@ async fn spec_agent_009_max_turns_enforced() {
     assert_eq!(status, RunStatus::TurnLimit);
     assert_eq!(assistant_messages(&messages).len(), 2);
     assert_eq!(turn_end_count(&events), 2);
+}
+
+// ---------------------------------------------------------------------------
+// SEC-003: a denied tool is a recoverable error result
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[spec("SEC-003")]
+async fn spec_sec_003_denial_is_an_error_result() {
+    let tool = Arc::new(FakeTool::new("write"));
+    let client = Arc::new(FakeClient::new(vec![
+        Script::ToolCalls(vec![call("call_1", "write")]),
+        text("understood"),
+    ]));
+    let toolbox = Arc::new(
+        FakeToolbox::new(vec![tool.clone() as Arc<dyn Tool>])
+            .denying("write", "not allowed by policy"),
+    );
+    let agent = Agent::new(as_chat_client(&client), toolbox);
+
+    let events = collect_run(agent.run(Message::user("prompt"), Vec::new(), run_config())).await;
+
+    assert_eq!(tool.calls(), 0, "a denied tool must not execute");
+    let results = first_turn_results(&events);
+    assert_eq!(results.len(), 1);
+    assert!(results[0].is_error);
+    assert!(
+        results[0].content[0]
+            .as_text()
+            .is_some_and(|text| text.contains("denied"))
+    );
+    let (messages, status) = agent_end(&events);
+    assert_eq!(status, RunStatus::Completed);
+    assert_eq!(
+        assistant_messages(&messages)
+            .last()
+            .map(|message| message.text()),
+        Some("understood".to_owned())
+    );
+}
+
+// ---------------------------------------------------------------------------
+// AGENT-010: hooks are fallible and may block tools
+// ---------------------------------------------------------------------------
+
+struct RejectingHooks {
+    fail_prepare: bool,
+    block_tool: bool,
+}
+
+#[async_trait]
+impl Hooks for RejectingHooks {
+    async fn prepare_request(&self, context: HookContext) -> Result<HookContext, String> {
+        if self.fail_prepare {
+            return Err("prepare exploded".to_owned());
+        }
+        Ok(context)
+    }
+
+    async fn before_tool(&self, call: &ToolCall) -> Result<(), String> {
+        if self.block_tool {
+            return Err(format!("`{}` is not permitted by the hook", call.name));
+        }
+        Ok(())
+    }
+}
+
+struct PanickingTool;
+
+#[async_trait]
+impl Tool for PanickingTool {
+    fn name(&self) -> &str {
+        "panic"
+    }
+
+    fn description(&self) -> &str {
+        "panics on purpose"
+    }
+
+    fn schema(&self) -> Value {
+        json!({"type": "object"})
+    }
+
+    async fn execute(
+        &self,
+        _call: &ToolCall,
+        _context: &ToolContext,
+        _updates: Option<mpsc::UnboundedSender<ToolProgress>>,
+    ) -> ToolResult {
+        panic!("tool panicked for the test");
+    }
+}
+
+#[tokio::test]
+#[spec("AGENT-010")]
+async fn spec_agent_010_hook_errors_fail_run() {
+    let tool = Arc::new(FakeTool::new("read"));
+    let client = Arc::new(FakeClient::new(vec![text("should not run")]));
+    let hooks = Arc::new(RejectingHooks {
+        fail_prepare: true,
+        block_tool: false,
+    });
+    let agent = Agent::with_hooks(
+        as_chat_client(&client),
+        toolbox(vec![tool.clone() as Arc<dyn Tool>]),
+        hooks,
+    );
+
+    let events = collect_run(agent.run(Message::user("prompt"), Vec::new(), run_config())).await;
+
+    assert_eq!(client.request_count(), 0, "the request hook fails first");
+    let (messages, status) = agent_end(&events);
+    assert_eq!(status, RunStatus::Error);
+    let last = messages.last().expect("a synthesized error message");
+    let assistant = last.as_assistant().expect("assistant message");
+    assert_eq!(assistant.stop_reason, StopReason::Error);
+    assert!(
+        assistant
+            .error_message
+            .as_deref()
+            .is_some_and(|message| message.contains("hook failed: prepare exploded"))
+    );
+}
+
+#[tokio::test]
+#[spec("AGENT-010")]
+async fn spec_agent_010_before_tool_block_is_an_error_result() {
+    let tool = Arc::new(FakeTool::new("read"));
+    let client = Arc::new(FakeClient::new(vec![
+        Script::ToolCalls(vec![call("call_1", "read")]),
+        text("recovered"),
+    ]));
+    let hooks = Arc::new(RejectingHooks {
+        fail_prepare: false,
+        block_tool: true,
+    });
+    let agent = Agent::with_hooks(
+        as_chat_client(&client),
+        toolbox(vec![tool.clone() as Arc<dyn Tool>]),
+        hooks,
+    );
+
+    let events = collect_run(agent.run(Message::user("prompt"), Vec::new(), run_config())).await;
+
+    assert_eq!(tool.calls(), 0, "a blocked tool must not execute");
+    let results = first_turn_results(&events);
+    assert_eq!(results.len(), 1);
+    assert!(results[0].is_error);
+    assert!(
+        results[0].content[0]
+            .as_text()
+            .is_some_and(|text| text.contains("blocked by a hook"))
+    );
+    let (messages, status) = agent_end(&events);
+    assert_eq!(status, RunStatus::Completed);
+    assert_eq!(
+        assistant_messages(&messages)
+            .last()
+            .map(|message| message.text()),
+        Some("recovered".to_owned())
+    );
+}
+
+// ---------------------------------------------------------------------------
+// AGENT-011: persistence is event-driven
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[spec("AGENT-011")]
+async fn spec_agent_011_persistence_is_event_driven() {
+    let tool = Arc::new(FakeTool::new("read"));
+    let client = Arc::new(FakeClient::new(vec![
+        Script::ToolCalls(vec![call("call_1", "read")]),
+        text("done"),
+    ]));
+    let agent = Agent::new(
+        as_chat_client(&client),
+        toolbox(vec![tool as Arc<dyn Tool>]),
+    );
+
+    let events = collect_run(agent.run(Message::user("prompt"), Vec::new(), run_config())).await;
+
+    // A session writer appends exactly what MessageEnd carries, nothing else.
+    let persisted = events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::MessageEnd { message } => Some(message.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    let (final_messages, status) = agent_end(&events);
+    assert_eq!(status, RunStatus::Completed);
+    assert_eq!(persisted, final_messages, "the projection is event-driven");
+    assert!(
+        persisted.iter().all(|message| {
+            message
+                .as_assistant()
+                .is_none_or(|assistant| assistant.stop_reason != StopReason::Pending)
+        }),
+        "no partial assistant message is ever persisted"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::MessageUpdate { .. })),
+        "streaming updates are separate from persistence events"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// AGENT-012: a panicking tool is caught
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[spec("AGENT-012")]
+async fn spec_agent_012_tool_panic_is_caught() {
+    let client = Arc::new(FakeClient::new(vec![
+        Script::ToolCalls(vec![call("call_1", "panic")]),
+        text("recovered"),
+    ]));
+    let agent = Agent::new(
+        as_chat_client(&client),
+        toolbox(vec![Arc::new(PanickingTool) as Arc<dyn Tool>]),
+    );
+
+    let events = collect_run(agent.run(Message::user("prompt"), Vec::new(), run_config())).await;
+
+    let results = first_turn_results(&events);
+    assert_eq!(results.len(), 1);
+    assert!(results[0].is_error);
+    assert!(
+        results[0].content[0]
+            .as_text()
+            .is_some_and(|text| text.contains("panicked"))
+    );
+    let (messages, status) = agent_end(&events);
+    assert_eq!(status, RunStatus::Completed);
+    assert_eq!(
+        assistant_messages(&messages)
+            .last()
+            .map(|message| message.text()),
+        Some("recovered".to_owned())
+    );
 }

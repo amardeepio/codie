@@ -4,6 +4,7 @@
 //! what a script or terminal would observe.
 
 use assert_cmd::Command;
+use codie_testkit::spec;
 use predicates::prelude::*;
 use tempfile::TempDir;
 
@@ -33,6 +34,7 @@ fn version_flag_prints_the_version_to_stdout() {
         .stderr(predicate::str::is_empty());
 }
 
+#[spec("CLI-001")]
 #[test]
 fn help_flag_documents_the_surface() {
     let (mut command, _home) = codie();
@@ -54,7 +56,7 @@ fn no_arguments_prints_help_to_stderr_and_fails() {
     command
         .assert()
         .failure()
-        .code(2)
+        .code(1)
         .stdout(predicate::str::is_empty())
         .stderr(predicate::str::contains("Usage:"));
 }
@@ -73,6 +75,7 @@ fn models_lists_the_bundled_catalog() {
         .stderr(predicate::str::is_empty());
 }
 
+#[spec("PROV-032")]
 #[test]
 fn auth_status_reports_configuration_without_secrets() {
     let (mut command, _home) = codie();
@@ -80,7 +83,11 @@ fn auth_status_reports_configuration_without_secrets() {
         .args(["auth", "status", "--json"])
         .output()
         .expect("auth status runs");
-    assert!(output.status.success());
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "an unconfigured auth check must exit 2"
+    );
     let value: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("auth status is valid JSON");
     let providers = value["providers"].as_array().expect("providers array");
@@ -136,6 +143,81 @@ fn an_explicit_env_file_must_exist() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("environment file not found"));
+}
+
+#[test]
+#[spec("CLI-005")]
+fn spec_cli_005_unknown_flags_fail_fast() {
+    let (mut command, _home) = codie();
+    command
+        .args(["--definitely-not-a-flag"])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("unexpected argument"));
+}
+
+#[test]
+#[spec("CLI-007")]
+fn spec_cli_007_startup_makes_no_network_call() {
+    let (mut command, _home) = codie();
+    command
+        .env("CODIE_BASE_URL", "http://127.0.0.1:9")
+        .arg("models")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("deepseek-flash"));
+
+    let (mut command, _home) = codie();
+    command
+        .env("CODIE_BASE_URL", "http://127.0.0.1:9")
+        .arg("--version")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("codie"));
+}
+
+#[test]
+fn api_key_requires_an_explicit_model() {
+    let (mut command, _home) = codie();
+    command
+        .args(["-p", "--api-key", "secret", "hello"])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("--api-key requires"))
+        .stderr(predicate::str::contains("--model"));
+}
+
+#[spec("CLI-002")]
+#[test]
+fn config_get_reports_effective_values() {
+    let (mut command, _home) = codie();
+    command
+        .args(["config", "get", "provider"])
+        .assert()
+        .success()
+        .stdout("deepseek\n")
+        .stderr(predicate::str::is_empty());
+
+    let (mut command, _home) = codie();
+    command
+        .args(["config", "get"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"thinking\""))
+        .stdout(predicate::str::contains("\"max-turns\": 200"));
+}
+
+#[test]
+fn config_get_rejects_unknown_keys() {
+    let (mut command, _home) = codie();
+    command
+        .args(["config", "get", "nope"])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("unknown configuration key"));
 }
 
 #[test]

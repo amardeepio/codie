@@ -13,6 +13,7 @@ struct FileConfig {
     default_model: Option<String>,
     thinking: Option<String>,
     max_turns: Option<usize>,
+    base_url: Option<String>,
     permissions: Option<FilePermissions>,
 }
 
@@ -26,6 +27,8 @@ struct FilePermissions {
 pub(crate) struct Config {
     /// Directory containing credentials and data.
     pub(crate) data_dir: PathBuf,
+    /// Directory for cache files such as the OpenRouter catalog.
+    pub(crate) cache_dir: PathBuf,
     /// Root directory for sessions.
     pub(crate) session_dir: PathBuf,
     /// Default provider id.
@@ -36,6 +39,8 @@ pub(crate) struct Config {
     pub(crate) thinking: ThinkingLevel,
     /// Maximum assistant requests per run.
     pub(crate) max_turns: usize,
+    /// Optional provider base URL override (proxy or local test endpoint).
+    pub(crate) base_url: Option<String>,
     /// Mutating tools allowed in headless mode.
     pub(crate) allow: Vec<String>,
 }
@@ -51,6 +56,7 @@ impl Config {
             .unwrap_or_else(|| home_dir().join(".local").join("share").join("codie"));
         let session_dir =
             env_path("CODIE_SESSION_DIR").unwrap_or_else(|| data_dir.join("sessions"));
+        let cache_dir = env_path("CODIE_CACHE_DIR").unwrap_or_else(|| data_dir.join("cache"));
 
         let file = load_file(&config_dir.join("config.toml"))?;
 
@@ -88,6 +94,7 @@ impl Config {
 
         Ok(Self {
             data_dir,
+            cache_dir,
             session_dir,
             default_provider: env_string("CODIE_PROVIDER")
                 .or(file.default_provider)
@@ -95,6 +102,7 @@ impl Config {
             default_model: env_string("CODIE_MODEL").or(file.default_model),
             thinking,
             max_turns,
+            base_url: env_string("CODIE_BASE_URL").or(file.base_url),
             allow,
         })
     }
@@ -151,11 +159,13 @@ mod tests {
     fn session_directory_encodes_the_working_directory() {
         let config = Config {
             data_dir: PathBuf::from("/tmp/d"),
+            cache_dir: PathBuf::from("/tmp/c"),
             session_dir: PathBuf::from("/tmp/s"),
             default_provider: "deepseek".into(),
             default_model: None,
             thinking: ThinkingLevel::Medium,
             max_turns: 200,
+            base_url: None,
             allow: Vec::new(),
         };
         let directory = config.session_dir_for(Path::new("/Users/me/project"));

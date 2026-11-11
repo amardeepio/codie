@@ -9,6 +9,7 @@ use codie_prompt::{
     ContextFile, DEFAULT_PREAMBLE, PromptInput, build_system_message, build_system_prompt,
     discover_project_context, load_project_context,
 };
+use codie_testkit::spec;
 
 fn tool(name: &str, description: &str) -> ToolDecl {
     ToolDecl {
@@ -38,6 +39,7 @@ fn sample_input() -> PromptInput {
     }
 }
 
+#[spec("PRMPT-001")]
 #[test]
 fn sections_are_ordered_preamble_tools_rules_context_cwd() {
     let prompt = build_system_prompt(&sample_input());
@@ -54,6 +56,7 @@ fn sections_are_ordered_preamble_tools_rules_context_cwd() {
     assert!(prompt.ends_with("</cwd>"));
 }
 
+#[spec("PRMPT-002")]
 #[test]
 fn non_preamble_sections_are_xml_wrapped() {
     let prompt = build_system_prompt(&sample_input());
@@ -69,6 +72,7 @@ fn non_preamble_sections_are_xml_wrapped() {
     assert!(!prompt.starts_with("<preamble>"));
 }
 
+#[spec("PRMPT-005")]
 #[test]
 fn prompt_assembly_is_deterministic_and_matches_snapshot() {
     let input = sample_input();
@@ -104,6 +108,7 @@ fn prompt_assembly_is_deterministic_and_matches_snapshot() {
     assert_eq!(first, expected);
 }
 
+#[spec("PRMPT-006")]
 #[test]
 fn default_preamble_is_used_when_none_is_supplied() {
     let mut input = PromptInput::new("/work");
@@ -115,6 +120,7 @@ fn default_preamble_is_used_when_none_is_supplied() {
     assert!(!prompt.contains("<project_context>"));
 }
 
+#[spec("PRMPT-003")]
 #[test]
 fn discovery_walks_to_root_topmost_first() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -135,6 +141,7 @@ fn discovery_walks_to_root_topmost_first() {
     );
 }
 
+#[spec("PRMPT-003")]
 #[test]
 fn override_file_wins_inside_the_same_directory() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -154,6 +161,7 @@ fn override_file_wins_inside_the_same_directory() {
     assert!(!discovered.contains(&claude_file));
 }
 
+#[spec("PRMPT-004")]
 #[test]
 fn missing_files_are_ignored() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -195,6 +203,7 @@ fn loaded_context_strips_a_bom_and_skips_non_utf8() {
     assert!(loaded.iter().any(|file| file.path == agents));
 }
 
+#[spec("PRMPT-007")]
 #[test]
 fn system_message_carries_prompt_and_tools() {
     let input = sample_input();
@@ -211,6 +220,7 @@ fn system_message_carries_prompt_and_tools() {
     }
 }
 
+#[spec("PRMPT-008")]
 #[test]
 fn empty_tools_still_produce_a_wrapped_section() {
     let prompt = build_system_prompt(&PromptInput::new("/work"));

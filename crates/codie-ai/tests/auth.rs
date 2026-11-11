@@ -1,11 +1,11 @@
-//! Credential store tests.
-//!
-//! `specs/provider/0004-auth.md` is not accepted yet, so these tests cover
-//! the informative rules in `PLAN.MD` §6.2.5 and are intentionally untagged.
+//! Credential store tests (`SPEC-PROV-004`).
 
 use codie_ai::{AuthStore, resolve_key};
+use codie_testkit::spec;
 use serde_json::json;
 
+#[spec("PROV-030")]
+#[spec("SEC-006")]
 #[test]
 fn store_round_trips_and_is_private() {
     let directory = tempfile::tempdir().expect("temp dir");
@@ -59,6 +59,7 @@ fn store_round_trips_and_is_private() {
     );
 }
 
+#[spec("PROV-032")]
 #[test]
 fn remove_only_touches_one_provider() {
     let directory = tempfile::tempdir().expect("temp dir");
@@ -93,6 +94,7 @@ fn malformed_file_is_an_error() {
     );
 }
 
+#[spec("PROV-031")]
 #[test]
 fn resolution_order() {
     let directory = tempfile::tempdir().expect("temp dir");
@@ -122,6 +124,26 @@ fn resolution_order() {
     let message = error.to_string();
     assert!(message.contains("CODIE_AI_TEST_MISSING_KEY"), "{message}");
     assert!(message.contains("codie auth login deepseek"), "{message}");
+}
+
+#[test]
+#[spec("PROV-033")]
+fn spec_prov_033_errors_never_include_the_key() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let store = AuthStore::new(directory.path().join("auth.json"));
+    let secret = "sk-very-secret-do-not-print";
+
+    store.set("deepseek", secret).expect("store key");
+
+    let error = resolve_key(None, &store, "openrouter", "CODIE_AI_TEST_MISSING_KEY")
+        .expect_err("a different provider must not resolve")
+        .to_string();
+    assert!(!error.contains(secret), "the error leaked the key");
+    assert!(error.contains("openrouter"), "{error}");
+    assert!(error.contains("CODIE_AI_TEST_MISSING_KEY"), "{error}");
+
+    let debug = format!("{store:?}");
+    assert!(!debug.contains(secret));
 }
 
 #[test]

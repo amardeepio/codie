@@ -11,6 +11,7 @@ use tracing_subscriber::EnvFilter;
 
 mod auth_cmd;
 mod config;
+mod config_cmd;
 mod models_cmd;
 mod run;
 
@@ -53,14 +54,26 @@ enum Commands {
     Auth(auth_cmd::AuthArgs),
     /// List the bundled model catalog.
     Models(models_cmd::ModelsArgs),
+    /// Inspect effective configuration.
+    Config(config_cmd::ConfigArgs),
 }
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(error) => {
+            let code = match error.kind() {
+                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion => 0,
+                _ => 1,
+            };
+            let _ = error.print();
+            return ExitCode::from(code);
+        }
+    };
     if let Err(error) = load_env(cli.env_file.as_deref()) {
         eprintln!("error: {error:#}");
-        return ExitCode::FAILURE;
+        return ExitCode::from(1);
     }
     init_tracing(cli.verbose);
 
@@ -68,23 +81,24 @@ async fn main() -> ExitCode {
         Some(Commands::Auth(args)) => {
             config::Config::load().and_then(|config| auth_cmd::run(args, &config))
         }
-        Some(Commands::Models(args)) => models_cmd::run(args),
+        Some(Commands::Models(args)) => models_cmd::run(args).map(|()| 0),
+        Some(Commands::Config(args)) => config_cmd::run(args).map(|()| 0),
         None => {
             return match run::run(cli.run).await {
                 Ok(code) => ExitCode::from(code),
                 Err(error) => {
                     eprintln!("error: {error:#}");
-                    ExitCode::FAILURE
+                    ExitCode::from(1)
                 }
             };
         }
     };
 
     match result {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(code) => ExitCode::from(code),
         Err(error) => {
             eprintln!("error: {error:#}");
-            ExitCode::FAILURE
+            ExitCode::from(1)
         }
     }
 }
