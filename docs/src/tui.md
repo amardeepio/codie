@@ -41,9 +41,10 @@ An empty list unbinds the action; unknown actions and keys are rejected at start
 
 ## Slash commands
 
-`/help`, `/hotkeys`, `/new`, `/session`, `/model [id]`, `/thinking [level]`, `/compact`, `/quit`.
+`/help`, `/hotkeys`, `/new`, `/session`, `/tree`, `/fork [entry]`, `/clone`, `/name [text]`, `/export [path]`,
+`/model [id]`, `/thinking [level]`, `/compact [instructions]`, `/quit`.
 
-`/model` and `/thinking` apply to the next run. `/compact` is a placeholder until Phase 3.
+`/model` and `/thinking` apply to the next run. Session commands are described in [Sessions](sessions.md).
 
 ## Permissions
 

@@ -117,16 +117,34 @@ pub(crate) struct RunArgs {
     #[arg(long)]
     pub(crate) cwd: Option<PathBuf>,
 
-    /// Open a specific session file.
-    #[arg(long)]
-    pub(crate) session: Option<PathBuf>,
+    /// Open a specific session by file path or identifier.
+    #[arg(long, value_name = "ID|PATH")]
+    pub(crate) session: Option<String>,
 
     /// Resume the most recent session for this directory.
-    #[arg(short = 'c', long = "continue")]
+    #[arg(short = 'c', long = "continue", conflicts_with_all = ["resume", "fork", "clone", "no_session"])]
     pub(crate) continue_session: bool,
 
+    /// Pick a session to resume. With an identifier, resume that session.
+    #[arg(
+        short = 'r',
+        long,
+        value_name = "ID",
+        num_args = 0..=1,
+        conflicts_with_all = ["continue_session", "fork", "clone", "session", "no_session"]
+    )]
+    pub(crate) resume: Option<Option<String>>,
+
+    /// Fork a session's current branch into a new session in this directory.
+    #[arg(long, value_name = "ID|PATH", conflicts_with_all = ["continue_session", "clone", "session", "no_session"])]
+    pub(crate) fork: Option<String>,
+
+    /// Clone every entry of a session into a new session in this directory.
+    #[arg(long, value_name = "ID|PATH", conflicts_with_all = ["continue_session", "fork", "session", "no_session"])]
+    pub(crate) clone: Option<String>,
+
     /// Do not persist this run.
-    #[arg(long)]
+    #[arg(long, conflicts_with_all = ["continue_session", "resume", "fork", "clone", "session"])]
     pub(crate) no_session: bool,
 
     /// Message text. When omitted and stdin is piped, stdin is used.
@@ -226,6 +244,7 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
             theme: args.theme.clone(),
             mode: args.tui_mode.into(),
             session_dir: session_dir.clone(),
+            resume_picker: matches!(args.resume, Some(None)),
             signal: Arc::new(AtomicI32::new(0)),
             registry: Arc::new(registry),
             keybindings: Some(config.config_dir.join("keybindings.toml")),
@@ -533,10 +552,21 @@ fn open_session(
     if args.no_session {
         return Ok(None);
     }
-    if let Some(path) = args.session.as_ref() {
-        return Ok(Some(Session::open(path)?));
+    if let Some(needle) = args.session.as_deref() {
+        return Ok(Some(Session::resolve(session_dir, needle)?));
     }
-    if args.continue_session {
+    if let Some(needle) = args.fork.as_deref() {
+        let source = Session::resolve(session_dir, needle)?;
+        return Ok(Some(source.fork_at(None, cwd, session_dir)?));
+    }
+    if let Some(needle) = args.clone.as_deref() {
+        let source = Session::resolve(session_dir, needle)?;
+        return Ok(Some(source.clone_session(cwd, session_dir)?));
+    }
+    if let Some(Some(needle)) = args.resume.as_ref() {
+        return Ok(Some(Session::resolve(session_dir, needle)?));
+    }
+    if args.continue_session || args.resume.is_some() {
         return Ok(Session::continue_recent(cwd, session_dir)?);
     }
     Ok(Some(Session::create(cwd, session_dir)?))

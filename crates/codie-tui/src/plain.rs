@@ -96,7 +96,9 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
             match command {
                 Command::Quit => break,
                 Command::Help | Command::Hotkeys => {
-                    println!("/help /quit /new /session /model [id] /thinking [level] /compact")
+                    println!(
+                        "/help /quit /new /session /tree /fork /clone /name /export /model [id] /thinking [level] /compact"
+                    )
                 }
                 Command::Model(argument) => {
                     if let Some(model) = argument {
@@ -121,13 +123,118 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
                         )
                     );
                 }
+                Command::Tree => match session.as_ref() {
+                    Some(session) => {
+                        for entry in session.tree() {
+                            let marker = if entry.on_branch { "●" } else { "○" };
+                            println!(
+                                "{}{marker} {} {:<16} {}",
+                                "  ".repeat(entry.depth.min(8)),
+                                entry.id,
+                                entry.kind,
+                                entry.description
+                            );
+                        }
+                    }
+                    None => println!("no session"),
+                },
+                Command::Fork(argument) => {
+                    if let Some(session) = session.as_mut() {
+                        if let Some(entry) = argument {
+                            match session.set_leaf(Some(&entry)) {
+                                Ok(()) => {
+                                    history = session.projection();
+                                    println!("Forked at entry {entry}.");
+                                }
+                                Err(error) => println!("Cannot fork: {error}"),
+                            }
+                        } else {
+                            println!("Use /fork <entry-id>; /tree lists entries.");
+                        }
+                    } else {
+                        println!("no session");
+                    }
+                }
+                Command::Clone => match session.as_ref() {
+                    Some(current) => {
+                        match current.clone_session(&options.cwd, &options.session_dir) {
+                            Ok(cloned) => {
+                                history = cloned.projection();
+                                println!("Cloned session {}.", cloned.id());
+                                session = Some(cloned);
+                            }
+                            Err(error) => println!("Cannot clone: {error}"),
+                        }
+                    }
+                    None => println!("no session"),
+                },
+                Command::Name(argument) => match session.as_mut() {
+                    Some(session) => {
+                        let result = match argument {
+                            Some(name) => session.set_name(name),
+                            None => session.clear_name(),
+                        };
+                        match result {
+                            Ok(()) => println!("Session name updated."),
+                            Err(error) => println!("Cannot name the session: {error}"),
+                        }
+                    }
+                    None => println!("no session"),
+                },
+                Command::Export(argument) => match session.as_ref() {
+                    Some(session) => {
+                        let path = argument.map_or_else(
+                            || {
+                                options
+                                    .cwd
+                                    .join(format!("codie-session-{}.jsonl", session.id()))
+                            },
+                            std::path::PathBuf::from,
+                        );
+                        match std::fs::File::create(&path)
+                            .map_err(|error| codie_core::Error::io(&path, error))
+                            .and_then(|file| session.export(file))
+                        {
+                            Ok(()) => println!("Exported to {}", path.display()),
+                            Err(error) => println!("Cannot export: {error}"),
+                        }
+                    }
+                    None => println!("no session"),
+                },
                 Command::New => {
                     session = Some(Session::create(&options.cwd, &options.session_dir)?);
                     history.clear();
                     println!("Started a new session.");
                 }
-                Command::Compact(_) => {
-                    println!("Manual compaction arrives in Phase 3.");
+                Command::Compact(instructions) => {
+                    if let Some(current) = session.as_ref() {
+                        let custom = instructions.as_deref();
+                        match crate::compaction::summarize(
+                            Arc::clone(&options.client),
+                            options.model.clone(),
+                            options.thinking,
+                            &history,
+                            custom,
+                            Some(current.id().to_owned()),
+                        )
+                        .await
+                        {
+                            Ok(outcome) => {
+                                if let Some(current) = session.as_mut() {
+                                    match crate::compaction::apply(current, &outcome, custom) {
+                                        Ok(projected) => {
+                                            history = projected;
+                                            println!("Compacted the context.");
+                                        }
+                                        Err(error) => println!("Cannot compact: {error}"),
+                                    }
+                                }
+                            }
+                            Err(error) => println!("Compaction failed: {error}"),
+                        }
+                    } else {
+                        println!("no session");
+                    }
                 }
                 Command::Unknown(name) => println!("Unknown command `/{name}`."),
             }

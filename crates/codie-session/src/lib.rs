@@ -18,7 +18,7 @@ mod session;
 mod time;
 
 pub use entry::{Entry, HeaderType, SESSION_FORMAT_VERSION, SessionHeader};
-pub use session::Session;
+pub use session::{Session, SessionSummary, TreeEntry};
 
 /// Returns the session format version written by this build.
 #[must_use]

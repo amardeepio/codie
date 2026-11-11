@@ -10,6 +10,7 @@
 
 pub mod app;
 pub mod commands;
+pub mod compaction;
 pub mod editor;
 pub mod keybindings;
 pub mod markdown;

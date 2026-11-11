@@ -19,4 +19,5 @@ serde_json.workspace = true
 
 [dev-dependencies]
 codie-testkit.workspace = true
+proptest.workspace = true
 tempfile.workspace = true
