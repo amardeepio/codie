@@ -14,6 +14,7 @@ mod config;
 mod config_cmd;
 mod models_cmd;
 mod run;
+mod sessions_cmd;
 
 /// A fast, extensible coding agent for the terminal.
 #[derive(Debug, Parser)]
@@ -55,6 +56,8 @@ enum Commands {
     Models(models_cmd::ModelsArgs),
     /// Inspect effective configuration.
     Config(config_cmd::ConfigArgs),
+    /// Inspect and export sessions.
+    Sessions(sessions_cmd::SessionsArgs),
 }
 
 #[tokio::main]
@@ -82,6 +85,9 @@ async fn main() -> ExitCode {
         }
         Some(Commands::Models(args)) => models_cmd::run(args).map(|()| 0),
         Some(Commands::Config(args)) => config_cmd::run(args).map(|()| 0),
+        Some(Commands::Sessions(args)) => {
+            config::Config::load().and_then(|config| sessions_cmd::run(args, &config))
+        }
         None => {
             return match run::run(cli.run).await {
                 Ok(code) => ExitCode::from(code),

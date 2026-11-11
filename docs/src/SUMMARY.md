@@ -6,6 +6,7 @@
 - [Development](development.md)
 - [Configuration and environment](configuration.md)
 - [Interactive terminal](tui.md)
+- [Sessions](sessions.md)
 - [Specifications](specs.md)
 - [Providers](providers.md)
 - [Platforms](platforms.md)

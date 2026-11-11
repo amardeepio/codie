@@ -30,8 +30,8 @@ plain mode. See [`docs/src/tui.md`](docs/src/tui.md) and [`ROADMAP.md`](ROADMAP.
   in headless mode unless explicitly allowed.
 - **Provider discipline.** OpenRouter and DeepSeek at launch, behind one OpenAI-compatible adapter with
   recorded-fixture conformance. No live API calls in CI.
-- **Sessions you can trust.** Append-only JSONL with resume today; fork and compaction arrive in Phase 3. The
-  file is the source of truth; the model-visible context is a projection.
+- **Sessions you can trust.** Append-only JSONL with resume, branch, fork, clone, and compaction. The file is
+  the source of truth; the model-visible context is a projection.
 - **Spec-first engineering.** Every normative requirement has an ID, a test path, and a traceability check.
 
 ## Principles

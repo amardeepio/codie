@@ -755,12 +755,29 @@ impl Session {
                 continue;
             }
             if let Some((summary, first_kept, _)) = entry.compaction() {
+                let system = matches!(
+                    messages.first().map(|(_, message)| message),
+                    Some(Message::System(_))
+                )
+                .then(|| messages[0].clone());
                 let keep_index = first_kept
                     .and_then(|id| messages.iter().position(|(message_id, _)| message_id == id))
                     .unwrap_or(messages.len());
                 messages.drain(..keep_index);
+                if let Some(system) = system
+                    && !matches!(
+                        messages.first().map(|(_, message)| message),
+                        Some(Message::System(_))
+                    )
+                {
+                    messages.insert(0, system);
+                }
+                let insert_at = usize::from(matches!(
+                    messages.first().map(|(_, message)| message),
+                    Some(Message::System(_))
+                ));
                 messages.insert(
-                    0,
+                    insert_at,
                     (
                         format!("compaction:{}", entry.id()),
                         compaction_message(summary),

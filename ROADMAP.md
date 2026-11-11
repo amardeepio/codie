@@ -4,9 +4,10 @@ codie is built in gated phases. Each phase ends with a demoable, installable art
 No phase starts before the previous phase's exit criteria are met. Durations are planning bounds for one
 full-time engineer, not commitments; the exit criteria are the real gate.
 
-**Current status: Phase 2 (Interactive TUI), complete.** `0.1.0` shipped the headless core and `0.2.0` ships
-the interactive app: streaming transcript, editor dock, keybindings, themes, slash commands, steering,
-permission prompts, plain mode, PTY restore tests, and the streaming benchmark. Phase 3 is next.
+**Current status: Phase 3 (Sessions at full fidelity), in progress.** `0.1.0` shipped the headless core and
+`0.2.0` shipped the interactive app. Phase 3 now has session tree operations, fork/clone, compaction, token
+estimation, an interactive picker, read-only `codie sessions` commands, and a frozen format v1 with migration and
+property tests. The release artifact is `0.3.0`.
 
 ## Phase summary
 
@@ -15,7 +16,7 @@ permission prompts, plain mode, PTY restore tests, and the streaming benchmark. 
 | 0 | Foundations: workspace, CI, spec framework, OSS files | 1 week | 1 week | repository + CI | Complete |
 | 1 | Headless core: providers, loop, tools, sessions, print/JSON | 3 weeks | 4 weeks | `0.1.0` — `codie -p` works | Complete |
 | 2 | Interactive TUI: streaming render, editor, themes, steering | 3 weeks | 7 weeks | `0.2.0` — interactive agent | Complete |
-| 3 | Sessions at full fidelity: resume, fork, compaction, picker | 2 weeks | 9 weeks | `0.3.0` — resume/fork/compact | Planned |
+| 3 | Sessions at full fidelity: resume, fork, compaction, picker | 2 weeks | 9 weeks | `0.3.0` — resume/fork/compact | In progress |
 | 4 | Customization and trust: skills, templates, `SYSTEM.md`, images | 2 weeks | 11 weeks | `0.4.0` — skills/templates/trust | Planned |
 | 5 | Protocols and polish: RPC, schemas, export, performance | 2 weeks | 13 weeks | `0.5.0` — RPC/export | Planned |
 | 6 | Extensions: JSON-RPC protocol, hooks, manifests, examples | 3 weeks | 16 weeks | `0.6.0` — extension protocol | Planned |
@@ -72,6 +73,28 @@ Status: complete 2026-11-11.
 Exit criteria (met 2026-11-11): 5,000 tokens over 60 frames render in under 40 ms (0.4–0.6 ms per frame); PTY tests
 verify terminal restore on SIGINT and SIGTERM; plain mode is append-only; `SPEC-TUI-001` is accepted with all ten
 requirements tested.
+
+## Phase 3: Sessions at full fidelity
+
+Goal: never lose work; branch and compact confidently.
+
+Status: in progress.
+
+- Tree sessions with persisted branch markers, `--continue`, `--resume`, `--session`, `--fork`, `--clone`, and
+  `--no-session`.
+- `/tree`, `/fork`, `/clone`, `/name`, `/export`, and an interactive picker with search, sort, rename, and delete.
+- Compaction with a fixed summary structure, a safe cut point, and a retained recent tail.
+- Token estimation and a context percentage in the footer.
+- Read-only `codie sessions list/show/export`.
+- Session format v1 freeze, a migration/refusal test, a property test for tree operations, and a 10k-entry
+  resume benchmark.
+
+Remaining exit work: automatic threshold compaction (`CTX-001`) and one-shot overflow recovery (`CTX-006`), then
+the `0.3.0` tag and release notes.
+
+Exit criteria: random sequences of appends, branches, edits, and compactions reopen to the same projection;
+resume after `kill -9` loses at most the in-flight partial message; 10k-entry resume is under 150 ms; the format
+is documented and announced as stable for 1.x.
 
 ## Later phases
 

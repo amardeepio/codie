@@ -15,6 +15,16 @@ pub enum Command {
     New,
     /// Show the current session.
     Session,
+    /// Show the session tree.
+    Tree,
+    /// Branch at an entry, or show the tree when no identifier is given.
+    Fork(Option<String>),
+    /// Clone the current session into a new file.
+    Clone,
+    /// Set or clear the session name.
+    Name(Option<String>),
+    /// Export the session as JSONL.
+    Export(Option<String>),
     /// Change or report the model.
     Model(Option<String>),
     /// Change or report the thinking level.
@@ -46,6 +56,11 @@ pub fn parse(input: &str) -> Option<Command> {
         "quit" | "exit" | "q" => Command::Quit,
         "new" => Command::New,
         "session" => Command::Session,
+        "tree" => Command::Tree,
+        "fork" => Command::Fork(argument),
+        "clone" => Command::Clone,
+        "name" => Command::Name(argument),
+        "export" => Command::Export(argument),
         "model" => Command::Model(argument),
         "thinking" => Command::Thinking(argument),
         "compact" => Command::Compact(argument),
@@ -68,6 +83,11 @@ pub fn names() -> &'static [&'static str] {
         "/quit",
         "/new",
         "/session",
+        "/tree",
+        "/fork",
+        "/clone",
+        "/name",
+        "/export",
         "/model",
         "/thinking",
         "/compact",

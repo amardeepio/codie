@@ -11,7 +11,7 @@ use codie_core::{
     ThinkingLevel, ToolResultMessage, Toolbox, Usage,
 };
 use codie_prompt::{PromptInput, build_system_message, load_project_context};
-use codie_session::Session;
+use codie_session::{Session, SessionSummary, TreeEntry};
 use codie_tools::Registry;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -70,6 +70,8 @@ pub struct TuiOptions {
     pub mode: TuiRunMode,
     /// Session root, used by `/new`.
     pub session_dir: PathBuf,
+    /// Show the session picker on startup (`--resume` with no identifier).
+    pub resume_picker: bool,
     /// Exit code observed from a signal, if any.
     pub signal: Arc<std::sync::atomic::AtomicI32>,
     /// Tool registry selected by the CLI.
@@ -99,6 +101,100 @@ pub enum Overlay {
     Hotkeys,
     /// A pending permission prompt.
     Permission(PermissionPrompt),
+    /// The current session tree.
+    Tree(Vec<TreeEntry>),
+    /// The session picker.
+    Picker(Picker),
+}
+
+/// Interactive session picker state (`SESS-008`).
+pub struct Picker {
+    /// Every session in the directory.
+    pub entries: Vec<SessionSummary>,
+    /// Indices of entries matching the query, in display order.
+    pub visible: Vec<usize>,
+    /// Selected position within `visible`.
+    pub selected: usize,
+    /// Search text; empty shows everything.
+    pub query: String,
+    /// Sort by name instead of modification time.
+    pub sort_by_name: bool,
+    /// Rename buffer, when editing a name.
+    pub rename: Option<String>,
+    /// True after `d`, waiting for confirmation.
+    pub confirm_delete: bool,
+}
+
+impl Picker {
+    /// Creates a picker over the given summaries.
+    #[must_use]
+    pub fn new(entries: Vec<SessionSummary>) -> Self {
+        let mut picker = Self {
+            entries,
+            visible: Vec::new(),
+            selected: 0,
+            query: String::new(),
+            sort_by_name: false,
+            rename: None,
+            confirm_delete: false,
+        };
+        picker.refresh();
+        picker
+    }
+
+    /// Recomputes the visible list after a filter or sort change.
+    pub fn refresh(&mut self) {
+        if self.sort_by_name {
+            self.entries.sort_by(|left, right| {
+                left.name
+                    .as_deref()
+                    .unwrap_or(left.id.as_str())
+                    .cmp(right.name.as_deref().unwrap_or(right.id.as_str()))
+            });
+        } else {
+            self.entries.sort_by(|left, right| {
+                right
+                    .updated_at
+                    .cmp(&left.updated_at)
+                    .then_with(|| right.created_at.cmp(&left.created_at))
+            });
+        }
+        let query = self.query.to_lowercase();
+        self.visible = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, summary)| {
+                query.is_empty()
+                    || summary.id.to_lowercase().contains(&query)
+                    || summary
+                        .name
+                        .as_deref()
+                        .is_some_and(|name| name.to_lowercase().contains(&query))
+                    || summary.cwd.to_lowercase().contains(&query)
+            })
+            .map(|(index, _)| index)
+            .collect();
+        self.selected = self.selected.min(self.visible.len().saturating_sub(1));
+    }
+
+    /// Returns the selected summary, if any.
+    #[must_use]
+    pub fn current(&self) -> Option<&SessionSummary> {
+        self.visible
+            .get(self.selected)
+            .and_then(|index| self.entries.get(*index))
+    }
+
+    /// Moves the selection by `delta`, clamped to the list.
+    pub fn move_by(&mut self, delta: isize) {
+        if self.visible.is_empty() {
+            self.selected = 0;
+            return;
+        }
+        let next = self.selected as isize + delta;
+        self.selected = next.clamp(0, self.visible.len() as isize - 1) as usize;
+    }
 }
 
 /// A permission prompt shown to the user.
@@ -173,6 +269,8 @@ pub struct App {
     pub history: Vec<Message>,
     /// Active session, when persisted.
     pub session: Option<Session>,
+    /// Pending manual compaction instructions.
+    pub pending_compact: Option<String>,
     /// Session root for `/new`.
     session_dir: PathBuf,
     /// Working directory for file completion.
@@ -230,6 +328,7 @@ impl App {
             thinking,
             history,
             session,
+            pending_compact: None,
             session_dir,
             cwd: binding_cwd,
             permissions: VecDeque::new(),
@@ -383,6 +482,9 @@ impl App {
     }
 
     fn handle_overlay_key(&mut self, key: KeyEvent) -> Action {
+        if matches!(self.overlay, Some(Overlay::Picker(_))) {
+            return self.handle_picker_key(key);
+        }
         let permission = matches!(self.overlay, Some(Overlay::Permission(_)));
         if !permission {
             if matches!(key.code, KeyCode::Esc | KeyCode::Enter)
@@ -406,6 +508,147 @@ impl App {
         Action::None
     }
 
+    fn handle_picker_key(&mut self, key: KeyEvent) -> Action {
+        let Some(Overlay::Picker(mut picker)) = self.overlay.take() else {
+            return Action::None;
+        };
+
+        if let Some(buffer) = picker.rename.as_mut() {
+            match key.code {
+                KeyCode::Enter => {
+                    let name = buffer.trim().to_owned();
+                    if let Some(summary) = picker.current() {
+                        match Session::open(&summary.path) {
+                            Ok(mut session) => {
+                                let result = if name.is_empty() {
+                                    session.clear_name()
+                                } else {
+                                    session.set_name(name.clone())
+                                };
+                                if let Err(error) = result {
+                                    self.transcript
+                                        .push_error(format!("Cannot rename the session: {error}"));
+                                }
+                            }
+                            Err(error) => self
+                                .transcript
+                                .push_error(format!("Cannot open the session: {error}")),
+                        }
+                    }
+                    picker.rename = None;
+                    self.reload_picker(&mut picker);
+                }
+                KeyCode::Esc => picker.rename = None,
+                KeyCode::Backspace => {
+                    buffer.pop();
+                }
+                KeyCode::Char(character)
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    buffer.push(character);
+                }
+                _ => {}
+            }
+            self.overlay = Some(Overlay::Picker(picker));
+            return Action::None;
+        }
+
+        if picker.confirm_delete {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    if let Some(summary) = picker.current() {
+                        let path = summary.path.clone();
+                        match std::fs::remove_file(&path) {
+                            Ok(()) => self
+                                .transcript
+                                .push_info(format!("Deleted session {}.", summary.id)),
+                            Err(error) => self
+                                .transcript
+                                .push_error(format!("Cannot delete {}: {error}", path.display())),
+                        }
+                    }
+                    picker.confirm_delete = false;
+                    self.reload_picker(&mut picker);
+                }
+                KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
+                    picker.confirm_delete = false;
+                }
+                _ => {}
+            }
+            self.overlay = Some(Overlay::Picker(picker));
+            return Action::None;
+        }
+
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => picker.move_by(-1),
+            KeyCode::Down | KeyCode::Char('j') => picker.move_by(1),
+            KeyCode::Enter => {
+                if let Some(summary) = picker.current() {
+                    match Session::open(&summary.path) {
+                        Ok(session) => {
+                            let label = session
+                                .name()
+                                .map_or_else(|| session.id().to_owned(), str::to_owned);
+                            self.history = session.projection();
+                            self.transcript.clear();
+                            self.transcript
+                                .push_info(format!("Resumed session {label}."));
+                            self.footer.session = Some(session.id().to_owned());
+                            self.session = Some(session);
+                            self.status = Status::Idle;
+                            return Action::None;
+                        }
+                        Err(error) => self
+                            .transcript
+                            .push_error(format!("Cannot open the session: {error}")),
+                    }
+                }
+            }
+            KeyCode::Esc | KeyCode::Char('q') => return Action::None,
+            KeyCode::Char('d') => picker.confirm_delete = true,
+            KeyCode::Char('r') => {
+                picker.rename = Some(
+                    picker
+                        .current()
+                        .and_then(|summary| summary.name.clone())
+                        .unwrap_or_default(),
+                );
+            }
+            KeyCode::Char('s') => {
+                picker.sort_by_name = !picker.sort_by_name;
+                picker.refresh();
+            }
+            KeyCode::Backspace => {
+                picker.query.pop();
+                picker.refresh();
+            }
+            KeyCode::Char(character)
+                if !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                picker.query.push(character);
+                picker.refresh();
+            }
+            _ => {}
+        }
+
+        self.overlay = Some(Overlay::Picker(picker));
+        Action::None
+    }
+
+    fn reload_picker(&mut self, picker: &mut Picker) {
+        match Session::list_for_cwd(&self.cwd, &self.session_dir) {
+            Ok(entries) => {
+                picker.entries = entries;
+                picker.refresh();
+            }
+            Err(error) => self
+                .transcript
+                .push_error(format!("Cannot list sessions: {error}")),
+        }
+    }
+
     /// Runs a slash command or returns false when the text is a prompt.
     pub fn handle_command(&mut self, text: &str) -> bool {
         let Some(command) = parse_command(text) else {
@@ -419,10 +662,60 @@ impl App {
             Command::Session => {
                 let text = self.session.as_ref().map_or_else(
                     || "No session is being persisted.".to_owned(),
-                    |session| format!("Session {} · {}", session.id(), session.path().display()),
+                    |session| {
+                        format!(
+                            "Session {} · {} · ~{} tokens · {}",
+                            session.name().unwrap_or("unnamed"),
+                            session.path().display(),
+                            session.estimate_tokens(),
+                            session.id()
+                        )
+                    },
                 );
                 self.transcript.push_info(text);
             }
+            Command::Tree => {
+                if let Some(session) = self.session.as_ref() {
+                    self.overlay = Some(Overlay::Tree(session.tree()));
+                } else {
+                    self.transcript.push_info("No session is being persisted.");
+                }
+            }
+            Command::Fork(argument) => {
+                if let Some(entry) = argument {
+                    self.fork_at(&entry);
+                } else if let Some(session) = self.session.as_ref() {
+                    self.overlay = Some(Overlay::Tree(session.tree()));
+                    self.transcript
+                        .push_info("Use /fork <entry-id> to branch at an entry.");
+                } else {
+                    self.transcript.push_info("No session is being persisted.");
+                }
+            }
+            Command::Clone => self.clone_session(),
+            Command::Name(argument) => {
+                if let Some(session) = self.session.as_mut() {
+                    let result = match &argument {
+                        Some(name) => session.set_name(name.clone()),
+                        None => session.clear_name(),
+                    };
+                    match result {
+                        Ok(()) => {
+                            let text = match argument {
+                                Some(name) => format!("Session named `{name}`."),
+                                None => "Session name cleared.".to_owned(),
+                            };
+                            self.transcript.push_info(text);
+                        }
+                        Err(error) => self
+                            .transcript
+                            .push_error(format!("Cannot name the session: {error}")),
+                    }
+                } else {
+                    self.transcript.push_info("No session is being persisted.");
+                }
+            }
+            Command::Export(argument) => self.export_session(argument),
             Command::Model(argument) => {
                 if let Some(model) = argument {
                     self.model.model = model.clone();
@@ -449,9 +742,13 @@ impl App {
                         .push_info(format!("Thinking level: {}", self.thinking.as_str()));
                 }
             }
-            Command::Compact(_) => self
-                .transcript
-                .push_info("Manual compaction arrives in Phase 3."),
+            Command::Compact(argument) => {
+                if self.session.is_some() {
+                    self.pending_compact = Some(argument.unwrap_or_default());
+                } else {
+                    self.transcript.push_info("No session is being persisted.");
+                }
+            }
             Command::Unknown(name) => self
                 .transcript
                 .push_error(format!("Unknown command `/{name}`. Try /help.")),
@@ -503,6 +800,81 @@ impl App {
             Err(error) => self
                 .transcript
                 .push_error(format!("Cannot create a session: {error}")),
+        }
+    }
+
+    fn fork_at(&mut self, entry_id: &str) {
+        let result = self
+            .session
+            .as_mut()
+            .ok_or_else(|| codie_core::Error::session("no session is being persisted"))
+            .and_then(|session| {
+                session.set_leaf(Some(entry_id))?;
+                Ok((
+                    session.projection(),
+                    session.id().to_owned(),
+                    session.estimate_tokens(),
+                ))
+            });
+        match result {
+            Ok((history, id, tokens)) => {
+                self.history = history;
+                self.transcript.clear();
+                self.footer.session = Some(id);
+                self.footer.context_percent =
+                    Some(u8::try_from((tokens * 100 / 200_000).min(100)).unwrap_or(100));
+                self.transcript
+                    .push_info(format!("Forked at entry {entry_id}."));
+            }
+            Err(error) => self
+                .transcript
+                .push_error(format!("Cannot fork the session: {error}")),
+        }
+    }
+
+    fn clone_session(&mut self) {
+        let result = self
+            .session
+            .as_ref()
+            .ok_or_else(|| codie_core::Error::session("no session is being persisted"))
+            .and_then(|session| session.clone_session(&self.cwd, &self.session_dir));
+        match result {
+            Ok(session) => {
+                let id = session.id().to_owned();
+                self.history = session.projection();
+                self.session = Some(session);
+                self.transcript.clear();
+                self.footer.session = Some(id);
+                self.transcript.push_info("Cloned the session.");
+            }
+            Err(error) => self
+                .transcript
+                .push_error(format!("Cannot clone the session: {error}")),
+        }
+    }
+
+    fn export_session(&mut self, argument: Option<String>) {
+        let Some(session) = self.session.as_ref() else {
+            self.transcript.push_info("No session is being persisted.");
+            return;
+        };
+        let path = argument.map_or_else(
+            || {
+                self.cwd
+                    .join(format!("codie-session-{}.jsonl", session.id()))
+            },
+            std::path::PathBuf::from,
+        );
+        let result = std::fs::File::create(&path)
+            .map_err(|error| codie_core::Error::io(&path, error))
+            .and_then(|file| session.export(file));
+        match result {
+            Ok(()) => self
+                .transcript
+                .push_info(format!("Exported session to {}.", path.display())),
+            Err(error) => self
+                .transcript
+                .push_error(format!("Cannot export the session: {error}")),
         }
     }
 
@@ -648,6 +1020,15 @@ async fn run_full(mut options: TuiOptions) -> Result<u8> {
         app.history = history.clone();
     }
 
+    if options.resume_picker {
+        match Session::list_for_cwd(&options.cwd, &options.session_dir) {
+            Ok(entries) => app.overlay = Some(Overlay::Picker(Picker::new(entries))),
+            Err(error) => app
+                .transcript
+                .push_error(format!("Cannot list sessions: {error}")),
+        }
+    }
+
     let mut terminal = setup_terminal(options.mode)?;
     let result = event_loop(
         &mut terminal,
@@ -757,6 +1138,7 @@ async fn event_loop(
 ) -> Result<u8> {
     let mut input = spawn_input();
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+    let (compact_tx, mut compact_rx) = mpsc::unbounded_channel();
     let mut tick = tokio::time::interval(Duration::from_millis(33));
     let mut dirty = true;
     let mut signal_code = 0_i32;
@@ -817,6 +1199,10 @@ async fn event_loop(
                 dirty = true;
                 handle_agent_event(app, event);
             }
+            Some((instructions, result)) = compact_rx.recv() => {
+                dirty = true;
+                apply_compaction(app, instructions, result);
+            }
             _ = tick.tick() => {
                 app.tick = app.tick.wrapping_add(1);
                 if app.tick % 30 == 0
@@ -831,6 +1217,16 @@ async fn event_loop(
                 if app.status == Status::Streaming {
                     dirty = true;
                 }
+            }
+        }
+
+        if let Some(instructions) = app.pending_compact.take() {
+            if app.status == Status::Streaming {
+                app.pending_compact = Some(instructions);
+            } else {
+                app.transcript.push_info("Compacting the context…");
+                app.status = Status::Streaming;
+                start_compaction(app, &options, &compact_tx, instructions);
             }
         }
 
@@ -881,6 +1277,86 @@ fn start_run(
             }
         }
     });
+}
+
+fn start_compaction(
+    app: &App,
+    options: &TuiOptions,
+    sender: &mpsc::UnboundedSender<(
+        Option<String>,
+        Result<crate::compaction::CompactionOutcome, String>,
+    )>,
+    instructions: String,
+) {
+    let client = Arc::clone(&options.client);
+    let model = app.model.clone();
+    let thinking = app.thinking;
+    let messages = app.history.clone();
+    let session_id = app.session.as_ref().map(|session| session.id().to_owned());
+    let sender = sender.clone();
+    tokio::spawn(async move {
+        let custom = (!instructions.trim().is_empty()).then_some(instructions.as_str());
+        let result =
+            crate::compaction::summarize(client, model, thinking, &messages, custom, session_id)
+                .await;
+        let _ = sender.send((
+            (!instructions.trim().is_empty()).then_some(instructions),
+            result,
+        ));
+    });
+}
+
+fn apply_compaction(
+    app: &mut App,
+    instructions: Option<String>,
+    result: Result<crate::compaction::CompactionOutcome, String>,
+) {
+    enum Applied {
+        Done(Vec<Message>, u8, String),
+        Failed(String),
+    }
+
+    let applied = {
+        let Some(session) = app.session.as_mut() else {
+            app.status = Status::Error;
+            app.transcript
+                .push_error("Compaction finished but no session is active.");
+            return;
+        };
+        match result {
+            Ok(outcome) => {
+                match crate::compaction::apply(session, &outcome, instructions.as_deref()) {
+                    Ok(history) => Applied::Done(
+                        history,
+                        session.context_percent(200_000),
+                        outcome
+                            .summary
+                            .lines()
+                            .next()
+                            .unwrap_or("summary")
+                            .to_owned(),
+                    ),
+                    Err(error) => Applied::Failed(error),
+                }
+            }
+            Err(error) => Applied::Failed(error),
+        }
+    };
+
+    match applied {
+        Applied::Done(history, percent, first_line) => {
+            app.history = history;
+            app.footer.context_percent = Some(percent);
+            app.status = Status::Idle;
+            app.transcript
+                .push_info(format!("Compacted the context: {first_line}"));
+        }
+        Applied::Failed(error) => {
+            app.status = Status::Error;
+            app.transcript
+                .push_error(format!("Compaction failed: {error}"));
+        }
+    }
 }
 
 fn handle_agent_event(app: &mut App, event: AgentEvent) {
@@ -1148,5 +1624,181 @@ mod tests {
         app.handle_key(key(KeyCode::Char('a')));
         assert_eq!(answer.blocking_recv().unwrap(), Decision::Allow);
         assert!(app.overlay.is_none());
+    }
+
+    #[test]
+    #[spec("TUI-011")]
+    fn spec_tui_011_tree_fork_and_export_commands() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().join("project");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let session_dir = dir.path().join("sessions");
+        let session = Session::create(&cwd, &session_dir).unwrap();
+        let mut app = App::new(
+            &cwd,
+            ModelRef {
+                api: "openai-completions".into(),
+                provider: "deepseek".into(),
+                model: "deepseek-flash".into(),
+            },
+            ThinkingLevel::Medium,
+            Theme::load(Some("dark")).unwrap(),
+            Some(session),
+            Vec::new(),
+            session_dir,
+            Arc::new(std::sync::atomic::AtomicI32::new(0)),
+            Bindings::default(),
+        );
+        app.session
+            .as_mut()
+            .unwrap()
+            .append_message(&Message::user("first"))
+            .unwrap();
+        app.session
+            .as_mut()
+            .unwrap()
+            .append_message(&Message::user("second"))
+            .unwrap();
+        let first = app.session.as_ref().unwrap().entries()[0].id().to_owned();
+
+        assert!(app.handle_command("/tree"));
+        let Some(Overlay::Tree(entries)) = &app.overlay else {
+            panic!("expected the tree overlay");
+        };
+        assert_eq!(entries.len(), 2);
+
+        app.overlay = None;
+        assert!(app.handle_command(&format!("/fork {first}")));
+        assert_eq!(app.history.len(), 1);
+        assert_eq!(
+            app.session.as_ref().unwrap().leaf_target(),
+            Some(first.as_str())
+        );
+
+        let export = dir.path().join("export.jsonl");
+        assert!(app.handle_command(&format!("/export {}", export.display())));
+        let contents = std::fs::read_to_string(&export).unwrap();
+        assert!(contents.starts_with("{\"type\":\"session\""));
+
+        assert!(app.handle_command("/name renamed"));
+        assert_eq!(app.session.as_ref().unwrap().name(), Some("renamed"));
+    }
+
+    #[test]
+    #[spec("TUI-012")]
+    fn spec_tui_012_picker_filters_renames_and_deletes() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().join("project");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let session_dir = dir.path().join("sessions");
+
+        let mut first = Session::create(&cwd, &session_dir).unwrap();
+        first.set_name("alpha").unwrap();
+        first.append_message(&Message::user("a")).unwrap();
+        let first_path = first.path().to_path_buf();
+        drop(first);
+        let mut second = Session::create(&cwd, &session_dir).unwrap();
+        second.set_name("beta").unwrap();
+        second.append_message(&Message::user("b")).unwrap();
+        let second_path = second.path().to_path_buf();
+        drop(second);
+
+        let mut app = App::new(
+            &cwd,
+            ModelRef {
+                api: "openai-completions".into(),
+                provider: "deepseek".into(),
+                model: "deepseek-flash".into(),
+            },
+            ThinkingLevel::Medium,
+            Theme::load(Some("dark")).unwrap(),
+            None,
+            Vec::new(),
+            session_dir.clone(),
+            Arc::new(std::sync::atomic::AtomicI32::new(0)),
+            Bindings::default(),
+        );
+        let summaries = Session::list_for_cwd(&cwd, &session_dir).unwrap();
+        app.overlay = Some(Overlay::Picker(Picker::new(summaries)));
+
+        // Search narrows the list to alpha.
+        for character in "alph".chars() {
+            app.handle_key(key(KeyCode::Char(character)));
+        }
+        let Some(Overlay::Picker(picker)) = &app.overlay else {
+            panic!("expected the picker");
+        };
+        assert_eq!(picker.visible.len(), 1);
+
+        // Rename alpha to alphamma (still matching the active filter).
+        app.handle_key(key(KeyCode::Char('r')));
+        for character in "mma".chars() {
+            app.handle_key(key(KeyCode::Char(character)));
+        }
+        app.handle_key(key(KeyCode::Enter));
+        let renamed = Session::open(&first_path).unwrap();
+        assert_eq!(renamed.name(), Some("alphamma"));
+
+        // Delete the visible session after confirmation.
+        app.handle_key(key(KeyCode::Char('d')));
+        app.handle_key(key(KeyCode::Char('y')));
+        assert!(!first_path.exists());
+        assert!(second_path.exists());
+        let remaining = Session::list_for_cwd(&cwd, &session_dir).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].name.as_deref(), Some("beta"));
+    }
+
+    fn app_with_named_session() -> (tempfile::TempDir, App) {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().join("project");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let session_dir = dir.path().join("sessions");
+        let session = Session::create(&cwd, &session_dir).unwrap();
+        let app = App::new(
+            &cwd,
+            ModelRef {
+                api: "openai-completions".into(),
+                provider: "deepseek".into(),
+                model: "deepseek-flash".into(),
+            },
+            ThinkingLevel::Medium,
+            Theme::load(Some("dark")).unwrap(),
+            Some(session),
+            Vec::new(),
+            session_dir,
+            Arc::new(std::sync::atomic::AtomicI32::new(0)),
+            Bindings::default(),
+        );
+        (dir, app)
+    }
+
+    #[test]
+    #[spec("TUI-013")]
+    fn spec_tui_013_compact_command_requests_a_summary() {
+        let (_dir, mut app) = app_with_named_session();
+        assert!(app.handle_command("/compact keep the test plan"));
+        assert_eq!(app.pending_compact.as_deref(), Some("keep the test plan"));
+        assert!(app.handle_command("/compact"));
+        assert_eq!(app.pending_compact.as_deref(), Some(""));
+    }
+
+    #[test]
+    #[spec("CTX-007")]
+    fn spec_ctx_007_manual_compact_requires_a_session() {
+        let (_dir, mut app) = app_with_named_session();
+        assert!(app.handle_command("/compact keep the plan"));
+        assert_eq!(app.pending_compact.as_deref(), Some("keep the plan"));
+
+        app.pending_compact = None;
+        app.session = None;
+        assert!(app.handle_command("/compact"));
+        assert!(app.pending_compact.is_none());
+        assert!(
+            app.transcript
+                .entries()
+                .iter()
+                .any(|entry| matches!(entry, crate::transcript::Entry::Info(text) if text.contains("No session")))
+        );
     }
 }

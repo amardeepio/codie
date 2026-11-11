@@ -54,7 +54,8 @@ Current repository crates are `codie-core`, `codie-ai`, `codie-tools`, `codie-se
 - `codie-ai` owns HTTP, SSE, provider quirks, retries, model metadata, and credential resolution. It never knows
   how a tool is implemented.
 - `codie-tools` depends on `codie-core` for the tool trait, never the reverse.
-- `codie-session` owns the append-only store and projection. It does not call providers.
+- `codie-session` owns the append-only store and projection. It does not call providers. Branch selections are
+  persisted as leaf markers; fork and clone write new files and never touch the source.
 - `codie-prompt` discovers project instructions and builds deterministic system prompts.
 - `codie-cli` is the only crate that reads environment variables or maps outcomes to process exit codes.
 - Public APIs are `pub(crate)` by default; crates expose narrow, documented surfaces.

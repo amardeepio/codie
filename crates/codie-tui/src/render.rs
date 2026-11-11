@@ -266,9 +266,14 @@ fn draw_overlay(frame: &mut Frame<'_>, area: Rect, overlay: &Overlay, app: &App)
                 "/hotkeys           keybindings",
                 "/new               start a new session",
                 "/session           show the current session",
+                "/tree              show the session tree",
+                "/fork [entry]      branch at an entry",
+                "/clone             clone this session",
+                "/name [text]       set or clear the name",
+                "/export [path]     export JSONL",
                 "/model [id]        change the model",
                 "/thinking [level]  change reasoning effort",
-                "/compact           compaction (Phase 3)",
+                "/compact [note]    compact the context",
                 "/quit              exit",
             ]
             .join("\n"),
@@ -282,6 +287,64 @@ fn draw_overlay(frame: &mut Frame<'_>, area: Rect, overlay: &Overlay, app: &App)
                 serde_json::to_string_pretty(&prompt.arguments).unwrap_or_default()
             ),
         ),
+        Overlay::Tree(entries) => (
+            " session tree ",
+            entries
+                .iter()
+                .map(|entry| {
+                    let indent = "  ".repeat(entry.depth.min(8));
+                    let marker = if entry.on_branch { "●" } else { "○" };
+                    format!(
+                        "{indent}{marker} {} {:<16} {}",
+                        entry.id, entry.kind, entry.description
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        Overlay::Picker(picker) => {
+            let mut lines = vec![format!(
+                "search: {}   sort: {}   (↑/↓ select, Enter resume, r rename, d delete, s sort, Esc close)",
+                if picker.query.is_empty() {
+                    "—"
+                } else {
+                    picker.query.as_str()
+                },
+                if picker.sort_by_name {
+                    "name"
+                } else {
+                    "recent"
+                }
+            )];
+            if let Some(buffer) = picker.rename.as_ref() {
+                lines.push(format!("name: {buffer}▌   (Enter save, Esc cancel)"));
+            }
+            lines.push(String::new());
+            if picker.visible.is_empty() {
+                lines.push("No sessions match.".to_owned());
+            }
+            for (position, index) in picker.visible.iter().enumerate() {
+                let summary = &picker.entries[*index];
+                let selected = if position == picker.selected {
+                    "›"
+                } else {
+                    " "
+                };
+                let name = summary.name.as_deref().unwrap_or("unnamed");
+                lines.push(format!(
+                    "{selected} {:<20} {:>4} msg  {}  {}",
+                    truncate(name, 20),
+                    summary.message_count,
+                    summary.id,
+                    summary.cwd
+                ));
+            }
+            if picker.confirm_delete {
+                lines.push(String::new());
+                lines.push("Delete this session? [y] yes   [n] no".to_owned());
+            }
+            (" sessions ", lines.join("\n"))
+        }
     };
 
     let block = Block::bordered()

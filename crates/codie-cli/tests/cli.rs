@@ -4,6 +4,8 @@
 //! what a script or terminal would observe.
 
 use assert_cmd::Command;
+use codie_core::Message;
+use codie_session::Session;
 use codie_testkit::spec;
 use predicates::prelude::*;
 use tempfile::TempDir;
@@ -11,6 +13,12 @@ use tempfile::TempDir;
 /// Returns a command handle isolated from the developer's real codie state.
 fn codie() -> (Command, TempDir) {
     let home = tempfile::tempdir().expect("temp home");
+    let command = codie_with_home(&home);
+    (command, home)
+}
+
+/// Returns a command handle using an existing isolated home.
+fn codie_with_home(home: &TempDir) -> Command {
     let mut command = Command::cargo_bin("codie").expect("the codie binary should be built");
     command
         .env("HOME", home.path())
@@ -19,7 +27,7 @@ fn codie() -> (Command, TempDir) {
         .env("CODIE_SESSION_DIR", home.path().join("sessions"))
         .env_remove("DEEPSEEK_API_KEY")
         .env_remove("OPENROUTER_API_KEY");
-    (command, home)
+    command
 }
 
 #[test]
@@ -46,6 +54,10 @@ fn help_flag_documents_the_surface() {
         .stdout(predicate::str::contains("--mode"))
         .stdout(predicate::str::contains("--tui-mode"))
         .stdout(predicate::str::contains("--theme"))
+        .stdout(predicate::str::contains("--resume"))
+        .stdout(predicate::str::contains("--fork"))
+        .stdout(predicate::str::contains("--clone"))
+        .stdout(predicate::str::contains("sessions"))
         .stdout(predicate::str::contains("auth"))
         .stdout(predicate::str::contains("models"))
         .stdout(predicate::str::contains("--verbose"))
@@ -232,4 +244,94 @@ fn invalid_environment_configuration_is_rejected() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("invalid thinking level"));
+}
+
+#[test]
+#[spec("SESS-023")]
+fn sessions_list_show_and_export_are_read_only() {
+    let (mut command, home) = codie();
+    let project = home.path().join("project");
+    std::fs::create_dir_all(&project).expect("project");
+    let project = project.canonicalize().expect("canonical project");
+    let encoded = project
+        .to_string_lossy()
+        .trim_start_matches('/')
+        .replace(['/', '\\', ':'], "-");
+    let session_dir = home.path().join("sessions").join(format!("--{encoded}--"));
+
+    let mut session = Session::create(&project, &session_dir).expect("session");
+    session.set_name("demo session").expect("name");
+    session
+        .append_message(&Message::user("hello"))
+        .expect("user");
+    let id = session.id().to_owned();
+    let path = session.path().to_path_buf();
+    drop(session);
+    let before = std::fs::read(&path).expect("read session");
+
+    command
+        .current_dir(&project)
+        .args(["sessions", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("demo session"))
+        .stdout(predicate::str::contains(&id))
+        .stderr(predicate::str::is_empty());
+
+    codie_with_home(&home)
+        .current_dir(&project)
+        .args(["sessions", "list", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"id\":\""))
+        .stdout(predicate::str::contains("\"messages\":1"));
+
+    codie_with_home(&home)
+        .current_dir(&project)
+        .args(["sessions", "show", &id, "--tree"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("demo session"))
+        .stdout(predicate::str::contains("●"));
+
+    let exported = home.path().join("exported.jsonl");
+    codie_with_home(&home)
+        .current_dir(&project)
+        .args([
+            "sessions",
+            "export",
+            &id,
+            "--output",
+            exported.to_str().expect("path"),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Exported"));
+
+    let after = std::fs::read(&path).expect("read session again");
+    assert_eq!(after, before, "session inspection must never write");
+    assert_eq!(
+        std::fs::read(&exported).expect("export"),
+        before,
+        "export must reproduce the file"
+    );
+}
+
+#[test]
+fn session_flags_conflict_cleanly() {
+    let (mut command, _home) = codie();
+    command
+        .args(["--no-session", "--continue", "-p", "hello"])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("cannot be used with"));
+
+    let (mut command, _home) = codie();
+    command
+        .args(["--fork", "abc", "--clone", "def", "-p", "hello"])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("cannot be used with"));
 }

@@ -11,11 +11,24 @@ that major series, with migrations applied on read.
 
 ### Added
 
-- Nothing yet.
+- Session tree operations: persisted branch markers, `Session::fork_at`, `Session::clone_session`, and
+  `Session::tree`, with `--resume`/`-r`, `--fork`, `--clone`, and `--session` accepting an identifier or path.
+- Interactive session controls: `/tree`, `/fork [entry]`, `/clone`, `/name [text]`, `/export [path]`, and a
+  `--resume` picker with search, sorting, rename, and delete.
+- Manual compaction via `/compact [instructions]` with a fixed summary structure, a tool-call-safe cut point, and
+  append-only `compaction` entries.
+- Token estimation (`chars / 4`, images as 4,800 characters) and a context percentage in the footer.
+- Read-only `codie sessions list/show/export` commands.
+- Session format v1 is frozen: new `compaction`, `branch_summary`, `context_edit`, `label`, `custom`, and `leaf`
+  entry types, `parent_session` header provenance, and tests for round-tripping and refusing unknown versions.
+- Property test for random append/branch/compaction sequences and a 10,000-entry resume benchmark.
 
 ### Changed
 
-- Nothing yet.
+- `Session::set_leaf` now appends a persisted leaf marker, so resuming lands on the selected branch.
+- `Session::projection` honors compaction, branch summaries, and context edits, and always retains the system
+  message.
+- Workspace version remains `0.2.0` until the Phase 3 release.
 
 ### Fixed
 
