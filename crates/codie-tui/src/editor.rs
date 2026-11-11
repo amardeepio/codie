@@ -302,6 +302,16 @@ impl Editor {
         }
     }
 
+    /// Replaces the text between `start_col` and the cursor on the current line.
+    pub fn replace_token(&mut self, start_col: usize, replacement: &str) {
+        self.checkpoint();
+        let col = self.cursor.col.min(self.lines[self.cursor.row].len());
+        let start = start_col.min(col);
+        self.lines[self.cursor.row].replace_range(start..col, replacement);
+        self.cursor.col = start + replacement.len();
+        self.history_index = None;
+    }
+
     /// Recalls the previous submitted prompt.
     pub fn history_previous(&mut self) {
         if self.history.is_empty() {

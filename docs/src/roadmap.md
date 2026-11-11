@@ -10,7 +10,7 @@ not commitments; the exit criteria are the real gate.
 |---|---|---|---|---|---|
 | 0 | Foundations: workspace, CI, spec framework, OSS files | 1 wk | 1 wk | repository + CI | Complete |
 | 1 | Headless core: providers, loop, tools, sessions, print/JSON | 3 wk | 4 wk | `0.1.0` — `codie -p` works | Complete |
-| 2 | Interactive TUI: streaming render, editor, themes, steering | 3 wk | 7 wk | `0.2.0` — interactive agent | In progress |
+| 2 | Interactive TUI: streaming render, editor, themes, steering | 3 wk | 7 wk | `0.2.0` — interactive agent | Complete |
 | 3 | Sessions at full fidelity: resume, fork, compaction, picker | 2 wk | 9 wk | `0.3.0` — resume/fork/compact | Planned |
 | 4 | Customization and trust: skills, templates, `SYSTEM.md`, images | 2 wk | 11 wk | `0.4.0` — skills/templates/trust | Planned |
 | 5 | Protocols and polish: RPC, schemas, export, performance | 2 wk | 13 wk | `0.5.0` — RPC/export | Planned |
@@ -36,6 +36,15 @@ not commitments; the exit criteria are the real gate.
 - Line coverage is 89.07 percent in `core`, 88.89 percent in `ai`, and 86.73 percent in `tools`;
   `cargo xtask coverage` enforces the 80 percent floor.
 - 12 accepted specs, 92 requirements, and 92 requirements with named tests (`spec-check --strict` is green).
+
+## Phase 2 exit criteria (met 2026-11-11)
+
+- Streaming renders 5,000 tokens over 60 frames in under 40 ms total (0.4–0.6 ms per frame, over 140k tokens/s) via
+  `cargo bench -p codie-tui --bench streaming`.
+- PTY integration tests verify terminal restore on SIGINT and SIGTERM.
+- Rendering stays far below the 16.7 ms frame budget; the benchmark asserts both the total and slowest frame.
+- Accessibility: `--tui-mode plain` produces append-only output, verified in a PTY.
+- `SPEC-TUI-001` is accepted and all ten requirements have named tests.
 
 Later phase criteria are listed in [`PLAN.MD`](../../PLAN.MD) §8. This page mirrors `ROADMAP.md` and is updated at
 each phase boundary. Scope changes require an RFC; phase changes require maintainer approval recorded in

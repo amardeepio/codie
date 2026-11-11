@@ -11,20 +11,48 @@ that major series, with migrations applied on read.
 
 ### Added
 
-- Interactive phase 2 foundation in the new `codie-tui` crate: alternate-screen transcript, fixed multiline
-  editor, streaming assistant rendering, thinking and tool blocks, footer, and plain mode.
+- Nothing yet.
+
+### Changed
+
+- Nothing yet.
+
+### Fixed
+
+- Nothing yet.
+
+### Removed
+
+- Nothing yet.
+
+### Security
+
+- Nothing yet.
+
+## [0.2.0] - 2026-11-11
+
+Phase 2: the interactive terminal experience.
+
+### Added
+
+- Interactive app in the new `codie-tui` crate: alternate-screen transcript, fixed multiline editor, streaming
+  assistant rendering, thinking and tool blocks, footer, and plain mode.
 - Slash commands (`/help`, `/hotkeys`, `/new`, `/session`, `/model`, `/thinking`, `/compact`, `/quit`),
   steering and follow-up queues, `Ctrl+O` tool expansion, history, undo/redo, kill/yank, and large-paste markers.
 - Permission prompts for mutating tools with allow-once, always, and deny; read-only tools never prompt.
-- Themes: `system`, `dark`, `light`, and semantic TOML files with a 4.5:1 body contrast check.
+- Themes: `system`, `dark`, `light`, and semantic TOML files with a 4.5:1 body contrast check and hot reload.
+- Configurable keybindings in `keybindings.toml`, including unbinding an action with an empty list.
+- `@file` completion using the `ignore` walker, in addition to slash-command completion.
 - `--tui-mode full|inline|plain` and `--theme` on the `codie` CLI.
-- Draft `SPEC-TUI-001` covering layout, streaming, editor, markdown, tool blocks, footer, themes, restore, and
-  plain mode.
+- PTY integration tests for SIGINT/SIGTERM terminal restoration and append-only plain mode.
+- `cargo bench -p codie-tui --bench streaming`: 5,000 tokens over 60 frames in under 40 ms (0.4–0.6 ms per frame).
+- Accepted `SPEC-TUI-001` with all ten requirements covered by named tests.
 
 ### Changed
 
 - Running `codie` in a terminal now launches the interactive interface instead of erroring; `-p` and
   `--mode json` keep the headless paths.
+- Workspace version is `0.2.0`.
 
 ### Fixed
 

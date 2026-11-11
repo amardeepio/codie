@@ -11,6 +11,7 @@
 pub mod app;
 pub mod commands;
 pub mod editor;
+pub mod keybindings;
 pub mod markdown;
 pub mod permissions;
 pub mod plain;
@@ -19,4 +20,5 @@ pub mod theme;
 pub mod transcript;
 
 pub use app::{App, TuiOptions, TuiRunMode, run};
-pub use theme::Theme;
+pub use render::draw;
+pub use theme::{Theme, ThemeWatcher};

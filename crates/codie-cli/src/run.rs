@@ -228,6 +228,7 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
             session_dir: session_dir.clone(),
             signal: Arc::new(AtomicI32::new(0)),
             registry: Arc::new(registry),
+            keybindings: Some(config.config_dir.join("keybindings.toml")),
         };
         return codie_tui::run(options).await;
     }

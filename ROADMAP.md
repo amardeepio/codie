@@ -4,9 +4,9 @@ codie is built in gated phases. Each phase ends with a demoable, installable art
 No phase starts before the previous phase's exit criteria are met. Durations are planning bounds for one
 full-time engineer, not commitments; the exit criteria are the real gate.
 
-**Current status: Phase 2 (Interactive TUI), in progress.** `0.1.0` shipped the headless core. The interactive
-app now has a streaming transcript, fixed editor dock, footer, themes, slash commands, steering, permission
-prompts, and plain mode; keybinding files, PTY restore tests, and the 60 fps benchmark remain before `0.2.0`.
+**Current status: Phase 2 (Interactive TUI), complete.** `0.1.0` shipped the headless core and `0.2.0` ships
+the interactive app: streaming transcript, editor dock, keybindings, themes, slash commands, steering,
+permission prompts, plain mode, PTY restore tests, and the streaming benchmark. Phase 3 is next.
 
 ## Phase summary
 
@@ -14,7 +14,7 @@ prompts, and plain mode; keybinding files, PTY restore tests, and the 60 fps ben
 |---|---|---|---|---|---|
 | 0 | Foundations: workspace, CI, spec framework, OSS files | 1 week | 1 week | repository + CI | Complete |
 | 1 | Headless core: providers, loop, tools, sessions, print/JSON | 3 weeks | 4 weeks | `0.1.0` — `codie -p` works | Complete |
-| 2 | Interactive TUI: streaming render, editor, themes, steering | 3 weeks | 7 weeks | `0.2.0` — interactive agent | In progress |
+| 2 | Interactive TUI: streaming render, editor, themes, steering | 3 weeks | 7 weeks | `0.2.0` — interactive agent | Complete |
 | 3 | Sessions at full fidelity: resume, fork, compaction, picker | 2 weeks | 9 weeks | `0.3.0` — resume/fork/compact | Planned |
 | 4 | Customization and trust: skills, templates, `SYSTEM.md`, images | 2 weeks | 11 weeks | `0.4.0` — skills/templates/trust | Planned |
 | 5 | Protocols and polish: RPC, schemas, export, performance | 2 weeks | 13 weeks | `0.5.0` — RPC/export | Planned |
@@ -57,9 +57,24 @@ smoke runs against DeepSeek and OpenRouter; JSON output validated against `schem
 documented exit codes including signals; 89.07 / 88.89 / 86.73 percent line coverage in `core`, `ai`, and
 `tools`; 12 accepted specs and 92 requirements covered by named tests.
 
+## Phase 2: Interactive TUI
+
+Goal: the primary human experience.
+
+Status: complete 2026-11-11.
+
+- ratatui app with an alternate-screen transcript, fixed editor dock, and footer.
+- Streaming assistant text, thinking blocks, and stateful tool blocks with inline diff colors.
+- Multiline editor with grapheme movement, history, undo/redo, kill/yank, paste markers, and completion.
+- Steering and follow-up queues, permission prompts, slash commands, themes, keybindings, and plain mode.
+- PTY restore tests and a 5,000-token streaming benchmark.
+
+Exit criteria (met 2026-11-11): 5,000 tokens over 60 frames render in under 40 ms (0.4–0.6 ms per frame); PTY tests
+verify terminal restore on SIGINT and SIGTERM; plain mode is append-only; `SPEC-TUI-001` is accepted with all ten
+requirements tested.
+
 ## Later phases
 
-- **Phase 2:** ratatui TUI, streaming render, editor, themes, keybindings, permission prompts, slash commands.
 - **Phase 3:** session tree operations, fork and clone, compaction, token estimation, picker, format freeze.
 - **Phase 4:** skills, prompt templates, project trust, `SYSTEM.md`, config reload, `@file` and image inputs.
 - **Phase 5:** RPC mode, published JSON schemas, HTML export, update checks, performance pass.

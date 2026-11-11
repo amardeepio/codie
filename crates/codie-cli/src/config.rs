@@ -27,6 +27,8 @@ struct FilePermissions {
 pub(crate) struct Config {
     /// Directory containing credentials and data.
     pub(crate) data_dir: PathBuf,
+    /// Directory containing `config.toml` and `keybindings.toml`.
+    pub(crate) config_dir: PathBuf,
     /// Directory for cache files such as the OpenRouter catalog.
     pub(crate) cache_dir: PathBuf,
     /// Root directory for sessions.
@@ -94,6 +96,7 @@ impl Config {
 
         Ok(Self {
             data_dir,
+            config_dir,
             cache_dir,
             session_dir,
             default_provider: env_string("CODIE_PROVIDER")
@@ -159,6 +162,7 @@ mod tests {
     fn session_directory_encodes_the_working_directory() {
         let config = Config {
             data_dir: PathBuf::from("/tmp/d"),
+            config_dir: PathBuf::from("/tmp/cfg"),
             cache_dir: PathBuf::from("/tmp/c"),
             session_dir: PathBuf::from("/tmp/s"),
             default_provider: "deepseek".into(),

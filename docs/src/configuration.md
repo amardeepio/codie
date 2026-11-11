@@ -32,6 +32,9 @@ CLI flags override environment values. For example, `--thinking high` wins over 
 Inspect the effective values with `codie config get`, or one key with `codie config get provider`.
 `--base-url` overrides `CODIE_BASE_URL` for a single run.
 
+Interactive keybindings live in `keybindings.toml` under the config directory; see
+[Interactive terminal](tui.md#keys).
+
 ## `.env` files
 
 codie loads `./.env` automatically when it exists. It never searches parent directories. Use an explicit

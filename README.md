@@ -19,9 +19,9 @@ implementation language, the safety posture, and the provider scope.
 
 The command is `codie`.
 
-**Status: Phase 2 in progress (after `0.1.0`), pre-alpha.** The one-shot agent works end to end, and the
-interactive app now offers a streaming transcript, editor dock, themes, slash commands, steering, permission
-prompts, and plain mode. See [`docs/src/tui.md`](docs/src/tui.md) and [`ROADMAP.md`](ROADMAP.md).
+**Status: Phase 2 complete (`0.2.0`), pre-alpha.** The one-shot agent and the interactive app both work end to
+end: streaming transcript, editor dock, keybindings, themes, slash commands, steering, permission prompts, and
+plain mode. See [`docs/src/tui.md`](docs/src/tui.md) and [`ROADMAP.md`](ROADMAP.md).
 
 ## Why codie
 
