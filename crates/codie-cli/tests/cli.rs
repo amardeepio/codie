@@ -53,14 +53,15 @@ fn help_flag_documents_the_surface() {
 }
 
 #[test]
-fn no_arguments_prints_help_to_stderr_and_fails() {
+fn bare_invocation_without_a_prompt_fails_cleanly() {
     let (mut command, _home) = codie();
     command
+        .env("DEEPSEEK_API_KEY", "dummy")
         .assert()
         .failure()
         .code(1)
         .stdout(predicate::str::is_empty())
-        .stderr(predicate::str::contains("Usage:"));
+        .stderr(predicate::str::contains("prompt is empty"));
 }
 
 #[test]

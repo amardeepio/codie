@@ -452,7 +452,7 @@ fn read_prompt(args: &RunArgs) -> Result<String> {
         return Ok(args.message.join(" "));
     }
     if std::io::stdin().is_terminal() {
-        bail!("provide a message or pipe stdin; interactive mode arrives in Phase 2");
+        bail!("provide a message, pipe stdin, or run codie with a terminal for interactive mode");
     }
     let mut text = String::new();
     std::io::stdin()
@@ -460,7 +460,7 @@ fn read_prompt(args: &RunArgs) -> Result<String> {
         .context("cannot read the prompt from stdin")?;
     let text = text.trim().to_owned();
     if text.is_empty() {
-        bail!("prompt is empty");
+        bail!("prompt is empty; provide a message or pipe stdin");
     }
     Ok(text)
 }

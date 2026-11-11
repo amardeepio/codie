@@ -23,7 +23,6 @@ mod run;
     about = "A fast, extensible coding agent for the terminal.",
     long_about = None,
     propagate_version = true,
-    arg_required_else_help = true,
     args_conflicts_with_subcommands = true
 )]
 struct Cli {

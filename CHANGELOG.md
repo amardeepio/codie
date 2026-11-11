@@ -28,7 +28,9 @@ that major series, with migrations applied on read.
 
 ### Fixed
 
-- Nothing yet.
+- Running `codie` with no arguments in a terminal now launches the interactive interface instead of printing
+  help and exiting. Non-interactive invocations still read the prompt from stdin and fail with an actionable
+  message when it is empty.
 
 ### Removed
 
