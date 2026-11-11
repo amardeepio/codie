@@ -9,6 +9,47 @@ use codie_core::message::Message;
 use codie_testkit::spec;
 
 #[tokio::test]
+#[spec("PROV-022")]
+async fn spec_prov_022_openai_compatible_only() {
+    let server = wiremock::MockServer::start().await;
+    common::mount_sse(
+        &server,
+        common::script(&[
+            r#"{"id":"resp-1","choices":[{"index":0,"delta":{"content":"ok"}}]}"#,
+            r#"{"id":"resp-1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"#,
+        ]),
+    )
+    .await;
+
+    let model = common::openrouter_model();
+    let provider = OpenAiProvider::openrouter("test-key").with_base_url(server.uri());
+    let events = common::drain(provider.stream(
+        &[Message::user("hi")],
+        &common::options(&model, ThinkingLevel::Off),
+    ))
+    .await;
+    assert!(
+        events
+            .iter()
+            .any(|event| event.terminal_message().is_some())
+    );
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("requests are recorded");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].url.path(), "/chat/completions");
+    let body: serde_json::Value = requests[0].body_json().expect("OpenAI request body");
+    assert!(body.get("messages").is_some(), "OpenAI messages field");
+    assert!(
+        body.get("anthropic_version").is_none(),
+        "Anthropic-native passthrough is out of scope"
+    );
+    assert_eq!(model.api, codie_ai::OPENAI_COMPLETIONS);
+}
+
+#[tokio::test]
 #[spec("PROV-018")]
 async fn spec_prov_018_attribution_headers() {
     let server = wiremock::MockServer::start().await;

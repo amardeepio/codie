@@ -22,6 +22,8 @@ use crate::model::{
     PROVIDER_DEEPSEEK, PROVIDER_OPENROUTER, ThinkingFormat, builtin_models, fallback_model,
     provider_base_url,
 };
+use crate::record::Recorder;
+use crate::redact::{redact_text, redacted_headers};
 use crate::sse::{SseEvent, SseParser};
 
 /// Maximum request attempts, including the initial attempt.
@@ -155,6 +157,16 @@ impl OpenAiProvider {
         &self.base_url
     }
 
+    /// Returns a copy of this provider that sends requests to `base_url`.
+    ///
+    /// The override is intended for proxies and local test endpoints. Model
+    /// descriptors keep their own base URL; only the transport target changes.
+    #[must_use]
+    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.base_url = normalize_base_url(&self.provider_id, &base_url.into());
+        self
+    }
+
     /// Builds the JSON request body for a transcript.
     ///
     /// This is exposed for diagnostics and request-conversion tests; the
@@ -243,11 +255,14 @@ impl OpenAiProvider {
         }
 
         let body = build_request_body(&state.model, &context, &options);
+        let request = redact_text(&body.to_string(), [self.api_key.as_str()]);
+        let headers = redacted_headers(&self.headers, &self.api_key);
         tracing::trace!(
             target: "codie_ai::openai",
             provider = %self.provider_id,
             endpoint = %self.endpoint(),
-            request = %body,
+            headers = %headers,
+            request = %request,
             "provider request"
         );
 
@@ -370,6 +385,7 @@ impl OpenAiProvider {
     ) -> Result<(), ConsumeError> {
         let mut bytes = response.bytes_stream();
         let mut parser = SseParser::new();
+        let mut recorder = Recorder::from_env(&self.provider_id);
 
         loop {
             let next = tokio::select! {
@@ -388,8 +404,14 @@ impl OpenAiProvider {
             };
             let chunk =
                 chunk.map_err(|error| ConsumeError::Message(normalize_transport_error(&error)))?;
+            recorder.write(&chunk);
 
             for event in parser.push(&chunk) {
+                tracing::trace!(
+                    target: "codie_ai::openai",
+                    data = %redact_text(&event.data, [self.api_key.as_str()]),
+                    "provider response event"
+                );
                 if event.is_done() {
                     state.finish(sender, started).await?;
                     return Ok(());
@@ -399,6 +421,11 @@ impl OpenAiProvider {
         }
 
         for event in parser.finish() {
+            tracing::trace!(
+                target: "codie_ai::openai",
+                data = %redact_text(&event.data, [self.api_key.as_str()]),
+                "provider response event"
+            );
             if event.is_done() {
                 state.finish(sender, started).await?;
                 return Ok(());
@@ -515,13 +542,6 @@ impl StreamState {
                 truncate_chars(&event.data, MAX_ERROR_BODY_CHARS)
             ))
         })?;
-
-        tracing::trace!(
-            target: "codie_ai::openai",
-            event = ?event.event,
-            payload = %chunk,
-            "provider response chunk"
-        );
 
         self.handle_chunk(&chunk, sender).await
     }

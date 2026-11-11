@@ -12,7 +12,8 @@ test harness, and this documentation and specification baseline. The agent does 
 Provider support, the turn loop, tools, sessions, and the TUI land in Phases 1 through 3. See the
 [roadmap](roadmap.md) and [`ROADMAP.md`](../../ROADMAP.md).
 
-Until Phase 1 is complete, `cargo run -- --help` and `cargo run -- --version` are the only supported commands.
+Phase 1 is complete: `codie -p "..."` runs a headless coding session and `--mode json` emits the event stream.
+Interactive mode arrives in Phase 2.
 
 ## What it will do
 

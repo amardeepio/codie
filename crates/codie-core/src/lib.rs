@@ -14,7 +14,9 @@ pub mod event;
 pub mod message;
 pub mod tool;
 
-pub use agent::{Agent, AgentConfig, ChatClient, ModelRef, QueueMode, StreamOptions};
+pub use agent::{
+    Agent, AgentConfig, ChatClient, HookContext, Hooks, ModelRef, QueueMode, StreamOptions,
+};
 pub use content::{Content, Cost, StopReason, ThinkingLevel, ToolCall, ToolDecl, Usage};
 pub use error::{Error, ErrorKind, Result};
 pub use event::{

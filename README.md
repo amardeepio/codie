@@ -19,8 +19,9 @@ implementation language, the safety posture, and the provider scope.
 
 The command is `codie`.
 
-**Status: Phase 1, pre-alpha.** The one-shot agent works end to end: OpenRouter and DeepSeek streaming,
-tool calls, sessions, `-p` and `--mode json`. The interactive TUI lands in Phase 2. See [`ROADMAP.md`](ROADMAP.md).
+**Status: Phase 1 complete (`0.1.0`), pre-alpha.** The one-shot agent works end to end: OpenRouter and
+DeepSeek streaming, tool calls, sessions, `-p` and `--mode json`. The interactive TUI lands in Phase 2. See
+[`ROADMAP.md`](ROADMAP.md).
 
 ## Why codie
 

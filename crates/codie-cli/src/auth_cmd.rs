@@ -39,7 +39,11 @@ pub(crate) enum AuthCommand {
 }
 
 /// Runs an auth command.
-pub(crate) fn run(args: AuthArgs, config: &Config) -> Result<()> {
+///
+/// Returns the process exit code. `auth status` exits `2` when no provider is
+/// configured, so scripts can distinguish "unconfigured" from a runtime error
+/// (`CLI-003`).
+pub(crate) fn run(args: AuthArgs, config: &Config) -> Result<u8> {
     let store = AuthStore::new(config.auth_path());
     match args.command {
         AuthCommand::Login { provider, api_key } => {
@@ -76,6 +80,10 @@ pub(crate) fn run(args: AuthArgs, config: &Config) -> Result<()> {
                 })
                 .collect::<Vec<_>>();
 
+            let any_configured = statuses
+                .iter()
+                .any(|(_, stored, environment, _)| *stored || *environment);
+
             if json {
                 let values = statuses
                     .iter()
@@ -103,9 +111,10 @@ pub(crate) fn run(args: AuthArgs, config: &Config) -> Result<()> {
                     println!("{provider}: {source}");
                 }
             }
+            return Ok(if any_configured { 0 } else { 2 });
         }
     }
-    Ok(())
+    Ok(0)
 }
 
 fn validate_provider(provider: &str) -> Result<()> {

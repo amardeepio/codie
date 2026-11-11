@@ -1,0 +1,13 @@
+---
+source: crates/codie-cli/tests/e2e.rs
+expression: normalize(&events)
+---
+user: Make the test pass. Read the files, fix the bug, and run the test.
+assistant -> read({"path":"math.py"})
+read: def add(a, b):\n    return a - b\n
+assistant -> edit({"edits":[{"newText":"return a + b","oldText":"return a - b"}],"path":"math.py"})
+edit: Successfully replaced 1 block(s) in math.py.
+assistant -> bash({"command":"python3 test_math.py"})
+bash: (no output)
+assistant: Fixed the bug and the test passes.
+end: completed

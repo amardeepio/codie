@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 mod ci;
+mod coverage;
 mod spec;
 
 use std::path::{Path, PathBuf};
@@ -20,6 +21,7 @@ commands:
   spec-check [--strict]  validate specs and requirement-to-test traceability
   spec-report            write target/spec-report.md
   ci                     run the local CI gate sequence (fail fast)
+  coverage               enforce 80% line coverage in core, ai, and tools
   dist                   build the release codie binary (Phase 0 stub)
 ";
 
@@ -52,6 +54,11 @@ fn run() -> Result<bool> {
         "ci" => {
             reject_flags(&rest, "ci")?;
             ci::run(&root)?;
+            Ok(true)
+        }
+        "coverage" => {
+            reject_flags(&rest, "coverage")?;
+            coverage::run(&root)?;
             Ok(true)
         }
         "dist" => {

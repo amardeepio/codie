@@ -9,7 +9,7 @@ not commitments; the exit criteria are the real gate.
 | Phase | Focus | Duration | Cumulative | Artifact | Status |
 |---|---|---|---|---|---|
 | 0 | Foundations: workspace, CI, spec framework, OSS files | 1 wk | 1 wk | repository + CI | Complete |
-| 1 | Headless core: providers, loop, tools, sessions, print/JSON | 3 wk | 4 wk | `0.1.0` — `codie -p` works | In progress |
+| 1 | Headless core: providers, loop, tools, sessions, print/JSON | 3 wk | 4 wk | `0.1.0` — `codie -p` works | Complete |
 | 2 | Interactive TUI: streaming render, editor, themes, steering | 3 wk | 7 wk | `0.2.0` — interactive agent | Planned |
 | 3 | Sessions at full fidelity: resume, fork, compaction, picker | 2 wk | 9 wk | `0.3.0` — resume/fork/compact | Planned |
 | 4 | Customization and trust: skills, templates, `SYSTEM.md`, images | 2 wk | 11 wk | `0.4.0` — skills/templates/trust | Planned |
@@ -26,14 +26,16 @@ not commitments; the exit criteria are the real gate.
 - Spec template plus three accepted specs (45 requirements) exist.
 - OSS and documentation baseline is complete.
 
-## Phase 1 exit criteria
+## Phase 1 exit criteria (met 2026-11-11)
 
 - A golden-path end-to-end test with a fake provider performs read, edit, bash test, and final answer, and the
   transcript snapshot matches.
 - Manual smoke tests against DeepSeek and OpenRouter pass with real credentials; CI stays offline.
-- JSON mode output validates against the published schema.
-- Print-mode exit codes match the CLI spec.
-- Line coverage in `core`, `ai`, and `tools` is at least 80 percent, excluding generated code.
+- JSON mode output validates against `schemas/json-events.schema.json`.
+- Print-mode exit codes match the CLI spec, including 130/143/129 for signals.
+- Line coverage is 89.07 percent in `core`, 88.89 percent in `ai`, and 86.73 percent in `tools`;
+  `cargo xtask coverage` enforces the 80 percent floor.
+- 12 accepted specs, 92 requirements, and 92 requirements with named tests (`spec-check --strict` is green).
 
 Later phase criteria are listed in [`PLAN.MD`](../../PLAN.MD) §8. This page mirrors `ROADMAP.md` and is updated at
 each phase boundary. Scope changes require an RFC; phase changes require maintainer approval recorded in

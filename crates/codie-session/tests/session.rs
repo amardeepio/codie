@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use codie_core::{Content, Message, StopReason, ThinkingLevel};
 use codie_session::{Entry, SESSION_FORMAT_VERSION, Session};
+use codie_testkit::spec;
 
 fn assistant(text: &str) -> Message {
     Message::assistant(
@@ -38,6 +39,7 @@ fn message_text(message: &Message) -> Option<String> {
     }
 }
 
+#[spec("SESS-003")]
 #[test]
 fn create_append_reopen_and_project() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -78,6 +80,7 @@ fn create_append_reopen_and_project() {
     assert_eq!(reopened.entries(), entries.as_slice());
 }
 
+#[spec("SESS-002")]
 #[test]
 fn file_is_created_lazily_on_the_first_message() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -117,6 +120,7 @@ fn file_is_created_lazily_on_the_first_message() {
     assert_eq!(reopened.projection().len(), 1);
 }
 
+#[spec("SESS-002")]
 #[test]
 fn file_is_one_json_object_per_line_with_a_header_first() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -144,6 +148,7 @@ fn file_is_one_json_object_per_line_with_a_header_first() {
     assert!(message["timestamp"].as_str().is_some());
 }
 
+#[spec("SESS-005")]
 #[test]
 fn malformed_entry_line_is_skipped() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -170,6 +175,7 @@ fn malformed_entry_line_is_skipped() {
     assert_eq!(reopened.leaf(), Some(reopened.entries()[1].id()));
 }
 
+#[spec("SESS-005")]
 #[test]
 fn newer_format_version_is_rejected() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -192,6 +198,7 @@ fn newer_format_version_is_rejected() {
     );
 }
 
+#[spec("SESS-006")]
 #[test]
 fn model_and_thinking_changes_persist_across_reopen() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -225,6 +232,7 @@ fn model_and_thinking_changes_persist_across_reopen() {
     assert_eq!(reopened.projection().len(), 1);
 }
 
+#[spec("SESS-001")]
 #[test]
 fn sequential_appends_preserve_order_and_parent_links() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -255,6 +263,7 @@ fn sequential_appends_preserve_order_and_parent_links() {
     );
 }
 
+#[spec("SESS-007")]
 #[test]
 fn entry_identifiers_are_eight_lowercase_hex_characters() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -280,6 +289,7 @@ fn entry_identifiers_are_eight_lowercase_hex_characters() {
     }
 }
 
+#[spec("SESS-004")]
 #[test]
 fn set_leaf_moves_the_projection_and_rejects_unknown_ids() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -298,6 +308,36 @@ fn set_leaf_moves_the_projection_and_rejects_unknown_ids() {
     assert!(session.set_leaf(Some("deadbeef")).is_err());
 }
 
+#[test]
+#[spec("SESS-009")]
+fn spec_sess_009_system_message_is_persisted_and_replayed() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut session = create_session(temp.path(), "project");
+
+    let system = Message::system(
+        "You are codie.",
+        vec![codie_core::ToolDecl {
+            name: "read".to_owned(),
+            description: "Read a file".to_owned(),
+            parameters: serde_json::json!({"type": "object"}),
+        }],
+    );
+    session
+        .append_message(&system)
+        .expect("append system message");
+
+    let reopened = Session::open(session.path()).expect("reopen");
+    let projection = reopened.projection();
+    assert_eq!(projection.len(), 1);
+    assert_eq!(projection[0], system);
+    let Message::System(persisted) = &projection[0] else {
+        panic!("the first message must be the system message");
+    };
+    assert_eq!(persisted.tools.len(), 1);
+    assert_eq!(persisted.tools[0].name, "read");
+}
+
+#[spec("SESS-008")]
 #[test]
 fn continue_recent_returns_the_matching_working_directory() {
     let temp = tempfile::tempdir().expect("tempdir");

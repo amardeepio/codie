@@ -40,16 +40,20 @@ The full gate is:
 cargo xtask ci
 ```
 
-The xtask implementation is part of Phase 0. Until it is complete, run the equivalent commands directly:
+If you need the individual commands, including the network-dependent checks:
 
 ```bash
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+cargo xtask spec-check --strict
+cargo xtask coverage
 cargo deny check
 cargo audit
 cargo machete
 ```
+
+Coverage requires `cargo install cargo-llvm-cov` and `rustup component add llvm-tools-preview`.
 
 A change is not ready for review while any of these fail. CI builds the workspace; run `cargo xtask ci` before pushing.
 

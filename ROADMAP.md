@@ -4,15 +4,16 @@ codie is built in gated phases. Each phase ends with a demoable, installable art
 No phase starts before the previous phase's exit criteria are met. Durations are planning bounds for one
 full-time engineer, not commitments; the exit criteria are the real gate.
 
-**Current status: Phase 1 (Headless core), in progress.** DeepSeek and OpenRouter streaming, the agent loop,
-`read`/`write`/`edit`/`bash`, sessions, and `-p` / `--mode json` work. The interactive TUI is Phase 2.
+**Current status: Phase 1 (Headless core), complete.** `0.1.0` ships DeepSeek and OpenRouter streaming, the
+agent loop, `read`/`write`/`edit`/`bash`, sessions, `-p` / `--mode json`, and a published event schema. The
+interactive TUI is Phase 2.
 
 ## Phase summary
 
 | Phase | Focus | Duration | Cumulative | Artifact | Status |
 |---|---|---|---|---|---|
 | 0 | Foundations: workspace, CI, spec framework, OSS files | 1 week | 1 week | repository + CI | Complete |
-| 1 | Headless core: providers, loop, tools, sessions, print/JSON | 3 weeks | 4 weeks | `0.1.0` — `codie -p` works | In progress |
+| 1 | Headless core: providers, loop, tools, sessions, print/JSON | 3 weeks | 4 weeks | `0.1.0` — `codie -p` works | Complete |
 | 2 | Interactive TUI: streaming render, editor, themes, steering | 3 weeks | 7 weeks | `0.2.0` — interactive agent | Planned |
 | 3 | Sessions at full fidelity: resume, fork, compaction, picker | 2 weeks | 9 weeks | `0.3.0` — resume/fork/compact | Planned |
 | 4 | Customization and trust: skills, templates, `SYSTEM.md`, images | 2 weeks | 11 weeks | `0.4.0` — skills/templates/trust | Planned |
@@ -39,6 +40,8 @@ binary builds; the spec template and three accepted specs (45 requirements) exis
 
 Goal: `codie -p "..."` performs real multi-step coding work.
 
+Status: complete 2026-11-11.
+
 - OpenAI-compatible adapter for DeepSeek and OpenRouter, including SSE, retries, and error mapping.
 - Bundled model catalog and `codie models`.
 - Auth through environment variables, `auth.json`, and `--api-key`.
@@ -49,8 +52,10 @@ Goal: `codie -p "..."` performs real multi-step coding work.
 - Print mode and JSON event mode.
 - Permission policy v0: non-interactive deny for mutating tools unless allowed.
 
-Exit criteria include a fake-provider end-to-end refactor scenario, a manual live smoke against both providers,
-schema-valid JSON output, correct exit codes, and 80 percent line coverage in `core`, `ai`, and `tools`.
+Exit criteria (met 2026-11-11): a fake-provider end-to-end refactor scenario with a transcript snapshot; live
+smoke runs against DeepSeek and OpenRouter; JSON output validated against `schemas/json-events.schema.json`;
+documented exit codes including signals; 89.07 / 88.89 / 86.73 percent line coverage in `core`, `ai`, and
+`tools`; 12 accepted specs and 92 requirements covered by named tests.
 
 ## Later phases
 

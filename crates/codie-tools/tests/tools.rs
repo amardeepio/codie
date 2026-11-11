@@ -3,6 +3,7 @@
 use std::{path::Path, time::Duration};
 
 use codie_core::{Tool, ToolCall, ToolContext, ToolResult};
+use codie_testkit::spec;
 use codie_tools::{BashTool, EditTool, ReadTool, WriteTool};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -44,6 +45,7 @@ async fn read_returns_file_text_without_line_numbers() {
     assert_eq!(text(&result), "one\ntwo\nthree");
 }
 
+#[spec("TOOL-003")]
 #[tokio::test]
 async fn read_applies_offset_and_limit() {
     let directory = tempfile::tempdir().expect("temp dir");
@@ -102,6 +104,7 @@ async fn read_rejects_invalid_offset_and_limit() {
     assert_eq!(text(&limit), "limit must be a positive integer");
 }
 
+#[spec("TOOL-003")]
 #[tokio::test]
 async fn read_truncates_at_two_thousand_lines_with_offset_notice() {
     let directory = tempfile::tempdir().expect("temp dir");
@@ -147,6 +150,7 @@ async fn read_reports_the_byte_limit() {
     )));
 }
 
+#[spec("TOOL-003")]
 #[tokio::test]
 async fn read_reports_binary_files_as_errors() {
     let directory = tempfile::tempdir().expect("temp dir");
@@ -158,6 +162,7 @@ async fn read_reports_binary_files_as_errors() {
     assert!(text(&result).contains("not valid UTF-8"));
 }
 
+#[spec("TOOL-004")]
 #[tokio::test]
 async fn write_creates_parent_directories() {
     let directory = tempfile::tempdir().expect("temp dir");
@@ -180,6 +185,8 @@ async fn write_creates_parent_directories() {
     );
 }
 
+#[spec("TOOL-004")]
+#[spec("TOOL-008")]
 #[tokio::test]
 async fn write_serializes_concurrent_updates_to_one_file() {
     let directory = tempfile::tempdir().expect("temp dir");
@@ -203,6 +210,7 @@ async fn write_serializes_concurrent_updates_to_one_file() {
     assert!(content == "first" || content == "second");
 }
 
+#[spec("TOOL-005")]
 #[tokio::test]
 async fn edit_replaces_unique_text_and_reports_first_changed_line() {
     let directory = tempfile::tempdir().expect("temp dir");
@@ -230,6 +238,7 @@ async fn edit_replaces_unique_text_and_reports_first_changed_line() {
     );
 }
 
+#[spec("TOOL-005")]
 #[tokio::test]
 async fn edit_applies_multiple_edits_against_the_original() {
     let directory = tempfile::tempdir().expect("temp dir");
@@ -419,6 +428,7 @@ async fn edit_preserves_a_utf8_bom() {
     assert_eq!(String::from_utf8(bytes).expect("utf-8"), "\u{feff}world");
 }
 
+#[spec("TOOL-005")]
 #[tokio::test]
 async fn edit_preserves_crlf_outside_changed_ranges() {
     let directory = tempfile::tempdir().expect("temp dir");
@@ -465,6 +475,7 @@ async fn edit_uses_crlf_for_new_lines_in_a_crlf_file() {
     );
 }
 
+#[spec("TOOL-006")]
 #[tokio::test]
 async fn bash_returns_output_and_exit_details() {
     let directory = tempfile::tempdir().expect("temp dir");
@@ -507,6 +518,7 @@ async fn bash_reports_no_output() {
     assert_eq!(text(&result), "(no output)");
 }
 
+#[spec("TOOL-006")]
 #[tokio::test]
 async fn bash_times_out_and_kills_the_child() {
     let directory = tempfile::tempdir().expect("temp dir");
@@ -560,6 +572,7 @@ async fn bash_supports_abort() {
     assert_eq!(text(&result), "Command aborted");
 }
 
+#[spec("TOOL-006")]
 #[tokio::test]
 async fn bash_truncates_the_tail_and_keeps_the_end_of_output() {
     let directory = tempfile::tempdir().expect("temp dir");
