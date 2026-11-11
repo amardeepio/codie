@@ -13,7 +13,7 @@ Provider support, the turn loop, tools, sessions, and the TUI land in Phases 1 t
 [roadmap](roadmap.md) and [`ROADMAP.md`](../../ROADMAP.md).
 
 Phase 1 is complete: `codie -p "..."` runs a headless coding session and `--mode json` emits the event stream.
-Phase 2 is in progress; run `codie` in a terminal for the interactive interface.
+Phase 2 is complete (`0.2.0`); run `codie` in a terminal for the interactive interface.
 
 ## What it will do
 
