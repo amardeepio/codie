@@ -503,6 +503,7 @@ version = "0.2.0"
 dependencies = [
  "codie-core",
  "codie-testkit",
+ "proptest",
  "serde",
  "serde_json",
  "tempfile",

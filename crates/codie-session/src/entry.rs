@@ -4,7 +4,7 @@
 //! following line is one [`Entry`]. Entries form a tree through `parent_id`, so
 //! appending never rewrites earlier history (SESS-001).
 
-use codie_core::{Message, ThinkingLevel, Usage};
+use codie_core::{Content, Message, ThinkingLevel, Usage};
 use serde::{Deserialize, Serialize};
 
 /// On-disk session format version understood by this build.
@@ -35,6 +35,9 @@ pub struct SessionHeader {
     pub timestamp: String,
     /// Absolute working directory the session belongs to.
     pub cwd: String,
+    /// Identifier of the session this one was forked or cloned from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_session: Option<String>,
 }
 
 /// One node in the append-only session tree.
@@ -113,6 +116,107 @@ pub enum Entry {
         /// Normalized token usage.
         usage: Usage,
     },
+    /// A compacted summary of everything before `first_kept_entry_id`.
+    ///
+    /// Compaction never deletes entries: the projection replaces the hidden
+    /// prefix with the summary (`CTX-005`).
+    Compaction {
+        /// Entry identifier: eight lowercase hexadecimal characters.
+        id: String,
+        /// Parent entry identifier, or `null` for the first entry.
+        #[serde(default)]
+        parent_id: Option<String>,
+        /// Entry creation time as an RFC 3339 string.
+        timestamp: String,
+        /// Model-written summary of the compacted prefix.
+        summary: String,
+        /// First message entry retained after the summary.
+        #[serde(default)]
+        first_kept_entry_id: Option<String>,
+        /// Estimated tokens before compaction.
+        tokens_before: u64,
+        /// Host-only details about the compaction request.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        details: Option<serde_json::Value>,
+        /// Token usage for the summarization request.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<Usage>,
+    },
+    /// A summary of an abandoned branch, retained when returning to an earlier
+    /// leaf.
+    BranchSummary {
+        /// Entry identifier: eight lowercase hexadecimal characters.
+        id: String,
+        /// Parent entry identifier, or `null` for the first entry.
+        #[serde(default)]
+        parent_id: Option<String>,
+        /// Entry creation time as an RFC 3339 string.
+        timestamp: String,
+        /// Entry on the summarized branch where the summary starts.
+        from_id: String,
+        /// Model-written summary of the branch.
+        summary: String,
+    },
+    /// A replacement or removal for an earlier message's content.
+    ContextEdit {
+        /// Entry identifier: eight lowercase hexadecimal characters.
+        id: String,
+        /// Parent entry identifier, or `null` for the first entry.
+        #[serde(default)]
+        parent_id: Option<String>,
+        /// Entry creation time as an RFC 3339 string.
+        timestamp: String,
+        /// Message entry this edit applies to.
+        target_id: String,
+        /// Replacement content, or `null` to remove the message.
+        #[serde(default)]
+        replacement: Option<Content>,
+    },
+    /// A user-assigned label on an entry, used by the tree view.
+    Label {
+        /// Entry identifier: eight lowercase hexadecimal characters.
+        id: String,
+        /// Parent entry identifier, or `null` for the first entry.
+        #[serde(default)]
+        parent_id: Option<String>,
+        /// Entry creation time as an RFC 3339 string.
+        timestamp: String,
+        /// Entry the label applies to.
+        target_id: String,
+        /// Label text, or `null` to clear it.
+        #[serde(default)]
+        label: Option<String>,
+    },
+    /// Extension-owned metadata that codie stores without interpreting.
+    Custom {
+        /// Entry identifier: eight lowercase hexadecimal characters.
+        id: String,
+        /// Parent entry identifier, or `null` for the first entry.
+        #[serde(default)]
+        parent_id: Option<String>,
+        /// Entry creation time as an RFC 3339 string.
+        timestamp: String,
+        /// Extension-defined type name.
+        custom_type: String,
+        /// Extension-defined payload.
+        data: serde_json::Value,
+    },
+    /// A persisted branch selection.
+    ///
+    /// The entry's parent is the selected target, so reopening the file resumes
+    /// on that branch. The marker itself is never projected.
+    Leaf {
+        /// Entry identifier: eight lowercase hexadecimal characters.
+        id: String,
+        /// Selected branch point, or `null` for an empty branch.
+        #[serde(default)]
+        parent_id: Option<String>,
+        /// Entry creation time as an RFC 3339 string.
+        timestamp: String,
+        /// Selected branch point, repeated for readers that do not walk parents.
+        #[serde(default)]
+        target_id: Option<String>,
+    },
 }
 
 impl Entry {
@@ -124,7 +228,13 @@ impl Entry {
             | Self::ModelChange { id, .. }
             | Self::ThinkingLevelChange { id, .. }
             | Self::SessionInfo { id, .. }
-            | Self::Usage { id, .. } => id,
+            | Self::Usage { id, .. }
+            | Self::Compaction { id, .. }
+            | Self::BranchSummary { id, .. }
+            | Self::ContextEdit { id, .. }
+            | Self::Label { id, .. }
+            | Self::Custom { id, .. }
+            | Self::Leaf { id, .. } => id,
         }
     }
 
@@ -136,7 +246,13 @@ impl Entry {
             | Self::ModelChange { parent_id, .. }
             | Self::ThinkingLevelChange { parent_id, .. }
             | Self::SessionInfo { parent_id, .. }
-            | Self::Usage { parent_id, .. } => parent_id.as_deref(),
+            | Self::Usage { parent_id, .. }
+            | Self::Compaction { parent_id, .. }
+            | Self::BranchSummary { parent_id, .. }
+            | Self::ContextEdit { parent_id, .. }
+            | Self::Label { parent_id, .. }
+            | Self::Custom { parent_id, .. }
+            | Self::Leaf { parent_id, .. } => parent_id.as_deref(),
         }
     }
 
@@ -148,7 +264,13 @@ impl Entry {
             | Self::ModelChange { timestamp, .. }
             | Self::ThinkingLevelChange { timestamp, .. }
             | Self::SessionInfo { timestamp, .. }
-            | Self::Usage { timestamp, .. } => timestamp,
+            | Self::Usage { timestamp, .. }
+            | Self::Compaction { timestamp, .. }
+            | Self::BranchSummary { timestamp, .. }
+            | Self::ContextEdit { timestamp, .. }
+            | Self::Label { timestamp, .. }
+            | Self::Custom { timestamp, .. }
+            | Self::Leaf { timestamp, .. } => timestamp,
         }
     }
 
@@ -186,6 +308,66 @@ impl Entry {
     pub fn session_info_name(&self) -> Option<Option<&str>> {
         match self {
             Self::SessionInfo { name, .. } => Some(name.as_deref()),
+            _ => None,
+        }
+    }
+
+    /// Returns the compaction summary and first retained entry, when this is a
+    /// compaction entry.
+    #[must_use]
+    pub fn compaction(&self) -> Option<(&str, Option<&str>, u64)> {
+        match self {
+            Self::Compaction {
+                summary,
+                first_kept_entry_id,
+                tokens_before,
+                ..
+            } => Some((summary, first_kept_entry_id.as_deref(), *tokens_before)),
+            _ => None,
+        }
+    }
+
+    /// Returns the branch summary, when this is a branch-summary entry.
+    #[must_use]
+    pub fn branch_summary(&self) -> Option<&str> {
+        match self {
+            Self::BranchSummary { summary, .. } => Some(summary),
+            _ => None,
+        }
+    }
+
+    /// Returns the context edit target and replacement, when this is a
+    /// context-edit entry.
+    #[must_use]
+    pub fn context_edit(&self) -> Option<(&str, Option<&Content>)> {
+        match self {
+            Self::ContextEdit {
+                target_id,
+                replacement,
+                ..
+            } => Some((target_id, replacement.as_ref())),
+            _ => None,
+        }
+    }
+
+    /// Returns the label target and text, when this is a label entry.
+    #[must_use]
+    pub fn label(&self) -> Option<(&str, Option<&str>)> {
+        match self {
+            Self::Label {
+                target_id, label, ..
+            } => Some((target_id, label.as_deref())),
+            _ => None,
+        }
+    }
+
+    /// Returns the extension payload, when this is a custom entry.
+    #[must_use]
+    pub fn custom(&self) -> Option<(&str, &serde_json::Value)> {
+        match self {
+            Self::Custom {
+                custom_type, data, ..
+            } => Some((custom_type, data)),
             _ => None,
         }
     }
