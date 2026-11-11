@@ -1,14 +1,37 @@
 //! Provider abstractions and wire adapters for codie.
 //!
-//! The public surface is intentionally small in Phase 0: provider and API
-//! identifiers plus the API used by every v1.0 provider. The `Provider` trait,
-//! model catalog, auth, and streaming land in Phase 1 behind the contract in
-//! `specs/provider/`.
+//! Phase 1 provides one OpenAI-compatible adapter that serves DeepSeek and
+//! OpenRouter, plus the model catalog, SSE framing, and credential storage the
+//! adapter needs. The adapter implements [`codie_core::agent::ChatClient`] and
+//! emits [`codie_core::event::AssistantDelta`] events; it is the only place in
+//! codie that knows a provider's wire format.
+//!
+//! - [`openai::OpenAiProvider`] — HTTP, retries, SSE, tool calls, usage.
+//! - [`model::Model`] — model identity, pricing, and compatibility matrix.
+//! - [`sse::SseParser`] — byte-oriented Server-Sent Events framing.
+//! - [`auth::AuthStore`] — atomic `auth.json` credentials and key resolution.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
 use std::borrow::Cow;
+
+pub mod auth;
+pub mod model;
+pub mod openai;
+pub mod sse;
+
+pub use auth::{AuthError, AuthStore, resolve_key};
+pub use model::{
+    Compat, DEFAULT_HTTP_REFERER, DEFAULT_X_TITLE, HeaderMap, MaxTokensField, Model, ModelCost,
+    PROVIDER_DEEPSEEK, PROVIDER_OPENROUTER, ThinkingFormat, builtin_models, fallback_model,
+    find_model, provider_base_url, provider_compat,
+};
+pub use openai::{
+    MAX_ATTEMPTS, MAX_ERROR_BODY_CHARS, MAX_RETRY_DELAY, OpenAiProvider, backoff_delay,
+    build_request_body, estimate_cost, map_stop_reason, normalize_transport_error, normalize_usage,
+};
+pub use sse::{SseEvent, SseParser};
 
 /// A provider identifier such as `deepseek` or `openrouter`.
 pub type ProviderId = Cow<'static, str>;

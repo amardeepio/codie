@@ -60,7 +60,8 @@ representative at an online or offline event.
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
 reported to the community leaders responsible for enforcement at
-`conduct@example.com` <!-- PLACEHOLDER: replace with the real conduct mailbox -->.
+`conduct@example.com` is not yet configured for this repository. Until it is, report concerns privately to the
+maintainer through the contact method listed on [github.com/amardeepio](https://github.com/amardeepio).
 All complaints will be reviewed and investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the

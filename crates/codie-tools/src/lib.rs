@@ -1,13 +1,34 @@
 //! Built-in tools for codie.
 //!
-//! Phase 0 defines the stable tool names. The `Tool` trait and implementations
-//! land in Phase 1 (`read`, `write`, `edit`, `bash`) and Phase 2 (`grep`,
-//! `find`, `ls`).
+//! Phase 1 provides the stable tool names and the `read`, `write`, `edit`, and
+//! `bash` implementations, plus path resolution, output truncation, a tool
+//! registry, and a policy wrapper. Phase 2 adds `grep`, `find`, and `ls`.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
 use std::{fmt, str::FromStr};
+
+pub mod bash;
+pub mod edit;
+mod file_mutation;
+pub mod path;
+pub mod read;
+pub mod registry;
+pub mod truncate;
+pub mod write;
+
+pub use bash::{BashTool, MAX_TIMEOUT_SECONDS};
+pub use edit::EditTool;
+pub use path::resolve_path;
+pub use read::ReadTool;
+pub use registry::{Policy, PolicyToolbox, Registry, is_read_only};
+pub use truncate::{
+    DEFAULT_MAX_BYTES, DEFAULT_MAX_LINE_CHARS, DEFAULT_MAX_LINES, TruncatedBy, TruncationResult,
+    format_size, truncate_head, truncate_head_with_limits, truncate_line, truncate_line_with_limit,
+    truncate_tail, truncate_tail_with_limits,
+};
+pub use write::WriteTool;
 
 /// Names of the built-in tools.
 ///

@@ -91,7 +91,7 @@ Verification: `crates/codie-ai/tests/reasoning.rs::spec_prov_016_reasoning_repla
 **PROV-017 (MUST)** Tool results are sent as `{"role":"tool","tool_call_id":"...","content":"..."}` with the matching ID verbatim. Image-bearing tool results are downgraded to a text note in v1 because image input is a Phase 5 capability.
 Verification: `crates/codie-ai/tests/openai_compat.rs::spec_prov_017_tool_result_wire_shape`
 
-**PROV-018 (MUST)** OpenRouter attribution headers are configurable and default to `HTTP-Referer: https://github.com/your-org/codie` and `X-Title: codie`. DeepSeek requests do not send them.
+**PROV-018 (MUST)** OpenRouter attribution headers are configurable and default to `HTTP-Referer: https://github.com/amardeepio/codie` and `X-Title: codie`. DeepSeek requests do not send them.
 Verification: `crates/codie-ai/tests/openrouter.rs::spec_prov_018_attribution_headers`
 
 **PROV-019 (MUST)** Request fields are emitted only when the selected model's `compat` declarations support them. Unsupported fields MUST be omitted rather than sent with `null` or a default value, and capability resolution MUST be per model, not per provider.

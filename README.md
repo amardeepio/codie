@@ -1,14 +1,26 @@
-# codie
+<p align="center">
+  <img src="assets/codie.svg" alt="Codie logo" width="144" height="144">
+</p>
 
-A fast, extensible, spec-driven coding agent for the terminal, written in Rust.
+<h1 align="center">Codie</h1>
 
-`codie` is a deliberate reimplementation of the architecture proven by [`pi`](https://github.com/earendil-works/pi).
+<p align="center">
+  <a href="https://www.rust-lang.org/"><img alt="Rust 1.88" src="https://img.shields.io/badge/Rust-1.88-000000?style=flat-square&logo=rust&logoColor=white"></a>
+  <img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-6E4AFF?style=flat-square">
+  <img alt="Status: pre-alpha" src="https://img.shields.io/badge/status-pre--alpha-F59E0B?style=flat-square">
+  <img alt="Platform: macOS 13+" src="https://img.shields.io/badge/platform-macOS%2013%2B-111827?style=flat-square&logo=apple&logoColor=white">
+</p>
+
+<p align="center">A fast, extensible, spec-driven coding agent for the terminal, written in Rust.</p>
+
+Codie is a deliberate reimplementation of the architecture proven by [`pi`](https://github.com/earendil-works/pi).
 It keeps the small event-driven core, append-only session tree, and provider abstraction, while changing the
 implementation language, the safety posture, and the provider scope.
 
-**Status: Phase 0, pre-alpha.** The workspace builds and the specification baseline is in place; the agent does
-not yet perform coding tasks. Provider support, the agent loop, tools, sessions, and the TUI land in Phases 1
-to 3. See [`ROADMAP.md`](ROADMAP.md).
+The command is `codie`.
+
+**Status: Phase 1, pre-alpha.** The one-shot agent works end to end: OpenRouter and DeepSeek streaming,
+tool calls, sessions, `-p` and `--mode json`. The interactive TUI lands in Phase 2. See [`ROADMAP.md`](ROADMAP.md).
 
 ## Why codie
 
@@ -33,39 +45,51 @@ to 3. See [`ROADMAP.md`](ROADMAP.md).
 
 ## Architecture
 
-```text
-LLM wire adapter  ->  assistant event stream  ->  agent loop  ->  tool execution
-                                                   |
-                                           session (append-only JSONL tree)
-                                                   |
-                                    interactive TUI | print | JSON | RPC
+```mermaid
+flowchart LR
+    P["Provider adapter<br/>OpenAI-compatible"] -->|"SSE deltas"| S["Assistant event stream"]
+    S --> L["Agent loop"]
+    L <-->|"append / projection"| DB["Session store<br/>append-only JSONL"]
+    L --> T["Tool execution<br/>read · write · edit · bash"]
+    L --> M["Interfaces"]
+    M --> I["Interactive TUI<br/>Phase 2"]
+    M --> P1["Print"]
+    M --> J["JSON events"]
+    M --> R["RPC<br/>Phase 5"]
 ```
 
-Crate graph (target; crates are split out as consumers appear):
+Crate graph (solid = shipping in Phase 1, dashed = planned):
 
-```text
-                    ┌──────────────┐
-                    │  codie-cli   │  binary, args, mode dispatch
-                    └──────┬───────┘
-       ┌───────────────────┼───────────────────┐
-       ▼                   ▼                   ▼
-┌────────────┐      ┌─────────────┐     ┌──────────────┐
-│ codie-tui  │      │codie-proto  │     │ codie-prompt │
-└─────┬──────┘      └──────┬──────┘     └──────┬───────┘
-      └────────────────────┼───────────────────┘
-                           ▼
-                    ┌─────────────┐
-                    │ codie-core  │  loop, messages, events
-                    └──┬───────┬──┘
-              ┌────────▼──┐  ┌─▼────────────┐
-              │ codie-ai  │  │ codie-tools  │
-              └────────┬──┘  └──────┬───────┘
-              ┌────────▼────────────▼──────┐
-              │      codie-context         │  compaction, tokens
-              └────────────────────────────┘
+```mermaid
+flowchart TD
+    CLI["codie-cli<br/>args · config · modes"]
 
-codie-session: append-only JSONL store and projection
-codie-testkit (dev only): fake provider, fixtures, #[spec] macro
+    CORE["codie-core<br/>messages · events · loop"]
+    AI["codie-ai<br/>providers · SSE"]
+    TOOLS["codie-tools<br/>read · write · edit · bash"]
+    SESSION["codie-session<br/>JSONL store"]
+    PROMPT["codie-prompt<br/>system prompt"]
+
+    TUI["codie-tui<br/>Phase 2"]
+    PROTO["codie-protocol<br/>Phase 5"]
+    CONTEXT["codie-context<br/>Phase 3"]
+
+    CLI --> CORE
+    CLI --> AI
+    CLI --> TOOLS
+    CLI --> SESSION
+    CLI --> PROMPT
+
+    AI --> CORE
+    TOOLS --> CORE
+    SESSION --> CORE
+    PROMPT --> CORE
+
+    TUI -.-> CORE
+    PROTO -.-> CORE
+    CONTEXT -.-> CORE
+
+    TESTKIT["codie-testkit<br/>dev only"] -.-> CORE
 ```
 
 The loop has no HTTP client. The provider adapter knows nothing about tool implementations. Only the CLI reads
@@ -76,30 +100,56 @@ environment variables and decides process exit codes. Details are in [`docs/src/
 Requirements: Rust 1.88, installed through `rust-toolchain.toml`. macOS 13+ is the tier-1 platform.
 
 ```bash
-git clone https://github.com/your-org/codie
+git clone https://github.com/amardeepio/codie
 cd codie
 cargo build
 cargo run -- --help
 cargo run -- --version
 ```
 
-In Phase 0 the binary only supports `--help` and `--version`. Phase 1 adds:
+Authenticate once (stored outside the repository, mode 0600):
 
 ```bash
-export DEEPSEEK_API_KEY=...
-cargo run -- -p "Fix the failing test in src/lib.rs"
+cargo run -- auth login openrouter
+cargo run -- auth status
+cargo run -- models
+```
+
+Run one prompt:
+
+```bash
+cargo run -- -p --provider openrouter --model deepseek/deepseek-v4.1-flash-1017 \
+  "Reply with exactly: codie-ok"
+
+# Tool-using run in another directory (headless defaults deny mutating tools)
+cargo run -- -p --allow-all --cwd /path/to/project \
+  "Make the failing test pass, then run it"
+
+# Automation
 cargo run -- --mode json -p "Summarize this repository"
 ```
 
-Do not expect those commands to work before Phase 1. The planned command surface is documented in
-[`PLAN.MD`](PLAN.MD) §4.2.
+Environment variables and `.env`:
+
+```bash
+cp .env.example .env      # optional; .env is gitignored
+# or
+cargo run -- --env-file .env.local models
+```
+
+Process environment always wins over `.env`. Supported variables: `DEEPSEEK_API_KEY`,
+`OPENROUTER_API_KEY`, `CODIE_PROVIDER`, `CODIE_MODEL`, `CODIE_THINKING`, `CODIE_MAX_TURNS`,
+`CODIE_ALLOW`, `CODIE_CONFIG_DIR`, `CODIE_DATA_DIR`, `CODIE_SESSION_DIR`, `CODIE_ENV_FILE`.
+
+The interactive TUI is not available yet; use `-p` or `--mode json`. The planned command surface is
+documented in [`PLAN.MD`](PLAN.MD) §4.2.
 
 ## Providers
 
 | Provider | Status | API | Auth |
 |---|---|---|---|
-| DeepSeek | Planned, Phase 1 | OpenAI-compatible | `DEEPSEEK_API_KEY` |
-| OpenRouter | Planned, Phase 1 | OpenAI-compatible | `OPENROUTER_API_KEY` |
+| DeepSeek | Phase 1 | OpenAI-compatible | `DEEPSEEK_API_KEY` |
+| OpenRouter | Phase 1 | OpenAI-compatible | `OPENROUTER_API_KEY` |
 
 Both are accessed through one adapter that handles SSE framing, tool-call accumulation, stop-reason and usage
 mapping, retries, and per-provider compatibility flags. Anthropic-native passthrough, OAuth login, and

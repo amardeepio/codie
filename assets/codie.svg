@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Codie">
+  <title>Codie</title>
+  <desc>A friendly terminal robot mark for Codie, with a winking face, code brackets, and a spark.</desc>
+  <defs>
+    <linearGradient id="bg" x1="72" y1="40" x2="440" y2="476" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8B5CF6"/>
+      <stop offset="0.5" stop-color="#3B82F6"/>
+      <stop offset="1" stop-color="#06B6D4"/>
+    </linearGradient>
+    <linearGradient id="visor" x1="150" y1="150" x2="362" y2="340" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#111827"/>
+      <stop offset="1" stop-color="#1E293B"/>
+    </linearGradient>
+    <linearGradient id="spark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FEF08A"/>
+      <stop offset="1" stop-color="#F59E0B"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#020617" flood-opacity="0.35"/>
+    </filter>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="7" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect x="24" y="24" width="464" height="464" rx="116" fill="url(#bg)" filter="url(#shadow)"/>
+
+  <g opacity="0.2" fill="#FFFFFF">
+    <circle cx="88" cy="92" r="5"/>
+    <circle cx="116" cy="76" r="3"/>
+    <circle cx="424" cy="116" r="4"/>
+    <circle cx="440" cy="88" r="6"/>
+    <circle cx="84" cy="404" r="4"/>
+    <circle cx="420" cy="396" r="5"/>
+  </g>
+
+  <path d="M256 136V88" stroke="#0B1020" stroke-width="16" stroke-linecap="round" opacity="0.75"/>
+  <circle cx="256" cy="66" r="24" fill="url(#spark)" stroke="#0B1020" stroke-width="6"/>
+
+  <path d="M112 196 74 256l38 60" stroke="#FDE047" stroke-width="20" fill="none"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M400 196l38 60-38 60" stroke="#FDE047" stroke-width="20" fill="none"
+        stroke-linecap="round" stroke-linejoin="round"/>
+
+  <rect x="128" y="136" width="256" height="240" rx="72" fill="url(#visor)" stroke="#0B1020" stroke-width="8"/>
+  <rect x="152" y="160" width="208" height="192" rx="52" fill="#0F172A" opacity="0.6"/>
+
+  <circle cx="210" cy="234" r="27" fill="#F8FAFC"/>
+  <circle cx="218" cy="241" r="12" fill="#0B1020"/>
+  <circle cx="222" cy="237" r="4" fill="#FFFFFF"/>
+
+  <path d="M286 234q28-24 56 0" stroke="#F8FAFC" stroke-width="18" fill="none"
+        stroke-linecap="round"/>
+
+  <path d="M204 296q52 38 104 0" stroke="#22D3EE" stroke-width="16" fill="none"
+        stroke-linecap="round" filter="url(#glow)"/>
+  <rect x="238" y="326" width="40" height="16" rx="8" fill="#FDE047"/>
+
+  <path d="M414 108l9 22 22 9-22 9-9 22-9-22-22-9 22-9z" fill="#FDE047"/>
+  <path d="M96 368l7 17 17 7-17 7-7 17-7-17-17-7 17-7z" fill="#A7F3D0"/>
+
+  <circle cx="110" cy="336" r="8" fill="#FDE047" opacity="0.85"/>
+  <circle cx="402" cy="336" r="8" fill="#A7F3D0" opacity="0.85"/>
+</svg>

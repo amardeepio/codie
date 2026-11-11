@@ -1,88 +1,136 @@
 //! Command-line entry point for codie.
-//!
-//! Phase 0 exposes the version banner, help, and log verbosity only. Prompt
-//! arguments, modes, and subcommands arrive in Phase 1.
-//!
-//! stdout is reserved for program output and protocol traffic; every log line
-//! goes to stderr.
 
 #![forbid(unsafe_code)]
-#![deny(missing_docs)]
 
-use std::{
-    io::{self, IsTerminal},
-    process::ExitCode,
-};
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 
-use clap::Parser;
+use anyhow::{Context, Result, bail};
+use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
+
+mod auth_cmd;
+mod config;
+mod models_cmd;
+mod run;
 
 /// A fast, extensible coding agent for the terminal.
 #[derive(Debug, Parser)]
 #[command(
     name = "codie",
-    version = codie_core::VERSION,
+    version,
     about = "A fast, extensible coding agent for the terminal.",
     long_about = None,
     propagate_version = true,
-    arg_required_else_help = true
+    arg_required_else_help = true,
+    args_conflicts_with_subcommands = true
 )]
 struct Cli {
-    /// Increase log verbosity: -v (info), -vv (debug), -vvv (trace).
-    ///
-    /// Logs are written to stderr; stdout carries program output only.
+    /// Management subcommands.
+    #[command(subcommand)]
+    command: Option<Commands>,
+
+    /// One-shot run arguments.
+    #[command(flatten)]
+    run: run::RunArgs,
+
+    /// Increase log verbosity (-v, -vv, -vvv).
     #[arg(short, long, action = clap::ArgAction::Count, global = true)]
     verbose: u8,
+
+    /// Load environment variables from a file.
+    ///
+    /// Without this flag, codie loads `./.env` when it exists. Existing process
+    /// variables always win over values from the file.
+    #[arg(long, value_name = "FILE", global = true)]
+    env_file: Option<PathBuf>,
 }
 
-fn main() -> ExitCode {
+/// Management subcommands.
+#[derive(Debug, Subcommand)]
+enum Commands {
+    /// Manage API keys.
+    Auth(auth_cmd::AuthArgs),
+    /// List the bundled model catalog.
+    Models(models_cmd::ModelsArgs),
+}
+
+#[tokio::main]
+async fn main() -> ExitCode {
     let cli = Cli::parse();
+    if let Err(error) = load_env(cli.env_file.as_deref()) {
+        eprintln!("error: {error:#}");
+        return ExitCode::FAILURE;
+    }
     init_tracing(cli.verbose);
 
-    tracing::info!(version = codie_core::VERSION, "codie starting");
-    println!("codie {}", codie_core::VERSION);
+    let result = match cli.command {
+        Some(Commands::Auth(args)) => {
+            config::Config::load().and_then(|config| auth_cmd::run(args, &config))
+        }
+        Some(Commands::Models(args)) => models_cmd::run(args),
+        None => {
+            return match run::run(cli.run).await {
+                Ok(code) => ExitCode::from(code),
+                Err(error) => {
+                    eprintln!("error: {error:#}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
+    };
 
-    ExitCode::SUCCESS
-}
-
-/// Maps a verbosity count to the default log level.
-const fn level_for(verbosity: u8) -> &'static str {
-    match verbosity {
-        0 => "warn",
-        1 => "info",
-        2 => "debug",
-        _ => "trace",
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("error: {error:#}");
+            ExitCode::FAILURE
+        }
     }
 }
 
 /// Initializes structured logging on stderr.
-///
-/// `RUST_LOG` overrides the level derived from `-v`. ANSI colors are enabled
-/// only when stderr is a terminal so redirected logs stay machine-readable.
 fn init_tracing(verbosity: u8) {
-    let default_level = level_for(verbosity);
+    let default_level = match verbosity {
+        0 => "warn",
+        1 => "info",
+        2 => "debug",
+        _ => "trace",
+    };
+
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new(format!("codie={default_level},xtask={default_level}")));
 
-    let stderr = io::stderr();
     let _ = tracing_subscriber::fmt()
         .with_env_filter(filter)
-        .with_writer(io::stderr)
-        .with_ansi(stderr.is_terminal())
+        .with_writer(std::io::stderr)
         .with_target(false)
         .try_init();
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Loads environment variables from `.env` or an explicit file.
+///
+/// Existing process variables are never overwritten. The implicit `.env` is
+/// read only from the current directory, never from parents, so running codie
+/// in an unrelated directory cannot pick up a surprising file.
+fn load_env(explicit: Option<&Path>) -> Result<()> {
+    let explicit = explicit
+        .map(Path::to_path_buf)
+        .or_else(|| std::env::var_os("CODIE_ENV_FILE").map(PathBuf::from));
 
-    #[test]
-    fn verbosity_maps_to_log_levels() {
-        assert_eq!(level_for(0), "warn");
-        assert_eq!(level_for(1), "info");
-        assert_eq!(level_for(2), "debug");
-        assert_eq!(level_for(3), "trace");
-        assert_eq!(level_for(255), "trace");
+    if let Some(path) = explicit {
+        if !path.exists() {
+            bail!("environment file not found: {}", path.display());
+        }
+        dotenvy::from_path(&path)
+            .with_context(|| format!("cannot load environment file {}", path.display()))?;
+        return Ok(());
     }
+
+    let default = Path::new(".env");
+    if default.exists() {
+        dotenvy::from_path(default)
+            .with_context(|| format!("cannot load environment file {}", default.display()))?;
+    }
+    Ok(())
 }

@@ -13,7 +13,7 @@ offline once dependencies are cached; no live provider credentials are required 
 ## Setup
 
 ```bash
-git clone https://github.com/your-org/codie
+git clone https://github.com/amardeepio/codie
 cd codie
 cargo build
 cargo test --workspace

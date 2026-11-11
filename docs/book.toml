@@ -1,5 +1,5 @@
 [book]
-title = "codie"
+title = "Codie"
 authors = ["Codie contributors"]
 description = "Documentation for codie, a spec-driven terminal coding agent written in Rust."
 language = "en"
@@ -12,8 +12,8 @@ create-missing = false
 [output.html]
 default-theme = "light"
 preferred-dark-theme = "navy"
-git-repository-url = "https://github.com/your-org/codie"
-edit-url-template = "https://github.com/your-org/codie/edit/main/docs/src/{path}"
+git-repository-url = "https://github.com/amardeepio/codie"
+edit-url-template = "https://github.com/amardeepio/codie/edit/main/docs/src/{path}"
 site-url = "/codie/"
 no-section-label = true
 

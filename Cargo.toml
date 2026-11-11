@@ -8,8 +8,8 @@ version = "0.0.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/your-org/codie"
-homepage = "https://github.com/your-org/codie"
+repository = "https://github.com/amardeepio/codie"
+homepage = "https://github.com/amardeepio/codie"
 authors = ["Codie contributors"]
 description = "A fast, extensible, spec-driven coding agent for the terminal."
 keywords = ["coding-agent", "llm", "cli", "ai"]
@@ -21,6 +21,7 @@ codie-core = { path = "crates/codie-core", version = "0.0.0" }
 codie-ai = { path = "crates/codie-ai", version = "0.0.0" }
 codie-tools = { path = "crates/codie-tools", version = "0.0.0" }
 codie-session = { path = "crates/codie-session", version = "0.0.0" }
+codie-prompt = { path = "crates/codie-prompt", version = "0.0.0" }
 codie-testkit = { path = "crates/codie-testkit", version = "0.0.0" }
 codie-spec-macro = { path = "crates/codie-spec-macro", version = "0.0.0" }
 
@@ -29,10 +30,18 @@ anyhow = "1"
 async-trait = "0.1"
 bytes = "1"
 clap = { version = "4", features = ["derive", "env", "wrap_help"] }
+dotenvy = "0.15"
 futures-util = "0.3"
 globset = "0.4"
 ignore = "0.4"
 regex = "1"
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls",
+    "json",
+    "stream",
+    "gzip",
+] }
+rpassword = "7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 similar = "2"

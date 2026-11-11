@@ -1,0 +1,7 @@
+data: {"id":"resp-1","choices":[{"index":0,"delta":{"content":"ok"}}]}
+
+data: {"id":"resp-1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: {"id":"resp-1","choices":[],"usage":{"prompt_tokens":1200,"completion_tokens":80,"prompt_cache_hit_tokens":900}}
+
+data: [DONE]

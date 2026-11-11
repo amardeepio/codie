@@ -1,12 +1,14 @@
 # codie-session
 
-Append-only JSONL session storage for codie. Phase 0 pins the on-disk format
-version so that later work cannot silently change it.
+Append-only JSONL session storage for codie.
 
-Status: **Phase 0 scaffold** — the session header, reader, writer, and
-projection are Phase 1 work; the format is frozen in Phase 3.
+Each session file starts with a `session` header (format version 1) and records
+one entry per line. Entries form a tree through `parent_id`; appending never
+rewrites history. The file is created lazily when the first message is
+appended, and the projection walks the current leaf back to its root.
 
 - Plan: [../../PLAN.MD](../../PLAN.MD)
 - Specs: [../../specs/](../../specs/)
 
-See `PLAN.MD` §6.6 for the normative session contract.
+See `PLAN.MD` §6.6 for the normative session contract. Compaction and context
+edits are Phase 3 work; Phase 1 projects the full branch.

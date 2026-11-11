@@ -1,14 +1,21 @@
 # codie-tools
 
-The built-in tool vocabulary for codie. Phase 0 fixes the stable `ToolName`
-spellings used on the wire, in prompts, and in permission policies, plus
-their `Display`/`FromStr` conversions.
+The built-in tool vocabulary and Phase 1 implementations for codie.
 
-Status: **Phase 0 scaffold** — the `Tool` trait and the `read`, `write`,
-`edit`, and `bash` implementations are Phase 1 work; `grep`, `find`, and
-`ls` follow in Phase 2.
+- `read`: UTF-8 text files with `offset`/`limit` and head truncation (2000
+  lines / 50 KiB).
+- `write`: create or overwrite files and parent directories.
+- `edit`: exact-text replacements with uniqueness, overlap, BOM, and line-ending
+  preservation.
+- `bash`: `/bin/bash -c` execution with optional timeout and tail truncation.
+- `truncate`: shared head/tail/line truncation helpers.
+- `path`: `~`, `@`, `file://`, and Unicode-space path normalization.
+- `registry`: built-in registry plus a `Policy`/`PolicyToolbox` permission
+  wrapper.
+
+`grep`, `find`, and `ls` follow in Phase 2.
 
 - Plan: [../../PLAN.MD](../../PLAN.MD)
 - Specs: [../../specs/](../../specs/)
 
-See `PLAN.MD` §6.5 for the normative tool contract.
+See `PLAN.MD` §6.5 and Appendix B for the normative tool contract.

@@ -29,7 +29,7 @@ base_url = "https://api.deepseek.com"
 [providers.openrouter]
 api_key_env = "OPENROUTER_API_KEY"
 base_url = "https://openrouter.ai/api/v1"
-referer = "https://github.com/your-org/codie"
+referer = "https://github.com/amardeepio/codie"
 title = "codie"
 ```
 

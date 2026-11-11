@@ -372,7 +372,7 @@ base_url = "https://api.deepseek.com"
 [providers.openrouter]
 api_key_env = "OPENROUTER_API_KEY"
 base_url = "https://openrouter.ai/api/v1"
-referer = "https://github.com/<org>/codie"
+referer = "https://github.com/amardeepio/codie"
 title = "codie"
 ```
 
@@ -663,7 +663,7 @@ it (DeepSeek) and dropped otherwise. Thinking blocks are never summarized into t
 Image-bearing tool results are downgraded to a text note in v1 (image input ships in Phase 4).
 
 **PROV-018 (MUST)** OpenRouter attribution headers are configurable and default to
-`HTTP-Referer: https://github.com/<org>/codie`, `X-Title: codie`.
+`HTTP-Referer: https://github.com/amardeepio/codie`, `X-Title: codie`.
 
 **PROV-019 (MUST)** Request fields are emitted only when the selected model's `compat` declarations
 support them. Unsupported fields are omitted rather than sent as `null` or a default, and capability
@@ -1621,7 +1621,7 @@ data: [DONE]
 POST /api/v1/chat/completions HTTP/1.1
 Host: openrouter.ai
 Authorization: Bearer $OPENROUTER_API_KEY
-HTTP-Referer: https://github.com/<org>/codie
+HTTP-Referer: https://github.com/amardeepio/codie
 X-Title: codie
 x-session-id: 0192f0c4-...
 Content-Type: application/json

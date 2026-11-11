@@ -1,19 +1,26 @@
 //! Append-only JSONL session storage for codie.
 //!
-//! Phase 0 fixes the on-disk format version only. The header, reader, writer,
-//! and projection are implemented in Phase 1 and the format is frozen in
-//! Phase 3; see `specs/session/` for the normative contract.
+//! A session file starts with a [`SessionHeader`] and continues with one
+//! [`Entry`] per line. Entries form a tree through `parent_id`; the
+//! [`Session::projection`] method renders the branch from the current leaf back
+//! to its root as a transcript.
+//!
+//! Persistence is lazy (SESS-002): [`Session::create`] prepares the session
+//! directory but the file appears only when the first message is appended.
+//! Format version 1 is the only version this build writes or accepts; newer
+//! versions are refused with a clear error (SESS-007).
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-/// On-disk session format version understood by this build.
-///
-/// Version 1 is the initial format. Readers must refuse unknown newer versions
-/// and migrate older ones on read.
-pub const SESSION_FORMAT_VERSION: u32 = 1;
+mod entry;
+mod session;
+mod time;
 
-/// Returns the session format version.
+pub use entry::{Entry, HeaderType, SESSION_FORMAT_VERSION, SessionHeader};
+pub use session::Session;
+
+/// Returns the session format version written by this build.
 #[must_use]
 pub const fn format_version() -> u32 {
     SESSION_FORMAT_VERSION

@@ -12,7 +12,7 @@ body:
         - Do **not** paste API keys, tokens, secrets, or private source code.
           Redact paths and credentials from logs and session files.
         - Security vulnerabilities belong in a private advisory, not here.
-          See [SECURITY.md](https://github.com/your-org/codie/blob/main/SECURITY.md).
+          See [SECURITY.md](https://github.com/amardeepio/codie/blob/main/SECURITY.md).
 
   - type: textarea
     id: summary

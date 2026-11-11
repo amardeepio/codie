@@ -1,12 +1,20 @@
 # codie-ai
 
-Provider abstractions for codie. Phase 0 fixes the provider/API identifier
-vocabulary and the OpenAI-compatible wire API used by every v1.0 provider.
+Provider abstractions for codie. Phase 1 ships the OpenAI-compatible wire
+adapter used by DeepSeek and OpenRouter, the built-in model catalog, SSE
+framing, and `auth.json` credential storage.
 
-Status: **Phase 0 scaffold** — the `Provider` trait, model catalog, auth,
-SSE parsing, and wire adapters are Phase 1 work.
+- `openai::OpenAiProvider` implements `codie_core::agent::ChatClient` and
+  streams `AssistantDelta` events.
+- `model::Model` carries identity, pricing, and the per-model compatibility
+  matrix that gates request fields.
+- `sse::SseParser` reassembles byte-oriented Server-Sent Events across
+  arbitrary chunk boundaries.
+- `auth::AuthStore` reads and atomically writes credentials and resolves keys
+  in explicit > stored > environment order.
 
 - Plan: [../../PLAN.MD](../../PLAN.MD)
 - Specs: [../../specs/](../../specs/)
 
-See `PLAN.MD` §6.2 for the normative provider contract.
+See `PLAN.MD` §6.2 and `specs/provider/0001-openai-compatible.md` for the
+normative provider contract.

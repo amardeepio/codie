@@ -27,7 +27,7 @@ Requirements:
 - `mdbook` only if you are editing the documentation book.
 
 ```bash
-git clone https://github.com/your-org/codie
+git clone https://github.com/amardeepio/codie
 cd codie
 cargo build
 cargo test --workspace

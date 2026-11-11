@@ -6,64 +6,72 @@ implementations, and only the CLI reads environment variables or decides process
 
 ## Crate graph
 
-```text
-                    ┌──────────────┐
-                    │  codie-cli   │  binary, arg parsing, mode dispatch
-                    └──────┬───────┘
-       ┌───────────────────┼───────────────────┐
-       ▼                   ▼                   ▼
-┌────────────┐      ┌─────────────┐     ┌──────────────┐
-│ codie-tui  │      │codie-proto  │     │ codie-prompt │
-└─────┬──────┘      └──────┬──────┘     └──────┬───────┘
-      │                    │                   │
-      └────────────────────┼───────────────────┘
-                           ▼
-                    ┌─────────────┐
-                    │ codie-core  │  loop, messages, events
-                    └──┬───────┬──┘
-                       │       │
-              ┌────────▼──┐  ┌─▼────────────┐
-              │ codie-ai  │  │ codie-tools  │
-              └────────┬──┘  └──────┬───────┘
-                       │            │
-              ┌────────▼────────────▼──────┐
-              │      codie-context         │  compaction, tokens
-              └────────────────────────────┘
+Solid edges ship in Phase 1; dashed edges are planned.
 
-codie-session: append-only JSONL store and projection
-codie-testkit (dev only): fake provider, fixtures, #[spec] macro
+```mermaid
+flowchart TD
+    CLI["codie-cli<br/>args · config · modes"]
+
+    CORE["codie-core<br/>messages · events · loop"]
+    AI["codie-ai<br/>providers · SSE"]
+    TOOLS["codie-tools<br/>read · write · edit · bash"]
+    SESSION["codie-session<br/>JSONL store"]
+    PROMPT["codie-prompt<br/>system prompt"]
+
+    TUI["codie-tui<br/>Phase 2"]
+    PROTO["codie-protocol<br/>Phase 5"]
+    CONTEXT["codie-context<br/>Phase 3"]
+
+    CLI --> CORE
+    CLI --> AI
+    CLI --> TOOLS
+    CLI --> SESSION
+    CLI --> PROMPT
+
+    AI --> CORE
+    TOOLS --> CORE
+    SESSION --> CORE
+    PROMPT --> CORE
+
+    TUI -.-> CORE
+    PROTO -.-> CORE
+    CONTEXT -.-> CORE
+
+    TESTKIT["codie-testkit<br/>dev only"] -.-> CORE
 ```
 
-The target graph is deliberately wider than the Phase 0 workspace. codie starts with `core`, `ai`, `tools`,
-`session`, and `cli`; `context`, `prompt`, `tui`, and `protocol` are split out when a second consumer appears.
-Premature crates are as harmful as monolithic modules.
+The graph is deliberately wider than the current workspace. codie starts with `core`, `ai`, `tools`, `session`,
+`prompt`, and `cli`; `context`, `tui`, and `protocol` are split out when a second consumer appears. Premature
+crates are as harmful as monolithic modules.
 
-Current repository crates are `codie-core`, `codie-ai`, `codie-tools`, `codie-session`, `codie-cli`,
-`codie-testkit`, and the `codie-spec-macro` helper used by the test attribute. `xtask` is repository automation,
-not a shipped library.
+Current repository crates are `codie-core`, `codie-ai`, `codie-tools`, `codie-session`, `codie-prompt`,
+`codie-cli`, `codie-testkit`, and the `codie-spec-macro` helper used by the test attribute. `xtask` is
+repository automation, not a shipped library.
 
 ## Boundaries
 
-- `codie-core` depends only on `codie-ai` types and `codie-context` traits. It performs no I/O, terminal work,
-  or HTTP.
-- `codie-ai` owns HTTP, SSE, provider quirks, retries, and auth resolution. It never knows how a tool is
-  implemented.
-- `codie-tools` depends on `codie-core` for the tool trait and on `codie-context` for truncation, never the
-  reverse.
+- `codie-core` has no internal dependencies. It owns messages, content, events, tool traits, and the agent loop.
+  It performs no I/O, terminal work, or HTTP.
+- `codie-ai` owns HTTP, SSE, provider quirks, retries, model metadata, and credential resolution. It never knows
+  how a tool is implemented.
+- `codie-tools` depends on `codie-core` for the tool trait, never the reverse.
 - `codie-session` owns the append-only store and projection. It does not call providers.
+- `codie-prompt` discovers project instructions and builds deterministic system prompts.
 - `codie-cli` is the only crate that reads environment variables or maps outcomes to process exit codes.
 - Public APIs are `pub(crate)` by default; crates expose narrow, documented surfaces.
 
 ## Runtime model
 
-- One `tokio` multi-thread runtime with `worker_threads = min(4, cores)`.
+- One `tokio` multi-thread runtime.
 - One agent task owns the loop and serializes state transitions.
-- Events flow over a bounded `mpsc` channel (capacity 256) to the UI or protocol writer, so backpressure is
-  real and memory is bounded.
-- Tool execution uses a `JoinSet` plus a `Semaphore` with `max_parallel_tools = 8`.
+- Events flow over a bounded `mpsc` channel (capacity 256) to the UI or protocol writer, so backpressure is real
+  and memory is bounded.
+- Phase 1 executes parallel tool calls with `FuturesUnordered`, preserving source order for results while
+  emitting completion-order events. A concurrency cap arrives with the TUI workload.
 - Cancellation uses `tokio_util::sync::CancellationToken` at every I/O boundary.
-- Blocking filesystem work uses `spawn_blocking`; the reactor is never blocked.
-- Child processes run in their own process group and are killed as a group on abort or timeout.
+- Blocking work stays off the reactor; filesystem operations use `tokio::fs` and shell commands use
+  `tokio::process`.
+- Process-group termination on abort/timeout is Phase 7 hardening; Phase 1 kills the direct child.
 
 ## State layering
 

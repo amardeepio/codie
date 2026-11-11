@@ -19,10 +19,12 @@ compatibility unit and only the latest minor receives fixes.
 
 **Do not open a public issue, discussion, or pull request for a vulnerability.**
 
-Preferred channel: [GitHub Security Advisories](https://github.com/your-org/codie/security/advisories/new)
+Preferred channel: [GitHub Security Advisories](https://github.com/amardeepio/codie/security/advisories/new)
 (private by default, gives us a shared workspace for triage and a CVE if needed).
 
-Backup channel: `security@example.com` <!-- PLACEHOLDER: replace with the real security mailbox -->.
+Backup channel: the maintainer's private contact listed on
+[github.com/amardeepio](https://github.com/amardeepio). Do not open a public issue for a suspected
+vulnerability.
 Encrypt sensitive material if you can; ask for a key in your first message.
 
 Please include:
