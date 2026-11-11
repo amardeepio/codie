@@ -6,7 +6,7 @@ implementations, and only the CLI reads environment variables or decides process
 
 ## Crate graph
 
-Solid edges ship in Phase 1; dashed edges are planned.
+Solid edges ship in 0.2.0; dashed edges are planned.
 
 ```mermaid
 flowchart TD
@@ -18,7 +18,7 @@ flowchart TD
     SESSION["codie-session<br/>JSONL store"]
     PROMPT["codie-prompt<br/>system prompt"]
 
-    TUI["codie-tui<br/>Phase 2"]
+    TUI["codie-tui<br/>interactive"]
     PROTO["codie-protocol<br/>Phase 5"]
     CONTEXT["codie-context<br/>Phase 3"]
 
@@ -33,20 +33,19 @@ flowchart TD
     SESSION --> CORE
     PROMPT --> CORE
 
-    TUI -.-> CORE
+    TUI --> CORE
     PROTO -.-> CORE
     CONTEXT -.-> CORE
 
     TESTKIT["codie-testkit<br/>dev only"] -.-> CORE
 ```
 
-The graph is deliberately wider than the current workspace. codie starts with `core`, `ai`, `tools`, `session`,
-`prompt`, and `cli`; `context`, `tui`, and `protocol` are split out when a second consumer appears. Premature
-crates are as harmful as monolithic modules.
+The graph is deliberately wider than the current workspace. `context` and `protocol` are split out when a
+second consumer appears. Premature crates are as harmful as monolithic modules.
 
 Current repository crates are `codie-core`, `codie-ai`, `codie-tools`, `codie-session`, `codie-prompt`,
-`codie-cli`, `codie-testkit`, and the `codie-spec-macro` helper used by the test attribute. `xtask` is
-repository automation, not a shipped library.
+`codie-tui`, `codie-cli`, `codie-testkit`, and the `codie-spec-macro` helper used by the test attribute.
+`xtask` is repository automation, not a shipped library.
 
 ## Boundaries
 

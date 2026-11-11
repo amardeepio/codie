@@ -30,8 +30,8 @@ plain mode. See [`docs/src/tui.md`](docs/src/tui.md) and [`ROADMAP.md`](ROADMAP.
   in headless mode unless explicitly allowed.
 - **Provider discipline.** OpenRouter and DeepSeek at launch, behind one OpenAI-compatible adapter with
   recorded-fixture conformance. No live API calls in CI.
-- **Sessions you can trust.** Append-only JSONL with resume, fork, and compaction. The file is the source of
-  truth; the model-visible context is a projection.
+- **Sessions you can trust.** Append-only JSONL with resume today; fork and compaction arrive in Phase 3. The
+  file is the source of truth; the model-visible context is a projection.
 - **Spec-first engineering.** Every normative requirement has an ID, a test path, and a traceability check.
 
 ## Principles
@@ -53,13 +53,13 @@ flowchart LR
     L <-->|"append / projection"| DB["Session store<br/>append-only JSONL"]
     L --> T["Tool execution<br/>read · write · edit · bash"]
     L --> M["Interfaces"]
-    M --> I["Interactive TUI<br/>Phase 2"]
+    M --> I["Interactive TUI"]
     M --> P1["Print"]
     M --> J["JSON events"]
     M --> R["RPC<br/>Phase 5"]
 ```
 
-Crate graph (solid = shipping in Phase 1, dashed = planned):
+Crate graph (solid = shipping in 0.2.0, dashed = planned):
 
 ```mermaid
 flowchart TD
@@ -71,7 +71,7 @@ flowchart TD
     SESSION["codie-session<br/>JSONL store"]
     PROMPT["codie-prompt<br/>system prompt"]
 
-    TUI["codie-tui<br/>Phase 2"]
+    TUI["codie-tui<br/>interactive"]
     PROTO["codie-protocol<br/>Phase 5"]
     CONTEXT["codie-context<br/>Phase 3"]
 
@@ -86,7 +86,7 @@ flowchart TD
     SESSION --> CORE
     PROMPT --> CORE
 
-    TUI -.-> CORE
+    TUI --> CORE
     PROTO -.-> CORE
     CONTEXT -.-> CORE
 
@@ -140,10 +140,12 @@ cargo run -- --env-file .env.local models
 
 Process environment always wins over `.env`. Supported variables: `DEEPSEEK_API_KEY`,
 `OPENROUTER_API_KEY`, `CODIE_PROVIDER`, `CODIE_MODEL`, `CODIE_THINKING`, `CODIE_MAX_TURNS`,
-`CODIE_ALLOW`, `CODIE_CONFIG_DIR`, `CODIE_DATA_DIR`, `CODIE_SESSION_DIR`, `CODIE_ENV_FILE`.
+`CODIE_ALLOW`, `CODIE_BASE_URL`, `CODIE_CONFIG_DIR`, `CODIE_DATA_DIR`, `CODIE_CACHE_DIR`,
+`CODIE_SESSION_DIR`, `CODIE_ENV_FILE`.
 
-The interactive TUI is not available yet; use `-p` or `--mode json`. The planned command surface is
-documented in [`PLAN.MD`](PLAN.MD) §4.2.
+Run `codie` with no arguments in a terminal for the interactive app. Use `-p/--print` for one-shot output and
+`--mode json` for automation. See [`docs/src/tui.md`](docs/src/tui.md) for keys, commands, themes, and
+permissions. The full planned command surface is documented in [`PLAN.MD`](PLAN.MD) §4.2.
 
 ## Providers
 
@@ -169,8 +171,8 @@ Support claims and the macOS terminal matrix are in [`docs/src/platforms.md`](do
 
 - [`PLAN.MD`](PLAN.MD) — scope, architecture, phases, decision log.
 - [`specs/`](specs/) — normative requirements and the specification process.
-- [`docs/src/`](docs/src/) — mdBook: introduction, architecture, development, specs, providers, platforms,
-  security, roadmap.
+- [`docs/src/`](docs/src/) — mdBook: introduction, architecture, development, configuration, interactive
+  terminal, specs, providers, platforms, security, roadmap.
 - [`docs/adr/`](docs/adr/) — architecture decision records.
 - [`docs/rfc/`](docs/rfc/) — change proposals for accepted or released behavior.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — development setup, spec-first workflow, PR checklist.
