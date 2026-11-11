@@ -1,0 +1,33 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# Editors
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# Codie local state (never commit user sessions or credentials)
+.codie/
+codie-local/
+
+# Coverage and profiling
+lcov.info
+coverage/
+*.profraw
+flamegraph.svg
+perf.data*
+
+# Insta pending snapshots are reviewed, never committed
+*.snap.new
+*.pending-snap
+
+# mdBook
+docs/book/

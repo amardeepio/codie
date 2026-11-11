@@ -1,0 +1,6 @@
+# Codie Clippy configuration.
+#
+# Lint levels live in the workspace `[workspace.lints.clippy]` table so that
+# every crate inherits them. This file only carries tool settings.
+
+avoid-breaking-exported-api = false

@@ -1,0 +1,51 @@
+# Attributes for the codie repository.
+#
+# Normalize all text files to LF so checkouts are identical on every platform.
+# macOS is the primary target; CRLF only matters for a few test fixtures, and
+# those are handled explicitly (never via git attributes) by the tools crate.
+* text=auto eol=lf
+
+# Rust and documentation sources.
+*.rs text
+*.toml text
+*.md text
+*.mdx text
+*.json text
+*.jsonl text
+*.yml text
+*.yaml text
+*.snap text
+*.txt text
+LICENSE-MIT text
+LICENSE-APACHE text
+.gitattributes text
+.editorconfig text
+deny.toml text
+
+# The lockfile is committed and reviewed like any other file.
+Cargo.lock text
+
+# Keep shell scripts LF regardless of core.autocrlf.
+*.sh text eol=lf
+
+# Binary assets: never diff, never convert.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.icns binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.zst binary
+*.xz binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+
+# Snapshot review artifacts from insta are never committed.
+*.snap.new binary
+*.pending-snap binary

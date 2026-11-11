@@ -1,0 +1,71 @@
+name: Feature request
+description: Propose a capability or a change in behavior.
+title: "feat: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        codie is spec-driven: meaningful behavior changes start as a spec in
+        `specs/` (see `specs/README.md` and `CONTRIBUTING.md`). Use this form
+        to describe the problem first; maintainers will help decide whether a
+        new spec, an ADR, or an RFC is the right vehicle.
+
+        Please do not include secrets or private code in examples.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do, and what gets in the way today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior you want, including CLI or TUI surfaces.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds, other agents, or designs you rejected and why.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Provider / model integration
+        - Agent loop / tools
+        - Sessions and compaction
+        - TUI and keybindings
+        - CLI and configuration
+        - Protocol / RPC / SDK
+        - Extensions
+        - Security and permissions
+        - Docs and developer experience
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: spec
+    attributes:
+      label: Related specs or requirement IDs
+      description: Link any spec, ADR, RFC, or requirement (for example `SEC-003`).
+      placeholder: "specs/security/SEC-003.md"
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: I searched existing issues and discussions for this idea.
+          required: true
+        - label: This request is not a security vulnerability.
+          required: true

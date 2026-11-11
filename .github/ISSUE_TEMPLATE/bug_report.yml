@@ -1,0 +1,109 @@
+name: Bug report
+description: Report a reproducible defect in codie.
+title: "bug: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a report. Before you continue:
+
+        - Search existing issues; duplicates will be closed.
+        - Do **not** paste API keys, tokens, secrets, or private source code.
+          Redact paths and credentials from logs and session files.
+        - Security vulnerabilities belong in a private advisory, not here.
+          See [SECURITY.md](https://github.com/your-org/codie/blob/main/SECURITY.md).
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One or two sentences describing the defect.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: A minimal sequence that reliably triggers the bug.
+      placeholder: |
+        1. Run `codie ...`
+        2. ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the full error message and `codie --version` output.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: codie version
+      description: Output of `codie --version`.
+      placeholder: "codie 0.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      description: macOS is tier 1; Linux is tier 2; Windows is not yet supported.
+      options:
+        - macOS 15 (arm64)
+        - macOS 14 (arm64)
+        - macOS 13 (x64)
+        - Linux (x64)
+        - Linux (arm64)
+        - Other (please describe below)
+    validations:
+      required: true
+
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal and shell
+      description: For TUI bugs, name the terminal emulator and version.
+      placeholder: "Ghostty 1.x, zsh 5.9"
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and diagnostics
+      description: |
+        Run with `RUST_LOG=codie=debug` and attach relevant output.
+        Redact credentials, tokens, and private paths. Session JSONL excerpts
+        must be sanitized.
+      render: text
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Anything else that may help, such as a minimal repro repository.
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: I searched existing issues and did not find a duplicate.
+          required: true
+        - label: I removed secrets, tokens, and private data from this report.
+          required: true
+        - label: This is not a security vulnerability (those go to SECURITY.md).
+          required: true

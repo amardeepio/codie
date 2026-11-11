@@ -1,0 +1,121 @@
+# codie specifications
+
+This directory is the normative source of truth for codie's behavior. `PLAN.MD` defines scope, architecture, and
+phases; a spec defines the observable contract that code and tests must satisfy. When the two disagree about
+behavior, the accepted spec wins and `PLAN.MD` is corrected by a documentation PR.
+
+Specs are not design notes. A requirement that cannot be verified by an automated test does not belong here.
+
+## Artifact types
+
+| Artifact | Location | Purpose |
+|---|---|---|
+| Product plan | [`PLAN.MD`](../PLAN.MD) | Scope, phases, architecture, decision log |
+| Spec | `specs/<area>/<NNNN>-<slug>.md` | Normative behavior with traceable requirement IDs |
+| ADR | [`docs/adr/`](../docs/adr/) | Irreversible or cross-cutting decisions |
+| RFC | [`docs/rfc/`](../docs/rfc/) | Proposed changes to an accepted or released spec |
+| Fixture | `crates/*/tests/fixtures/` | Recorded provider and wire data |
+| Report | `target/spec-report.md` | Generated requirement-to-test matrix |
+
+## Requirement IDs
+
+The format is `<AREA>-<NNN>`, for example `AGENT-004` or `PROV-012`.
+
+Allocated areas are: `PROV` (providers), `MSG` (message model), `AGENT` (agent loop), `TOOL` (tools),
+`SESS` (sessions), `CTX` (compaction and context), `PRMPT` (prompt, skills, templates), `TUI` (terminal UI),
+`CLI` (arguments and configuration), `PROTO` (JSON and RPC), `EXT` (extensions), `SEC` (security and
+permissions), and `PERF` (performance).
+
+Rules:
+
+1. An ID names exactly one requirement in exactly one canonical spec. IDs are never reused, renumbered, or
+   copied into a second spec.
+2. IDs are allocated in the canonical spec. Ranges mentioned in `PLAN.MD` or Appendix D are reservations, not
+   permission to duplicate a requirement.
+3. Requirements are atomic, observable, and testable. "Be robust" is not a requirement.
+4. Every requirement uses the RFC 2119 keyword that matches its weight: `MUST`, `SHOULD`, or `MAY`.
+5. Every requirement names at least one acceptance test on the following `Verification:` line.
+6. Changing a released requirement requires an RFC. Changing an unreleased requirement requires a spec PR and
+   maintainer review.
+
+### Requirement line format
+
+The parser expects one requirement per line, in exactly this shape:
+
+```markdown
+**MSG-001 (MUST)** Messages are one of `system`, `user`, `assistant`, or `toolResult` ...
+Verification: `crates/codie-core/tests/message_model.rs::spec_msg_001_message_kinds_lower_before_wire`
+```
+
+The `Verification:` line MUST follow immediately. It names a future or existing test path; wildcard suffixes
+such as `::spec_msg_001_*` are permitted only while the spec is `draft`.
+
+Do not wrap requirement text onto a second line. Long requirements are split into additional IDs.
+
+## Statuses
+
+| Status | Meaning | Exit condition |
+|---|---|---|
+| `draft` | Under review; behavior may change without an RFC. | Definition of Ready is met and maintainers accept it. |
+| `accepted` | Normative and stable for its unreleased scope; implementation may lag. | All `MUST`/`SHOULD` requirements have passing named tests, then move to `implemented`. |
+| `implemented` | Accepted behavior is implemented and covered in CI. | The spec is deprecated or a bug reopens coverage. |
+| `deprecated` | Superseded; retained for traceability. | Never reused for new work. |
+
+Versioning is semantic: a clarification is a patch, additive requirements are a minor version, and removing or
+contradicting a requirement is a major version plus an RFC.
+
+## Definition of Ready
+
+Before implementation starts, a spec MUST have:
+
+1. An accepted status and allocated requirement IDs.
+2. Enumerated failure modes and edge cases.
+3. Concrete wire, file-format, or event examples where the behavior crosses a boundary.
+4. A test plan naming each acceptance test.
+5. A security and performance impact note, even when the answer is "none".
+
+## Definition of Done
+
+Before merge, a change MUST have:
+
+1. Code that implements only specified behavior, plus explicit `MAY`s.
+2. One test per `MUST`/`SHOULD` whose name contains the requirement ID.
+3. `cargo test --workspace`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`, and
+   `cargo deny check` passing.
+4. The spec updated when behavior changed, and an ADR when a decision was made.
+5. User-visible documentation updated under `docs/`.
+6. A `CHANGELOG.md` entry under `[Unreleased]`.
+
+## Traceability tooling
+
+`cargo xtask spec-check` performs four steps:
+
+1. Parse every `specs/**/*.md` file and collect requirement IDs, keywords, and frontmatter.
+2. Scan `crates/**/*.rs` and `xtask/**/*.rs` for `#[spec("AREA-NNN")]` attributes.
+3. Fail when an `implemented` spec has an untested `MUST`/`SHOULD`, when a test attribute references an
+   unknown ID, when an ID is malformed, or when the same ID is declared by two specs.
+4. Print a per-area summary and exit non-zero on any violation. `--strict` extends coverage enforcement to
+   `accepted` specs as well.
+
+`cargo xtask spec-report` writes `target/spec-report.md`, a matrix of requirement, keyword, spec status, and
+the tests currently annotated with that ID. `cargo xtask ci` runs formatting, linting, tests, spec-check, and
+documentation build in that order; `cargo deny` and `cargo audit` run as separate CI jobs.
+
+The `Verification:` line is the human-readable acceptance target. Automated coverage is discovered from the
+`#[spec]` attribute, so the two must agree. The `#[spec]` attribute is a no-op proc macro from
+`codie-testkit`; it exists only for discovery. The test name must still contain the requirement ID in
+snake_case so failures are readable without the macro.
+
+## Index
+
+| Spec | Requirement IDs | Status | Phase |
+|---|---|---|---|
+| [`SPEC-MSG-001`](message/0001-message-model.md) — Message model | `MSG-001`..`MSG-010`, `MSG-040`..`MSG-044` | accepted | 1 |
+| [`SPEC-AGENT-001`](agent/0001-turn-loop.md) — Agent turn loop | `AGENT-001`..`AGENT-012` | accepted | 1 |
+| [`SPEC-PROV-001`](provider/0001-openai-compatible.md) — OpenAI-compatible provider | `PROV-001`..`PROV-005`, `PROV-010`..`PROV-022` | accepted | 1 |
+
+Reserved areas are listed in `PLAN.MD` Appendix D. Auth requirements `PROV-030`..`PROV-034` are reserved for
+`specs/provider/0004-auth.md` (Phase 1). Their intent is stated in `PLAN.MD` §6.2.5; the spec makes them
+normative.
+
+New specs start from [`template.md`](template.md). Terminology is defined in [`glossary.md`](glossary.md).
