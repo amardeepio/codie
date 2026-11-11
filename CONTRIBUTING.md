@@ -51,8 +51,7 @@ cargo audit
 cargo machete
 ```
 
-A change is not ready for review while any of these fail. CI runs on macOS arm64 and x64; the Linux job is a
-portability signal and must stay green or be explicitly quarantined.
+A change is not ready for review while any of these fail. CI runs on macOS x64; arm64 is verified locally.
 
 ## Spec-first workflow
 

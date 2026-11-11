@@ -43,7 +43,7 @@ cargo machete
 ```
 
 `cargo xtask ci` runs formatting, linting, tests, `cargo xtask spec-check`, and documentation builds in a
-fixed order. Deny, audit, and machete run as separate CI or pre-release gates. `cargo xtask spec-check` fails
+fixed order. Deny, machete, and docs run in the same CI job. `cargo xtask spec-check` fails
 when an `implemented` spec has an untested `MUST`/`SHOULD`, a test names an unknown requirement, an ID is
 malformed, or two specs declare the same ID. `--strict` extends coverage enforcement to `accepted` specs.
 

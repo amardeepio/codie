@@ -46,7 +46,8 @@ Out of scope, with documented guidance:
 
 ## Supply chain and releases
 
-Dependencies are locked and audited with `cargo deny`, `cargo audit`, and `cargo machete`. The workspace forbids
+Dependencies are locked and audited with `cargo deny` (including RustSec advisories), `cargo audit` locally,
+and `cargo machete`. The workspace forbids
 `unsafe` outside audited platform shims. Release artifacts are signed, accompanied by SHA256 checksums and an
 SBOM, and built from the pinned toolchain. Coordinated disclosure uses private GitHub advisories and the
 security contact documented in `SECURITY.md`, with a 90-day window.
