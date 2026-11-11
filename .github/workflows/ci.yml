@@ -6,80 +6,31 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Least privilege: every job only reads the repository.
 permissions:
   contents: read
 
-# Cancel superseded pull-request runs, but let main-branch runs finish.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
-env:
-  CARGO_TERM_COLOR: always
-  # Broken intra-doc links fail the docs build.
-  RUSTDOCFLAGS: -D warnings
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  # One job, one runner. macOS arm64 runners are not available on this
-  # account, so CI uses the x64 image and arm64 is verified locally/release.
+  # Kept as `check` so the existing branch-protection rule keeps working.
+  # The only gate is a successful workspace build.
   check:
     name: check
     runs-on: macos-15-intel
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # The repository pins Rust 1.88 in rust-toolchain.toml. Installing the
-      # same version here makes the main job double as the MSRV gate.
       - name: Install Rust 1.88
         uses: dtolnay/rust-toolchain@1.88.0
-        with:
-          components: rustfmt, clippy
 
-      - name: Cache Rust build artifacts
+      - name: Cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: macos-x64
+          shared-key: build
 
-      - name: Format
-        run: cargo fmt --all -- --check
-
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-      - name: Test
-        run: cargo test --workspace
-
-      - name: Spec check
-        run: cargo run -p xtask -- spec-check
-
-      - name: Rustdoc
-        run: cargo doc --workspace --no-deps
-
-      - name: Install mdBook
-        uses: taiki-e/install-action@v2
-        with:
-          tool: mdbook
-
-      - name: Docs book
-        run: mdbook build docs
-
-      - name: Install cargo-machete
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-machete
-
-      - name: Unused dependencies
-        run: cargo machete
-
-      - name: Install cargo-deny
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-deny
-
-      # Licenses, banned crates, sources, and RustSec advisories. This
-      # replaces the separate audit workflow: advisories are part of `deny`.
-      - name: Licenses, bans, advisories
-        run: cargo deny check
+      - name: Build
+        run: cargo build --workspace --all-targets

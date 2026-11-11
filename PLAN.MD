@@ -467,7 +467,7 @@ The loop works on a working copy; `AgentState` is reduced from events. Persisten
 | Errors | `thiserror` (libraries), `anyhow` (binary) | typed at boundaries |
 | Observability | `tracing`, `tracing-subscriber` | JSON logs to file, human logs to stderr |
 | Testing | `insta`, `proptest`, `wiremock`, `assert_cmd` | deterministic |
-| Audit | `cargo-deny` (advisories), `cargo-audit` locally, `cargo-machete` | CI gate |
+| Audit | `cargo-deny` (advisories), `cargo-audit` locally, `cargo-machete` | Local and release gate |
 
 Rules: exact versions in `Cargo.toml` for binaries where reproducibility matters; `Cargo.lock` committed;
 no crate with `build.rs` network access; `#![forbid(unsafe_code)]` workspace-wide with a single audited
@@ -1062,8 +1062,8 @@ Deliverables:
 - `rust-toolchain.toml`, `Cargo.toml` workspace lints, `rustfmt.toml`, `clippy.toml`.
 - Error model (`CodieError` with stable `code` strings), tracing setup, feature flags.
 - Spec framework: `specs/` tree, template, `xtask spec-check`, ADR/RFC templates.
-- CI: fmt, clippy, test, spec-check, docs, machete, and deny (including RustSec advisories) in one
-  macOS x64 job; arm64 is verified locally and in release builds until an arm64 runner is available.
+- CI: one `cargo build --workspace --all-targets` job on macOS x64. Formatting, linting, tests,
+  spec-check, docs, machete, and deny run locally via `cargo xtask ci` and before releases.
 - OSS files: `README.md`, `LICENSE-MIT`, `LICENSE-APACHE`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`,
   `SECURITY.md`, `CHANGELOG.md`, issue/PR templates, `docs/` skeleton.
 - `codie-testkit`: `FakeProvider` (scripted SSE), temp-home harness, `#[spec]` macro, snapshot helpers.
@@ -1449,9 +1449,9 @@ codie/
 - `cargo xtask spec-check`, `cargo xtask spec-report`, `cargo xtask ci`. (`schema-check` arrives with the
   generated protocol schemas in Phase 5.)
 - Docs build with `-D warnings` (broken intra-doc links fail).
-- CI matrix: one `check` job on `macos-15-intel` (x64) is release-blocking and runs format, lint, tests,
-  spec-check, docs, machete, and deny. macOS arm64 is verified locally and in release builds until an arm64
-  runner is available; Linux is tier 2 and Windows is post-1.0.
+- CI matrix: one `check` job on `macos-15-intel` (x64) runs `cargo build --workspace --all-targets` and
+  is release-blocking. Formatting, linting, tests, spec-check, docs, machete, and deny stay in
+  `cargo xtask ci` for local and release gates. macOS arm64 is verified locally and in release builds.
 - PR preview: `cargo-dist` artifacts for the branch (optional).
 
 ### 12.3 Versioning and releases
@@ -1481,7 +1481,7 @@ Support claims are explicit so users know what to expect and maintainers know wh
 
 | Tier | Meaning | Release-blocking? | Platform |
 |---|---|---|---|
-| **1** | Fully supported. CI runs the full suite on real hardware; P0/P1 bugs block release; documented behavior is guaranteed. | Yes | **macOS 13+ (arm64 and x64)** |
+| **1** | Fully supported. CI builds the workspace on real hardware; the full suite runs locally and before releases; P0/P1 bugs block release. | Yes | **macOS 13+ (arm64 and x64)** |
 | **2** | Builds and core paths work; best-effort fixes; known gaps documented. | No | Linux glibc 2.31+ (x64/arm64), WSL |
 | **3** | Community-supported; no guarantees. Post-1.0 roadmap. | No | Windows 10 21H2+, other Unixes |
 

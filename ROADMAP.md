@@ -27,8 +27,8 @@ Goal: a repository that can accept code safely.
 - Workspace skeleton, pinned toolchain, shared lints, formatting and clippy configuration.
 - Error model with stable codes, tracing setup, and feature flags.
 - Spec framework: tree, template, `xtask spec-check`, ADR and RFC templates.
-- CI: format, lint, test, spec, docs, machete, and deny (including advisories) in one macOS x64 job;
-  arm64 is verified locally and in release builds.
+- CI: one workspace build job on macOS x64; the full format/lint/test/spec/docs/machete/deny suite runs
+  locally via `cargo xtask ci` and before releases.
 - OSS files and documentation skeleton.
 - `codie-testkit`: fake provider, temporary-home harness, `#[spec]` macro, snapshot helpers.
 
