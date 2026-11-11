@@ -44,6 +44,8 @@ fn help_flag_documents_the_surface() {
         .success()
         .stdout(predicate::str::contains("Usage:"))
         .stdout(predicate::str::contains("--mode"))
+        .stdout(predicate::str::contains("--tui-mode"))
+        .stdout(predicate::str::contains("--theme"))
         .stdout(predicate::str::contains("auth"))
         .stdout(predicate::str::contains("models"))
         .stdout(predicate::str::contains("--verbose"))

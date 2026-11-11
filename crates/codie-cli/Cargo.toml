@@ -25,6 +25,7 @@ codie-core.workspace = true
 codie-prompt.workspace = true
 codie-session.workspace = true
 codie-tools.workspace = true
+codie-tui.workspace = true
 dotenvy.workspace = true
 rpassword.workspace = true
 serde.workspace = true

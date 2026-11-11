@@ -5,6 +5,7 @@
 - [Architecture](architecture.md)
 - [Development](development.md)
 - [Configuration and environment](configuration.md)
+- [Interactive terminal](tui.md)
 - [Specifications](specs.md)
 - [Providers](providers.md)
 - [Platforms](platforms.md)

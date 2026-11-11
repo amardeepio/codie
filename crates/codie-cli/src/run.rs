@@ -18,10 +18,32 @@ use codie_core::{
 use codie_prompt::{PromptInput, build_system_message, load_project_context};
 use codie_session::Session;
 use codie_tools::{BashTool, EditTool, Policy, PolicyToolbox, ReadTool, Registry, WriteTool};
+use codie_tui::{TuiOptions, TuiRunMode};
 use tokio_util::sync::CancellationToken;
 
 use crate::auth_cmd::env_var;
 use crate::config::Config;
+
+/// Interactive rendering mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum TuiModeArg {
+    /// Alternate screen with a fixed editor dock.
+    Full,
+    /// Normal scrollback with a fixed editor dock.
+    Inline,
+    /// Append-only output for screen readers.
+    Plain,
+}
+
+impl From<TuiModeArg> for TuiRunMode {
+    fn from(value: TuiModeArg) -> Self {
+        match value {
+            TuiModeArg::Full => Self::Full,
+            TuiModeArg::Inline => Self::Inline,
+            TuiModeArg::Plain => Self::Plain,
+        }
+    }
+}
 
 /// Output interface for a run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -42,6 +64,14 @@ pub(crate) struct RunArgs {
     /// Output interface.
     #[arg(long, value_enum, default_value = "text")]
     pub(crate) mode: OutputMode,
+
+    /// Interactive rendering mode: full, inline, or plain.
+    #[arg(long, value_enum, default_value = "full")]
+    pub(crate) tui_mode: TuiModeArg,
+
+    /// Theme name (`system`, `dark`, `light`) or a TOML theme path.
+    #[arg(long, value_name = "NAME|PATH")]
+    pub(crate) theme: Option<String>,
 
     /// Provider id (`deepseek` or `openrouter`).
     #[arg(long)]
@@ -161,17 +191,54 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
 
     let registry = select_tools(args.tools.as_deref(), args.no_tools)?;
     let allowed = allowed_tools(&config, args.allow.as_deref(), args.allow_all);
+    let session_dir = config.session_dir_for(&cwd);
+    let max_turns = args.max_turns.unwrap_or(config.max_turns);
+    if max_turns == 0 {
+        bail!("--max-turns must be greater than zero");
+    }
+
+    let interactive = !args.print
+        && !matches!(args.mode, OutputMode::Json)
+        && std::io::stdin().is_terminal()
+        && (std::io::stdout().is_terminal() || matches!(args.tui_mode, TuiModeArg::Plain));
+
+    if interactive {
+        let session = open_session(&args, &cwd, &session_dir)?;
+        let history = session
+            .as_ref()
+            .map(Session::projection)
+            .unwrap_or_default();
+        let initial_prompt = (!args.message.is_empty()).then(|| args.message.join(" "));
+        let options = TuiOptions {
+            client: Arc::new(provider),
+            cwd: cwd.clone(),
+            model: ModelRef {
+                api: model.api.to_string(),
+                provider: provider_id.clone(),
+                model: model_id.clone(),
+            },
+            thinking,
+            max_turns,
+            session,
+            history,
+            initial_prompt,
+            auto_allowed: allowed.clone(),
+            theme: args.theme.clone(),
+            mode: args.tui_mode.into(),
+            session_dir: session_dir.clone(),
+            signal: Arc::new(AtomicI32::new(0)),
+            registry: Arc::new(registry),
+        };
+        return codie_tui::run(options).await;
+    }
+
     let toolbox: Arc<dyn Toolbox> = Arc::new(PolicyToolbox::new(
         Arc::new(registry),
         Policy::headless(allowed),
     ));
 
     let text = read_prompt(&args)?;
-    if !args.print && !matches!(args.mode, OutputMode::Json) && std::io::stdout().is_terminal() {
-        bail!("interactive mode is not available in Phase 1; use -p or --mode json");
-    }
 
-    let session_dir = config.session_dir_for(&cwd);
     let mut session = open_session(&args, &cwd, &session_dir)?;
     let mut history = session
         .as_ref()
@@ -204,10 +271,7 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
     };
     let mut agent_config = AgentConfig::new(model_ref, cwd.clone()).map_err(anyhow::Error::msg)?;
     agent_config.thinking = thinking;
-    agent_config.max_turns = args.max_turns.unwrap_or(config.max_turns);
-    if agent_config.max_turns == 0 {
-        bail!("--max-turns must be greater than zero");
-    }
+    agent_config.max_turns = max_turns;
     agent_config.session_id = session.as_ref().map(|session| session.id().to_owned());
     agent_config.cancel = cancel.clone();
 

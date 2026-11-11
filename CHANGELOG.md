@@ -11,11 +11,20 @@ that major series, with migrations applied on read.
 
 ### Added
 
-- Nothing yet.
+- Interactive phase 2 foundation in the new `codie-tui` crate: alternate-screen transcript, fixed multiline
+  editor, streaming assistant rendering, thinking and tool blocks, footer, and plain mode.
+- Slash commands (`/help`, `/hotkeys`, `/new`, `/session`, `/model`, `/thinking`, `/compact`, `/quit`),
+  steering and follow-up queues, `Ctrl+O` tool expansion, history, undo/redo, kill/yank, and large-paste markers.
+- Permission prompts for mutating tools with allow-once, always, and deny; read-only tools never prompt.
+- Themes: `system`, `dark`, `light`, and semantic TOML files with a 4.5:1 body contrast check.
+- `--tui-mode full|inline|plain` and `--theme` on the `codie` CLI.
+- Draft `SPEC-TUI-001` covering layout, streaming, editor, markdown, tool blocks, footer, themes, restore, and
+  plain mode.
 
 ### Changed
 
-- Nothing yet.
+- Running `codie` in a terminal now launches the interactive interface instead of erroring; `-p` and
+  `--mode json` keep the headless paths.
 
 ### Fixed
 
