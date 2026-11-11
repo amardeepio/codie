@@ -4,9 +4,9 @@ codie is built in gated phases. Each phase ends with a demoable, installable art
 No phase starts before the previous phase's exit criteria are met. Durations are planning bounds for one
 full-time engineer, not commitments; the exit criteria are the real gate.
 
-**Current status: Phase 1 (Headless core), complete.** `0.1.0` ships DeepSeek and OpenRouter streaming, the
-agent loop, `read`/`write`/`edit`/`bash`, sessions, `-p` / `--mode json`, and a published event schema. The
-interactive TUI is Phase 2.
+**Current status: Phase 2 (Interactive TUI), in progress.** `0.1.0` shipped the headless core. The interactive
+app now has a streaming transcript, fixed editor dock, footer, themes, slash commands, steering, permission
+prompts, and plain mode; keybinding files, PTY restore tests, and the 60 fps benchmark remain before `0.2.0`.
 
 ## Phase summary
 
@@ -14,7 +14,7 @@ interactive TUI is Phase 2.
 |---|---|---|---|---|---|
 | 0 | Foundations: workspace, CI, spec framework, OSS files | 1 week | 1 week | repository + CI | Complete |
 | 1 | Headless core: providers, loop, tools, sessions, print/JSON | 3 weeks | 4 weeks | `0.1.0` — `codie -p` works | Complete |
-| 2 | Interactive TUI: streaming render, editor, themes, steering | 3 weeks | 7 weeks | `0.2.0` — interactive agent | Planned |
+| 2 | Interactive TUI: streaming render, editor, themes, steering | 3 weeks | 7 weeks | `0.2.0` — interactive agent | In progress |
 | 3 | Sessions at full fidelity: resume, fork, compaction, picker | 2 weeks | 9 weeks | `0.3.0` — resume/fork/compact | Planned |
 | 4 | Customization and trust: skills, templates, `SYSTEM.md`, images | 2 weeks | 11 weeks | `0.4.0` — skills/templates/trust | Planned |
 | 5 | Protocols and polish: RPC, schemas, export, performance | 2 weeks | 13 weeks | `0.5.0` — RPC/export | Planned |
