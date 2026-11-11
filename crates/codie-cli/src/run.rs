@@ -4,10 +4,13 @@ use std::collections::HashSet;
 use std::io::{IsTerminal, Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI32, Ordering};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
-use codie_ai::{AuthStore, OpenAiProvider, fallback_model, find_model, resolve_key};
+use codie_ai::{
+    AuthStore, OpenAiProvider, OpenRouterCatalog, fallback_model, find_model, resolve_key,
+};
 use codie_core::{
     Agent, AgentConfig, AgentEvent, Message, ModelRef, RunStatus, StopReason, ThinkingLevel, Tool,
     Toolbox,
@@ -51,6 +54,10 @@ pub(crate) struct RunArgs {
     /// Ephemeral API key. Never persisted.
     #[arg(long)]
     pub(crate) api_key: Option<String>,
+
+    /// Provider base URL override (proxy or local test endpoint).
+    #[arg(long, value_name = "URL")]
+    pub(crate) base_url: Option<String>,
 
     /// Thinking level: off, minimal, low, medium, high, xhigh, max.
     #[arg(long)]
@@ -99,6 +106,10 @@ pub(crate) struct RunArgs {
 
 /// Runs the agent once and returns the process exit code.
 pub(crate) async fn run(args: RunArgs) -> Result<u8> {
+    if args.api_key.is_some() && args.model.is_none() {
+        bail!("--api-key requires an explicit --model so the key cannot be paired with a default");
+    }
+
     let config = Config::load()?;
     let cwd = match args.cwd.clone() {
         Some(cwd) => cwd,
@@ -140,10 +151,13 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
         )
     })?;
 
-    let provider = match provider_id.as_str() {
+    let mut provider = match provider_id.as_str() {
         "openrouter" => OpenAiProvider::openrouter(key),
         _ => OpenAiProvider::deepseek(key),
     };
+    if let Some(base_url) = args.base_url.clone().or_else(|| config.base_url.clone()) {
+        provider = provider.with_base_url(base_url);
+    }
 
     let registry = select_tools(args.tools.as_deref(), args.no_tools)?;
     let allowed = allowed_tools(&config, args.allow.as_deref(), args.allow_all);
@@ -181,12 +195,7 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
     }
 
     let cancel = CancellationToken::new();
-    let signal = cancel.clone();
-    tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            signal.cancel();
-        }
-    });
+    let interrupted = install_signal_handlers(cancel.clone());
 
     let model_ref = ModelRef {
         api: model.api.to_string(),
@@ -202,6 +211,7 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
     agent_config.session_id = session.as_ref().map(|session| session.id().to_owned());
     agent_config.cancel = cancel.clone();
 
+    let catalog_endpoint = format!("{}/models", provider.base_url().trim_end_matches('/'));
     let agent = Agent::new(Arc::new(provider), Arc::clone(&toolbox));
 
     if matches!(args.mode, OutputMode::Json) {
@@ -217,6 +227,14 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
                 })
             ),
         }
+    }
+
+    // Refresh the OpenRouter catalog after the first output is written. The
+    // task never blocks the run and never fails it (`PROV-021`).
+    if provider_id == "openrouter" {
+        let catalog = OpenRouterCatalog::new(config.cache_dir.join("openrouter-models.json"))
+            .with_endpoint(catalog_endpoint);
+        Arc::new(catalog).spawn_refresh();
     }
 
     let mut events = agent.run(Message::user(text), history, agent_config);
@@ -268,17 +286,87 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
         }
     }
 
-    if status != RunStatus::Completed {
+    if status != RunStatus::Completed && !matches!(args.mode, OutputMode::Json) {
         eprintln!("run ended with status: {status:?}");
-        return Ok(1);
     }
-    match final_stop {
-        Some(StopReason::Length) => Ok(1),
+
+    Ok(exit_code(
+        status,
+        final_stop,
+        args.mode,
+        interrupted.load(Ordering::SeqCst),
+    ))
+}
+
+/// Maps a finished run to the documented process exit code (`CLI-003`).
+///
+/// A received signal always wins. JSON mode reports failures through the event
+/// stream, so it exits zero unless the invocation itself failed or was
+/// interrupted.
+fn exit_code(status: RunStatus, stop: Option<StopReason>, mode: OutputMode, signal: i32) -> u8 {
+    if signal != 0 {
+        return u8::try_from(signal).unwrap_or(1);
+    }
+    if matches!(mode, OutputMode::Json) {
+        return 0;
+    }
+    if status != RunStatus::Completed {
+        return 1;
+    }
+    match stop {
         Some(
-            StopReason::Error | StopReason::Aborted | StopReason::Pending | StopReason::ToolUse,
-        ) => Ok(1),
-        Some(StopReason::Stop | StopReason::Deferred) | None => Ok(0),
+            StopReason::Length
+            | StopReason::Error
+            | StopReason::Aborted
+            | StopReason::Pending
+            | StopReason::ToolUse,
+        ) => 1,
+        Some(StopReason::Stop | StopReason::Deferred) | None => 0,
     }
+}
+
+/// Installs SIGINT/SIGTERM/SIGHUP handlers and returns the observed exit code.
+///
+/// The first signal cancels the run; the code is stored so the run path can
+/// return 130, 143, or 129 instead of a generic failure.
+fn install_signal_handlers(cancel: CancellationToken) -> Arc<AtomicI32> {
+    let code = Arc::new(AtomicI32::new(0));
+
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+
+        for (kind, value) in [
+            (SignalKind::interrupt(), 130),
+            (SignalKind::terminate(), 143),
+            (SignalKind::hangup(), 129),
+        ] {
+            let code = Arc::clone(&code);
+            let cancel = cancel.clone();
+            tokio::spawn(async move {
+                let Ok(mut stream) = signal(kind) else {
+                    return;
+                };
+                if stream.recv().await.is_some() {
+                    let _ = code.compare_exchange(0, value, Ordering::SeqCst, Ordering::SeqCst);
+                    cancel.cancel();
+                }
+            });
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let code = Arc::clone(&code);
+        tokio::spawn(async move {
+            if tokio::signal::ctrl_c().await.is_ok() {
+                let _ = code.compare_exchange(0, 130, Ordering::SeqCst, Ordering::SeqCst);
+                cancel.cancel();
+            }
+        });
+    }
+
+    code
 }
 
 fn validate_provider(provider: &str) -> Result<()> {

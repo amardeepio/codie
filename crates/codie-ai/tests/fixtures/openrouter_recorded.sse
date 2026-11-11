@@ -1,0 +1,7 @@
+data: {"id":"or-recorded-1","model":"deepseek/deepseek-v4.1-flash-1017","choices":[{"index":0,"delta":{"role":"assistant","content":"The test passes."}}]}
+
+data: {"id":"or-recorded-1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: {"id":"or-recorded-1","choices":[],"usage":{"prompt_tokens":50,"completion_tokens":8,"total_tokens":58,"cost":0.000123}}
+
+data: [DONE]

@@ -1,0 +1,373 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/amardeepio/codie/schemas/json-events.schema.json",
+  "title": "codie JSON event stream",
+  "description": "Schema for the line-delimited JSON emitted by `codie --mode json`. Version 1.",
+  "oneOf": [
+    { "$ref": "#/$defs/sessionHeader" },
+    { "$ref": "#/$defs/agentEvent" },
+    { "$ref": "#/$defs/agentSettled" }
+  ],
+  "$defs": {
+    "sessionHeader": {
+      "type": "object",
+      "required": ["type", "version", "id", "cwd"],
+      "properties": {
+        "type": { "const": "session" },
+        "version": { "type": "integer", "minimum": 1 },
+        "id": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "cwd": { "type": "string" }
+      }
+    },
+    "agentSettled": {
+      "type": "object",
+      "required": ["type", "aborted"],
+      "properties": {
+        "type": { "const": "agent_settled" },
+        "aborted": { "type": "boolean" }
+      }
+    },
+    "agentEvent": {
+      "oneOf": [
+        { "$ref": "#/$defs/agentStart" },
+        { "$ref": "#/$defs/turnStart" },
+        { "$ref": "#/$defs/messageStart" },
+        { "$ref": "#/$defs/messageUpdate" },
+        { "$ref": "#/$defs/messageEnd" },
+        { "$ref": "#/$defs/toolExecutionStart" },
+        { "$ref": "#/$defs/toolExecutionUpdate" },
+        { "$ref": "#/$defs/toolExecutionEnd" },
+        { "$ref": "#/$defs/turnEnd" },
+        { "$ref": "#/$defs/agentEnd" }
+      ]
+    },
+    "agentStart": {
+      "type": "object",
+      "required": ["type"],
+      "properties": { "type": { "const": "agent_start" } }
+    },
+    "turnStart": {
+      "type": "object",
+      "required": ["type"],
+      "properties": { "type": { "const": "turn_start" } }
+    },
+    "messageStart": {
+      "type": "object",
+      "required": ["type", "message"],
+      "properties": {
+        "type": { "const": "message_start" },
+        "message": { "$ref": "#/$defs/message" }
+      }
+    },
+    "messageUpdate": {
+      "type": "object",
+      "required": ["type", "message", "delta"],
+      "properties": {
+        "type": { "const": "message_update" },
+        "message": { "$ref": "#/$defs/message" },
+        "delta": { "$ref": "#/$defs/assistantDelta" }
+      }
+    },
+    "messageEnd": {
+      "type": "object",
+      "required": ["type", "message"],
+      "properties": {
+        "type": { "const": "message_end" },
+        "message": { "$ref": "#/$defs/message" }
+      }
+    },
+    "toolExecutionStart": {
+      "type": "object",
+      "required": ["type", "tool_call_id", "tool_name", "args"],
+      "properties": {
+        "type": { "const": "tool_execution_start" },
+        "tool_call_id": { "type": "string" },
+        "tool_name": { "type": "string" },
+        "args": { "type": "object" }
+      }
+    },
+    "toolExecutionUpdate": {
+      "type": "object",
+      "required": ["type", "tool_call_id", "tool_name", "args", "partial"],
+      "properties": {
+        "type": { "const": "tool_execution_update" },
+        "tool_call_id": { "type": "string" },
+        "tool_name": { "type": "string" },
+        "args": { "type": "object" },
+        "partial": { "$ref": "#/$defs/toolProgress" }
+      }
+    },
+    "toolExecutionEnd": {
+      "type": "object",
+      "required": ["type", "tool_call_id", "tool_name", "result", "is_error"],
+      "properties": {
+        "type": { "const": "tool_execution_end" },
+        "tool_call_id": { "type": "string" },
+        "tool_name": { "type": "string" },
+        "result": { "$ref": "#/$defs/toolResult" },
+        "is_error": { "type": "boolean" },
+        "duration_ms": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "turnEnd": {
+      "type": "object",
+      "required": ["type", "message", "tool_results"],
+      "properties": {
+        "type": { "const": "turn_end" },
+        "message": { "$ref": "#/$defs/message" },
+        "tool_results": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/toolResultPayload" }
+        }
+      }
+    },
+    "agentEnd": {
+      "type": "object",
+      "required": ["type", "messages", "status"],
+      "properties": {
+        "type": { "const": "agent_end" },
+        "messages": { "type": "array", "items": { "$ref": "#/$defs/message" } },
+        "status": { "$ref": "#/$defs/runStatus" }
+      }
+    },
+    "runStatus": {
+      "type": "string",
+      "enum": ["completed", "turn_limit", "aborted", "error"]
+    },
+    "assistantDelta": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "enum": [
+            "start",
+            "text_start",
+            "text_delta",
+            "text_end",
+            "thinking_start",
+            "thinking_delta",
+            "thinking_end",
+            "tool_call_start",
+            "tool_call_delta",
+            "tool_call_end",
+            "done",
+            "error"
+          ]
+        }
+      }
+    },
+    "message": {
+      "oneOf": [
+        { "$ref": "#/$defs/systemMessage" },
+        { "$ref": "#/$defs/userMessage" },
+        { "$ref": "#/$defs/assistantMessage" },
+        { "$ref": "#/$defs/toolResultMessage" }
+      ]
+    },
+    "systemMessage": {
+      "type": "object",
+      "required": ["role", "content", "timestamp"],
+      "properties": {
+        "role": { "const": "system" },
+        "content": { "type": "string" },
+        "tools": { "type": "array", "items": { "$ref": "#/$defs/toolDecl" } },
+        "timestamp": { "type": "integer" }
+      }
+    },
+    "userMessage": {
+      "type": "object",
+      "required": ["role", "content", "timestamp"],
+      "properties": {
+        "role": { "const": "user" },
+        "content": { "type": "array", "items": { "$ref": "#/$defs/content" } },
+        "timestamp": { "type": "integer" }
+      }
+    },
+    "assistantMessage": {
+      "type": "object",
+      "required": [
+        "role",
+        "content",
+        "api",
+        "provider",
+        "model",
+        "usage",
+        "stop_reason",
+        "timestamp"
+      ],
+      "properties": {
+        "role": { "const": "assistant" },
+        "content": { "type": "array", "items": { "$ref": "#/$defs/content" } },
+        "api": { "type": "string" },
+        "provider": { "type": "string" },
+        "model": { "type": "string" },
+        "response_model": { "type": ["string", "null"] },
+        "response_id": { "type": ["string", "null"] },
+        "thinking_level": { "type": ["string", "null"] },
+        "provider_thinking_level": { "type": ["string", "null"] },
+        "usage": { "$ref": "#/$defs/usage" },
+        "stop_reason": { "$ref": "#/$defs/stopReason" },
+        "error_message": { "type": ["string", "null"] },
+        "raw_stop_reason": { "type": ["string", "null"] },
+        "duration_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "timestamp": { "type": "integer" }
+      }
+    },
+    "toolResultMessage": {
+      "type": "object",
+      "required": [
+        "role",
+        "tool_call_id",
+        "tool_name",
+        "content",
+        "is_error",
+        "timestamp"
+      ],
+      "properties": {
+        "role": { "const": "tool_result" },
+        "tool_call_id": { "type": "string" },
+        "tool_name": { "type": "string" },
+        "content": { "type": "array", "items": { "$ref": "#/$defs/content" } },
+        "details": {},
+        "is_error": { "type": "boolean" },
+        "duration_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "timestamp": { "type": "integer" }
+      }
+    },
+    "toolResultPayload": {
+      "type": "object",
+      "required": [
+        "tool_call_id",
+        "tool_name",
+        "content",
+        "is_error",
+        "timestamp"
+      ],
+      "properties": {
+        "tool_call_id": { "type": "string" },
+        "tool_name": { "type": "string" },
+        "content": { "type": "array", "items": { "$ref": "#/$defs/content" } },
+        "details": {},
+        "is_error": { "type": "boolean" },
+        "duration_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "timestamp": { "type": "integer" }
+      }
+    },
+    "content": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "text"],
+          "properties": {
+            "type": { "const": "text" },
+            "text": { "type": "string" },
+            "signature": { "type": ["string", "null"] }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["type", "thinking"],
+          "properties": {
+            "type": { "const": "thinking" },
+            "thinking": { "type": "string" },
+            "signature": { "type": ["string", "null"] },
+            "redacted": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["type", "id", "name", "arguments"],
+          "properties": {
+            "type": { "const": "tool_call" },
+            "id": { "type": "string" },
+            "name": { "type": "string" },
+            "arguments": {},
+            "thought_signature": { "type": ["string", "null"] }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["type", "data", "mime_type"],
+          "properties": {
+            "type": { "const": "image" },
+            "data": { "type": "string" },
+            "mime_type": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "toolDecl": {
+      "type": "object",
+      "required": ["name", "description", "parameters"],
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "parameters": {}
+      }
+    },
+    "toolProgress": {
+      "type": "object",
+      "required": ["content"],
+      "properties": {
+        "content": { "type": "array", "items": { "$ref": "#/$defs/content" } },
+        "details": {}
+      }
+    },
+    "toolResult": {
+      "type": "object",
+      "required": ["content", "is_error", "terminate"],
+      "properties": {
+        "content": { "type": "array", "items": { "$ref": "#/$defs/content" } },
+        "details": {},
+        "is_error": { "type": "boolean" },
+        "terminate": { "type": "boolean" },
+        "duration_ms": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "required": [
+        "input",
+        "output",
+        "cache_read",
+        "cache_write",
+        "total_tokens",
+        "cost"
+      ],
+      "properties": {
+        "input": { "type": "integer", "minimum": 0 },
+        "output": { "type": "integer", "minimum": 0 },
+        "cache_read": { "type": "integer", "minimum": 0 },
+        "cache_write": { "type": "integer", "minimum": 0 },
+        "reasoning": { "type": ["integer", "null"], "minimum": 0 },
+        "total_tokens": { "type": "integer", "minimum": 0 },
+        "cost": { "$ref": "#/$defs/cost" }
+      }
+    },
+    "cost": {
+      "type": "object",
+      "required": ["input", "output", "cache_read", "cache_write", "total"],
+      "properties": {
+        "input": { "type": "integer", "minimum": 0 },
+        "output": { "type": "integer", "minimum": 0 },
+        "cache_read": { "type": "integer", "minimum": 0 },
+        "cache_write": { "type": "integer", "minimum": 0 },
+        "total": { "type": "integer", "minimum": 0 },
+        "total_from_provider": { "type": "boolean" }
+      }
+    },
+    "stopReason": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "stop",
+        "length",
+        "tool_use",
+        "error",
+        "aborted",
+        "deferred"
+      ]
+    }
+  }
+}

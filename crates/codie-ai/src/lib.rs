@@ -17,11 +17,18 @@
 use std::borrow::Cow;
 
 pub mod auth;
+pub mod catalog;
 pub mod model;
 pub mod openai;
+pub mod record;
+pub mod redact;
 pub mod sse;
 
 pub use auth::{AuthError, AuthStore, resolve_key};
+pub use catalog::{
+    Architecture, CATALOG_FRESHNESS, CATALOG_TIMEOUT, CatalogCache, CatalogModel,
+    OPENROUTER_MODELS_URL, OpenRouterCatalog, RefreshOutcome, is_selectable, selectable_models,
+};
 pub use model::{
     Compat, DEFAULT_HTTP_REFERER, DEFAULT_X_TITLE, HeaderMap, MaxTokensField, Model, ModelCost,
     PROVIDER_DEEPSEEK, PROVIDER_OPENROUTER, ThinkingFormat, builtin_models, fallback_model,
@@ -31,6 +38,7 @@ pub use openai::{
     MAX_ATTEMPTS, MAX_ERROR_BODY_CHARS, MAX_RETRY_DELAY, OpenAiProvider, backoff_delay,
     build_request_body, estimate_cost, map_stop_reason, normalize_transport_error, normalize_usage,
 };
+pub use redact::{is_secret_header, redact_header, redact_text, redacted_headers};
 pub use sse::{SseEvent, SseParser};
 
 /// A provider identifier such as `deepseek` or `openrouter`.

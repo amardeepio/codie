@@ -1,0 +1,11 @@
+data: {"id":"ds-recorded-1","model":"deepseek-flash","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"I should read the file first."}}]}
+
+data: {"id":"ds-recorded-1","choices":[{"index":0,"delta":{"content":"Reading the file."}}]}
+
+data: {"id":"ds-recorded-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_read_1","type":"function","function":{"name":"read","arguments":"{\"path\":\"math.py\"}"}}]}}]}
+
+data: {"id":"ds-recorded-1","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+data: {"id":"ds-recorded-1","choices":[],"usage":{"prompt_tokens":120,"completion_tokens":30,"total_tokens":150,"prompt_cache_hit_tokens":20,"completion_tokens_details":{"reasoning_tokens":10}}}
+
+data: [DONE]
