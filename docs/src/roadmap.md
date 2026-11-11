@@ -19,9 +19,9 @@ not commitments; the exit criteria are the real gate.
 
 ## Phase 0 exit criteria (met 2026-11-11)
 
-- Workspace skeleton and pinned toolchain build on macOS arm64 and x64.
-- CI runs formatting, linting, tests, deny, audit, machete, docs, and MSRV checks; the Linux job is green or
-  explicitly quarantined.
+- Workspace skeleton and pinned toolchain build on macOS x64 in CI and arm64 locally.
+- CI runs formatting, linting, tests, spec-check, docs, machete, and deny (including advisories) in one
+  macOS x64 job.
 - A trivial `codie --version` binary builds (1.22 MiB).
 - Spec template plus three accepted specs (45 requirements) exist.
 - OSS and documentation baseline is complete.

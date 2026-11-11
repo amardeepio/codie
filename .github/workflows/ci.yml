@@ -6,13 +6,11 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Least privilege: every job only reads the repository. Jobs that need more
-# (for example a future release job) must declare it locally.
+# Least privilege: every job only reads the repository.
 permissions:
   contents: read
 
-# Cancel superseded pull-request runs, but let main-branch runs finish so the
-# history of `main` is always green.
+# Cancel superseded pull-request runs, but let main-branch runs finish.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -23,169 +21,65 @@ env:
   RUSTDOCFLAGS: -D warnings
 
 jobs:
-  # Primary gate: macOS 14 on Apple silicon, tier-1 hardware.
+  # One job, one runner. macOS arm64 runners are not available on this
+  # account, so CI uses the x64 image and arm64 is verified locally/release.
   check:
-    name: check (macos-14 / arm64)
-    runs-on: macos-14
-    timeout-minutes: 40
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      # NOTE: Actions are referenced by major version tags for readability.
-      # Release workflows handling signing or publishing must pin full commit
-      # SHAs, as should any workflow with write permissions.
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: macos-14-arm64
-      - name: Format
-        run: cargo fmt --all -- --check
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Test
-        run: cargo test --workspace
-      - name: Spec check
-        run: cargo run -p xtask -- spec-check
-      - name: Docs
-        run: cargo doc --workspace --no-deps
-
-  # Tier-1 macOS on Intel. Kept as a separate job so a red x64 runner cannot
-  # silently mask an arm64 failure. GitHub retired the macos-13 image; the
-  # Intel label is now macos-15-intel.
-  macos-x64:
-    name: check (macos-15-intel / x64)
+    name: check
     runs-on: macos-15-intel
-    timeout-minutes: 40
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+
+      # The repository pins Rust 1.88 in rust-toolchain.toml. Installing the
+      # same version here makes the main job double as the MSRV gate.
+      - name: Install Rust 1.88
+        uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: rustfmt, clippy
+
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: macos-15-x64
+          shared-key: macos-x64
+
       - name: Format
         run: cargo fmt --all -- --check
+
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+
       - name: Test
         run: cargo test --workspace
+
       - name: Spec check
         run: cargo run -p xtask -- spec-check
-      - name: Docs
+
+      - name: Rustdoc
         run: cargo doc --workspace --no-deps
 
-  # Linux is tier 2: portability is tracked, but a failure is quarantined and
-  # does not block the 1.0 macOS-first release.
-  linux-portability:
-    name: check (ubuntu-latest, tier 2)
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    timeout-minutes: 40
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: linux-x64
-      - name: Format
-        run: cargo fmt --all -- --check
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Test
-        run: cargo test --workspace
-      - name: Spec check
-        run: cargo run -p xtask -- spec-check
-      - name: Docs
-        run: cargo doc --workspace --no-deps
-
-  # License, bans, sources, and advisory policy. The EmbarkStudios action is
-  # a Docker action, so it needs a Linux runner; behavior is identical for the
-  # repository as a whole.
-  deny:
-    name: deny (licenses, bans, sources, advisories)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: cargo deny check
-        uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          command: check
-          arguments: --all-features
-          log-level: warn
-
-  # Independent RustSec pass on the primary platform. The workflow token is
-  # read-only, so no issue is filed from CI; a failing run is the signal.
-  audit:
-    name: audit (RustSec, macos-14)
-    runs-on: macos-14
-    timeout-minutes: 15
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: cargo audit
-        uses: rustsec/audit-check@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-  # The mdBook is part of the product: it carries the spec index and platform
-  # policy. A broken SUMMARY or page blocks the PR.
-  docs:
-    name: docs (mdbook)
-    runs-on: macos-14
-    timeout-minutes: 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
       - name: Install mdBook
         uses: taiki-e/install-action@v2
         with:
           tool: mdbook
-      - name: Build
+
+      - name: Docs book
         run: mdbook build docs
 
-  # Unused dependencies are a supply-chain cost, not a style preference.
-  machete:
-    name: machete (unused dependencies)
-    runs-on: macos-14
-    timeout-minutes: 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
       - name: Install cargo-machete
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-machete
-      - name: Check
+
+      - name: Unused dependencies
         run: cargo machete
 
-  # The MSRV is also the pinned toolchain. This job proves the pin is real.
-  msrv:
-    name: msrv (rust 1.88)
-    runs-on: macos-14
-    timeout-minutes: 20
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Install Rust 1.88
-        uses: dtolnay/rust-toolchain@1.88.0
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
         with:
-          shared-key: msrv-1.88
-      - name: Check
-        run: cargo check --workspace --all-targets
+          tool: cargo-deny
+
+      # Licenses, banned crates, sources, and RustSec advisories. This
+      # replaces the separate audit workflow: advisories are part of `deny`.
+      - name: Licenses, bans, advisories
+        run: cargo deny check

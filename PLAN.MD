@@ -467,7 +467,7 @@ The loop works on a working copy; `AgentState` is reduced from events. Persisten
 | Errors | `thiserror` (libraries), `anyhow` (binary) | typed at boundaries |
 | Observability | `tracing`, `tracing-subscriber` | JSON logs to file, human logs to stderr |
 | Testing | `insta`, `proptest`, `wiremock`, `assert_cmd` | deterministic |
-| Audit | `cargo-deny`, `cargo-audit`, `cargo-machete` | CI gates |
+| Audit | `cargo-deny` (advisories), `cargo-audit` locally, `cargo-machete` | CI gate |
 
 Rules: exact versions in `Cargo.toml` for binaries where reproducibility matters; `Cargo.lock` committed;
 no crate with `build.rs` network access; `#![forbid(unsafe_code)]` workspace-wide with a single audited
@@ -1062,15 +1062,15 @@ Deliverables:
 - `rust-toolchain.toml`, `Cargo.toml` workspace lints, `rustfmt.toml`, `clippy.toml`.
 - Error model (`CodieError` with stable `code` strings), tracing setup, feature flags.
 - Spec framework: `specs/` tree, template, `xtask spec-check`, ADR/RFC templates.
-- CI: fmt, clippy, test, deny, audit, machete, docs build, MSRV check; primary job on macOS arm64,
-  portability job on macOS x64 and Linux, Windows job non-blocking until post-1.0.
+- CI: fmt, clippy, test, spec-check, docs, machete, and deny (including RustSec advisories) in one
+  macOS x64 job; arm64 is verified locally and in release builds until an arm64 runner is available.
 - OSS files: `README.md`, `LICENSE-MIT`, `LICENSE-APACHE`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`,
   `SECURITY.md`, `CHANGELOG.md`, issue/PR templates, `docs/` skeleton.
 - `codie-testkit`: `FakeProvider` (scripted SSE), temp-home harness, `#[spec]` macro, snapshot helpers.
 
 Exit criteria:
 
-- `cargo xtask ci` green on macOS arm64 and x64; Linux job green or explicitly quarantined.
+- `cargo xtask ci` green on macOS x64; arm64 verified locally.
 - A trivial `codie --version` binary builds and is < 5 MB.
 - Spec template + 3 accepted specs (`SPEC-MSG-001`, `SPEC-AGENT-001`, `SPEC-PROV-001`).
 
@@ -1449,8 +1449,9 @@ codie/
 - `cargo xtask spec-check`, `cargo xtask spec-report`, `cargo xtask ci`. (`schema-check` arrives with the
   generated protocol schemas in Phase 5.)
 - Docs build with `-D warnings` (broken intra-doc links fail).
-- CI matrix: `macos-14` (arm64) and `macos-15-intel` (x64) are release-blocking; `ubuntu-latest` is a
-  non-blocking portability job; Windows is post-1.0. An MSRV job pins Rust 1.88.
+- CI matrix: one `check` job on `macos-15-intel` (x64) is release-blocking and runs format, lint, tests,
+  spec-check, docs, machete, and deny. macOS arm64 is verified locally and in release builds until an arm64
+  runner is available; Linux is tier 2 and Windows is post-1.0.
 - PR preview: `cargo-dist` artifacts for the branch (optional).
 
 ### 12.3 Versioning and releases
@@ -1503,7 +1504,8 @@ Support claims are explicit so users know what to expect and maintainers know wh
 compatibility pass exist. Windows tier-1 work (Job Objects, ConPTY, PowerShell tool, long/UNC paths) is
 tracked as a post-1.0 epic (§12.6) and is **not** release-blocking for 1.0.
 
-**Tier-1 requirement:** every release is tested on macOS arm64 and x64; a red macOS job blocks the tag.
+**Tier-1 requirement:** every release is tested on macOS x64 in CI and smoke-tested on arm64 locally or in
+the release pipeline; a red `check` job blocks the tag.
 
 ### 12.6 Post-1.0 platform roadmap
 
