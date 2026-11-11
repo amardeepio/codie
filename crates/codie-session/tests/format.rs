@@ -178,3 +178,19 @@ fn format_version_is_frozen_for_1x() {
     // RFC and a migration table (SESS-007).
     assert_eq!(SESSION_FORMAT_VERSION, 1);
 }
+
+#[test]
+#[spec("SESS-025")]
+fn spec_sess_025_migration_table_covers_the_reader_range() {
+    codie_session::validate_table().expect("migration table");
+    assert!(codie_session::is_supported(1));
+    assert!(!codie_session::is_supported(0));
+    assert!(!codie_session::is_supported(2));
+
+    let value = serde_json::json!({"type":"message","id":"00000001"});
+    assert_eq!(
+        codie_session::migrate_value(value.clone(), 1).expect("current version"),
+        value
+    );
+    assert!(codie_session::migrate_value(value, 0).is_err());
+}

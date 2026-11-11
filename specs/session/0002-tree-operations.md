@@ -4,7 +4,7 @@ title: Session tree operations, fork, clone, and inspection
 status: implemented
 version: 1.0.0
 owners: ["@codie-maintainers"]
-requirements: ["SESS-010", "SESS-011", "SESS-012", "SESS-013", "SESS-014", "SESS-015", "SESS-016", "SESS-017", "SESS-018", "SESS-019", "SESS-020", "SESS-021", "SESS-022", "SESS-023"]
+requirements: ["SESS-010", "SESS-011", "SESS-012", "SESS-013", "SESS-014", "SESS-015", "SESS-016", "SESS-017", "SESS-018", "SESS-019", "SESS-020", "SESS-021", "SESS-022", "SESS-023", "SESS-024", "SESS-025"]
 ---
 
 # Context
@@ -72,6 +72,14 @@ Verification: `crates/codie-session/tests/format.rs::spec_sess_022_unsupported_v
 **SESS-023 (MUST)** `codie sessions list`, `show`, and `export` are read-only: they never modify a session file,
 and export reproduces it exactly.
 Verification: `crates/codie-cli/tests/cli.rs::sessions_list_show_and_export_are_read_only`
+
+**SESS-024 (MUST)** A process killed with `SIGKILL` mid-stream resumes with every finalized message intact and
+no partial assistant message in the projection.
+Verification: `crates/codie-cli/tests/kill_resume.rs::spec_sess_024_resume_after_sigkill_keeps_completed_messages`
+
+**SESS-025 (MUST)** The migration table is monotonic, reaches the current version, and converts entries on read
+for older supported versions; unsupported versions are refused.
+Verification: `crates/codie-session/tests/format.rs::spec_sess_025_migration_table_covers_the_reader_range`
 
 # State machine / data shapes
 

@@ -139,7 +139,7 @@ impl Session {
                 SESSION_FORMAT_VERSION
             )));
         }
-        if header.version < 1 {
+        if !crate::migration::is_supported(header.version) {
             return Err(Error::session(format!(
                 "session {} uses unsupported format version {}",
                 path.display(),
@@ -149,9 +149,22 @@ impl Session {
 
         let mut entries = Vec::new();
         for line in lines {
-            // Phase 1 skips lines that do not decode, including a partial final
-            // line left by a crash. Phase 3 adds migration and validation.
-            if let Ok(entry) = serde_json::from_str::<Entry>(line) {
+            // A partial final line left by a crash is skipped. Older format
+            // versions run through the migration table before decoding
+            // (SESS-025).
+            if header.version == SESSION_FORMAT_VERSION {
+                if let Ok(entry) = serde_json::from_str::<Entry>(line) {
+                    entries.push(entry);
+                }
+                continue;
+            }
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let Ok(value) = crate::migration::migrate_value(value, header.version) else {
+                continue;
+            };
+            if let Ok(entry) = serde_json::from_value::<Entry>(value) {
                 entries.push(entry);
             }
         }

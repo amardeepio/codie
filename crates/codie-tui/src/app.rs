@@ -52,6 +52,8 @@ pub struct TuiOptions {
     pub cwd: PathBuf,
     /// Model identity.
     pub model: ModelRef,
+    /// Context window in tokens for the selected model.
+    pub context_window: u32,
     /// Initial thinking level.
     pub thinking: ThinkingLevel,
     /// Maximum assistant requests per run.
@@ -271,6 +273,14 @@ pub struct App {
     pub session: Option<Session>,
     /// Pending manual compaction instructions.
     pub pending_compact: Option<String>,
+    /// Prompt to run after a compaction finishes.
+    pub pending_prompt: Option<String>,
+    /// True when `pending_prompt` is a retry of the current transcript.
+    pub pending_retry: bool,
+    /// Last submitted prompt, used for one overflow retry.
+    pub last_prompt: Option<String>,
+    /// True after the one allowed overflow recovery attempt.
+    pub overflow_retried: bool,
     /// Session root for `/new`.
     session_dir: PathBuf,
     /// Working directory for file completion.
@@ -329,6 +339,10 @@ impl App {
             history,
             session,
             pending_compact: None,
+            pending_prompt: None,
+            pending_retry: false,
+            last_prompt: None,
+            overflow_retried: false,
             session_dir,
             cwd: binding_cwd,
             permissions: VecDeque::new(),
@@ -1144,7 +1158,7 @@ async fn event_loop(
     let mut signal_code = 0_i32;
 
     if let Some(prompt) = options.initial_prompt.clone() {
-        start_run(app, &agent, &options, &event_tx, prompt);
+        submit_prompt(app, &agent, &options, &event_tx, &compact_tx, prompt);
     }
 
     loop {
@@ -1173,7 +1187,9 @@ async fn event_loop(
                                     agent.steer(Message::user(text.clone()));
                                     app.transcript.push_user(text);
                                 } else {
-                                    start_run(app, &agent, &options, &event_tx, text);
+                                    submit_prompt(
+                                        app, &agent, &options, &event_tx, &compact_tx, text,
+                                    );
                                 }
                             }
                             Action::FollowUp(text) => {
@@ -1198,10 +1214,21 @@ async fn event_loop(
             Some(event) = event_rx.recv() => {
                 dirty = true;
                 handle_agent_event(app, event);
+                if maybe_recover_overflow(app) {
+                    start_compaction(app, &options, &compact_tx, String::new());
+                }
             }
             Some((instructions, result)) = compact_rx.recv() => {
                 dirty = true;
                 apply_compaction(app, instructions, result);
+                if let Some(prompt) = app.pending_prompt.take() {
+                    let retry = std::mem::take(&mut app.pending_retry);
+                    if retry {
+                        start_resume(app, &agent, &options, &event_tx);
+                    } else {
+                        start_run(app, &agent, &options, &event_tx, prompt);
+                    }
+                }
             }
             _ = tick.tick() => {
                 app.tick = app.tick.wrapping_add(1);
@@ -1242,6 +1269,42 @@ async fn event_loop(
     Ok(u8::try_from(signal_code).unwrap_or(0))
 }
 
+fn submit_prompt(
+    app: &mut App,
+    agent: &Arc<Agent>,
+    options: &TuiOptions,
+    sender: &mpsc::UnboundedSender<AgentEvent>,
+    compact_sender: &mpsc::UnboundedSender<(
+        Option<String>,
+        Result<crate::compaction::CompactionOutcome, String>,
+    )>,
+    prompt: String,
+) {
+    app.last_prompt = Some(prompt.clone());
+    app.overflow_retried = false;
+
+    let window = u64::from(options.context_window);
+    let history_has_messages = app
+        .history
+        .iter()
+        .any(|message| !matches!(message, Message::System(_)));
+    let prompt_message = Message::user(prompt.clone());
+    if app.session.is_some()
+        && history_has_messages
+        && crate::compaction::needs_compaction(&app.history, &prompt_message, window)
+    {
+        app.pending_prompt = Some(prompt);
+        app.pending_retry = false;
+        app.status = Status::Streaming;
+        app.transcript
+            .push_info("Compacting the context before this request…");
+        start_compaction(app, options, compact_sender, String::new());
+        return;
+    }
+
+    start_run(app, agent, options, sender, prompt);
+}
+
 fn start_run(
     app: &mut App,
     agent: &Arc<Agent>,
@@ -1267,8 +1330,41 @@ fn start_run(
     config.cancel = app.cancel.clone();
 
     let history = app.history.clone();
-    let mut stream = agent.run(Message::user(prompt), history, config);
-    let sender = sender.clone();
+    let stream = agent.run(Message::user(prompt), history, config);
+    forward_events(stream, sender.clone());
+}
+
+fn start_resume(
+    app: &mut App,
+    agent: &Arc<Agent>,
+    options: &TuiOptions,
+    sender: &mpsc::UnboundedSender<AgentEvent>,
+) {
+    app.status = Status::Streaming;
+
+    let mut config = match AgentConfig::new(app.model.clone(), options.cwd.clone()) {
+        Ok(config) => config,
+        Err(error) => {
+            app.transcript.push_error(error);
+            app.status = Status::Error;
+            return;
+        }
+    };
+    config.thinking = app.thinking;
+    config.max_turns = options.max_turns;
+    config.session_id = app.session.as_ref().map(|session| session.id().to_owned());
+    app.cancel = tokio_util::sync::CancellationToken::new();
+    config.cancel = app.cancel.clone();
+
+    let history = app.history.clone();
+    let stream = agent.resume(history, config);
+    forward_events(stream, sender.clone());
+}
+
+fn forward_events(
+    mut stream: codie_core::AgentEventStream,
+    sender: mpsc::UnboundedSender<AgentEvent>,
+) {
     tokio::spawn(async move {
         while let Some(event) = stream.recv().await {
             let terminal = matches!(event, AgentEvent::AgentEnd { .. });
@@ -1277,6 +1373,48 @@ fn start_run(
             }
         }
     });
+}
+
+fn maybe_recover_overflow(app: &mut App) -> bool {
+    if app.status != Status::Error || app.overflow_retried {
+        return false;
+    }
+    let Some(prompt) = app.last_prompt.clone() else {
+        return false;
+    };
+    let overflow = app
+        .history
+        .last()
+        .is_some_and(crate::compaction::is_context_overflow);
+    if !overflow {
+        return false;
+    }
+
+    app.overflow_retried = true;
+    if matches!(
+        app.history.last(),
+        Some(Message::Assistant(assistant))
+            if assistant.stop_reason == codie_core::StopReason::Error
+    ) {
+        app.history.pop();
+    }
+    if let Some(session) = app.session.as_mut()
+        && let Some(leaf) = session.leaf_target().map(str::to_owned)
+        && session
+            .entries()
+            .iter()
+            .any(|entry| entry.id() == leaf && entry.message().is_some())
+    {
+        let _ = session.append_context_edit(&leaf, None);
+        app.history = session.projection();
+    }
+
+    app.pending_prompt = Some(prompt);
+    app.pending_retry = true;
+    app.status = Status::Streaming;
+    app.transcript
+        .push_info("Context overflow: compacting and retrying once…");
+    true
 }
 
 fn start_compaction(
@@ -1293,12 +1431,23 @@ fn start_compaction(
     let thinking = app.thinking;
     let messages = app.history.clone();
     let session_id = app.session.as_ref().map(|session| session.id().to_owned());
+    let context_window = options.context_window;
     let sender = sender.clone();
     tokio::spawn(async move {
         let custom = (!instructions.trim().is_empty()).then_some(instructions.as_str());
-        let result =
-            crate::compaction::summarize(client, model, thinking, &messages, custom, session_id)
-                .await;
+        let input_limit = u64::from(context_window)
+            .saturating_sub(crate::compaction::DEFAULT_RESERVE_TOKENS)
+            .clamp(4_000, 200_000);
+        let result = crate::compaction::summarize(
+            client,
+            model,
+            thinking,
+            &messages,
+            custom,
+            session_id,
+            input_limit,
+        )
+        .await;
         let _ = sender.send((
             (!instructions.trim().is_empty()).then_some(instructions),
             result,
@@ -1352,6 +1501,8 @@ fn apply_compaction(
                 .push_info(format!("Compacted the context: {first_line}"));
         }
         Applied::Failed(error) => {
+            app.pending_prompt = None;
+            app.pending_retry = false;
             app.status = Status::Error;
             app.transcript
                 .push_error(format!("Compaction failed: {error}"));
@@ -1800,5 +1951,113 @@ mod tests {
                 .iter()
                 .any(|entry| matches!(entry, crate::transcript::Entry::Info(text) if text.contains("No session")))
         );
+    }
+
+    #[test]
+    #[spec("CTX-006")]
+    fn spec_ctx_006_overflow_recovery_runs_once_and_hides_the_error() {
+        let (_dir, mut app) = app_with_named_session();
+        let error = Message::Assistant(codie_core::AssistantMessage::error(
+            "openai-completions",
+            "deepseek",
+            "deepseek-flash",
+            codie_core::StopReason::Error,
+            "This model's maximum context length is 128000 tokens",
+        ));
+        app.session
+            .as_mut()
+            .unwrap()
+            .append_message(&error)
+            .unwrap();
+        app.history = app.session.as_ref().unwrap().projection();
+        app.status = Status::Error;
+        app.last_prompt = Some("keep going".to_owned());
+
+        assert!(maybe_recover_overflow(&mut app));
+        assert!(app.overflow_retried);
+        assert_eq!(app.pending_prompt.as_deref(), Some("keep going"));
+        assert!(app.pending_retry);
+        assert!(
+            !app.session
+                .as_ref()
+                .unwrap()
+                .projection()
+                .iter()
+                .any(|message| matches!(message, Message::Assistant(assistant) if assistant.stop_reason == codie_core::StopReason::Error)),
+            "the failed message must be hidden by a context edit"
+        );
+
+        app.status = Status::Error;
+        assert!(
+            !maybe_recover_overflow(&mut app),
+            "only one recovery attempt is allowed"
+        );
+    }
+
+    struct NoopClient;
+
+    impl codie_core::ChatClient for NoopClient {
+        fn stream(
+            &self,
+            _context: &[Message],
+            _options: &codie_core::StreamOptions,
+        ) -> codie_core::AssistantEventStream {
+            let (stream, sender) = codie_core::AssistantEventStream::channel(1);
+            tokio::spawn(async move {
+                let mut message = codie_core::AssistantMessage::partial("api", "provider", "model");
+                message.content = vec![Content::text("## Goal\nfinish")];
+                message.stop_reason = codie_core::StopReason::Stop;
+                let _ = sender
+                    .send(codie_core::AssistantDelta::Done {
+                        reason: codie_core::StopReason::Stop,
+                        message,
+                    })
+                    .await;
+            });
+            stream
+        }
+    }
+
+    #[tokio::test]
+    #[spec("CTX-001")]
+    async fn spec_ctx_001_threshold_starts_compaction_before_a_request() {
+        let (dir, mut app) = app_with_named_session();
+        app.session
+            .as_mut()
+            .unwrap()
+            .append_message(&Message::user("x".repeat(80_000)))
+            .unwrap();
+        app.history = app.session.as_ref().unwrap().projection();
+        let cwd = dir.path().join("project");
+        let options = TuiOptions {
+            client: Arc::new(NoopClient),
+            cwd: cwd.clone(),
+            model: app.model.clone(),
+            context_window: 20_000,
+            thinking: ThinkingLevel::Medium,
+            max_turns: 10,
+            session: None,
+            history: app.history.clone(),
+            initial_prompt: None,
+            auto_allowed: Vec::new(),
+            theme: None,
+            mode: TuiRunMode::Full,
+            session_dir: dir.path().join("sessions"),
+            resume_picker: false,
+            signal: Arc::new(std::sync::atomic::AtomicI32::new(0)),
+            registry: Arc::new(Registry::new(Vec::new())),
+            keybindings: None,
+        };
+        let agent = Arc::new(Agent::new(
+            Arc::clone(&options.client),
+            Arc::new(Registry::new(Vec::new())),
+        ));
+        let (events, _event_rx) = mpsc::unbounded_channel();
+        let (compact, _compact_rx) = mpsc::unbounded_channel();
+
+        submit_prompt(&mut app, &agent, &options, &events, &compact, "next".into());
+        assert_eq!(app.pending_prompt.as_deref(), Some("next"));
+        assert!(!app.pending_retry);
+        assert_eq!(app.status, Status::Streaming);
     }
 }

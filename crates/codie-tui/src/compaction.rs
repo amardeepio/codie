@@ -19,6 +19,23 @@ pub const DEFAULT_KEEP_TOKENS: u64 = 20_000;
 /// Tool output is truncated before it enters a summary (`CTX-004`).
 const TOOL_OUTPUT_LIMIT: usize = 2_000;
 
+/// One message is capped before it enters a summary prompt.
+const MESSAGE_LIMIT: usize = 20_000;
+
+/// Patterns that identify a provider context-overflow error (`CTX-006`).
+const OVERFLOW_PATTERNS: &[&str] = &[
+    "context length",
+    "context_length",
+    "context window",
+    "maximum context",
+    "too many tokens",
+    "prompt is too long",
+    "reduce the length",
+    "maximum number of tokens",
+    "input is too long",
+    "token limit",
+];
+
 const SUMMARY_INSTRUCTIONS: &str = "\
 You are compacting a coding-agent conversation so work can continue in a smaller context window.
 Preserve only what is needed to keep working. Return Markdown with exactly these sections:
@@ -59,14 +76,37 @@ pub async fn summarize(
     messages: &[Message],
     instructions: Option<&str>,
     session_id: Option<String>,
+    input_limit_tokens: u64,
 ) -> Result<CompactionOutcome, String> {
     let mut prompt = String::from("Conversation to summarize:\n\n<transcript>\n");
-    for message in messages {
-        let rendered = render_message(message);
-        if !rendered.is_empty() {
-            prompt.push_str(&rendered);
-            prompt.push_str("\n\n");
+    let budget_chars = input_limit_tokens.saturating_mul(4).max(4_000) as usize;
+    let mut rendered = Vec::new();
+    let mut used = 0_usize;
+    for message in messages.iter().rev() {
+        let mut text = render_message(message);
+        if text.is_empty() {
+            continue;
         }
+        let remaining = budget_chars.saturating_sub(used);
+        if remaining == 0 {
+            break;
+        }
+        if text.chars().count() > remaining {
+            text = text.chars().take(remaining).collect();
+            text.push_str("\n[truncated]");
+        }
+        used = used.saturating_add(text.chars().count());
+        rendered.push(text);
+        if used >= budget_chars {
+            break;
+        }
+    }
+    if rendered.len() < messages.len() {
+        prompt.push_str("[older messages omitted to fit the summary request]\n\n");
+    }
+    for text in rendered.into_iter().rev() {
+        prompt.push_str(&text);
+        prompt.push_str("\n\n");
     }
     prompt.push_str("</transcript>");
     if let Some(instructions) = instructions
@@ -102,6 +142,49 @@ pub async fn summarize(
         summary,
         usage: message.usage.clone(),
     })
+}
+
+/// Estimates tokens for a transcript with the documented `CTX-002` rule.
+#[must_use]
+pub fn estimate_messages_tokens(messages: &[Message]) -> u64 {
+    messages.iter().map(estimate_tokens).sum()
+}
+
+/// Returns true when a request would exceed the window minus the reserve.
+///
+/// The prompt is counted before it is appended to history (`CTX-001`).
+#[must_use]
+pub fn needs_compaction(messages: &[Message], prompt: &Message, context_window: u64) -> bool {
+    if context_window == 0 {
+        return false;
+    }
+    let budget = context_window.saturating_sub(DEFAULT_RESERVE_TOKENS);
+    let mut tokens = estimate_messages_tokens(messages);
+    tokens = tokens.saturating_add(estimate_messages_tokens(std::slice::from_ref(prompt)));
+    tokens > budget
+}
+
+/// Returns true when a failed assistant message reports a context overflow.
+///
+/// Providers disagree on wording, so the check is a case-insensitive search for
+/// the documented overflow phrases in the error text (`CTX-006`).
+#[must_use]
+pub fn is_context_overflow(message: &Message) -> bool {
+    let Message::Assistant(assistant) = message else {
+        return false;
+    };
+    if assistant.stop_reason != codie_core::StopReason::Error {
+        return false;
+    }
+    let mut text = assistant.error_message.clone().unwrap_or_default();
+    if let Some(raw) = assistant.raw_stop_reason.as_ref() {
+        text.push(' ');
+        text.push_str(raw);
+    }
+    let text = text.to_lowercase();
+    OVERFLOW_PATTERNS
+        .iter()
+        .any(|pattern| text.contains(pattern))
 }
 
 /// Appends a compaction entry and returns the new projection.
@@ -179,20 +262,20 @@ fn cut_point(messages: &[&codie_session::Entry]) -> Option<String> {
 fn render_message(message: &Message) -> String {
     match message {
         Message::System(_) => String::new(),
-        Message::User(user) => format!(
+        Message::User(user) => cap_message(format!(
             "[user]\n{}",
             user.content
                 .iter()
                 .filter_map(Content::as_text)
                 .collect::<Vec<_>>()
                 .join("")
-        ),
+        )),
         Message::Assistant(assistant) => {
             let mut text = assistant.text();
             for call in assistant.tool_calls() {
                 text.push_str(&format!("\n[called {} {}]", call.name, call.arguments));
             }
-            format!("[assistant]\n{text}")
+            cap_message(format!("[assistant]\n{text}"))
         }
         Message::ToolResult(result) => {
             let mut output = result
@@ -205,9 +288,19 @@ fn render_message(message: &Message) -> String {
                 output = output.chars().take(TOOL_OUTPUT_LIMIT).collect();
                 output.push_str("\n[truncated]");
             }
-            format!("[tool result: {}]\n{output}", result.tool_name)
+            cap_message(format!("[tool result: {}]\n{output}", result.tool_name))
         }
     }
+}
+
+/// Caps one rendered message so a single turn cannot dominate the prompt.
+fn cap_message(text: String) -> String {
+    if text.chars().count() <= MESSAGE_LIMIT {
+        return text;
+    }
+    let mut capped: String = text.chars().take(MESSAGE_LIMIT).collect();
+    capped.push_str("\n[truncated]");
+    capped
 }
 
 /// The `chars / 4` estimate used by the cut point (`CTX-002`).
@@ -294,6 +387,7 @@ mod tests {
             &[Message::user("hello"), Message::user("world")],
             Some("keep tests"),
             None,
+            50_000,
         )
         .await
         .expect("summary");
@@ -314,6 +408,7 @@ mod tests {
             &[Message::user("hello")],
             None,
             None,
+            50_000,
         )
         .await
         .expect_err("error");
@@ -467,5 +562,47 @@ mod tests {
         }
         assert!(SUMMARY_INSTRUCTIONS.contains("Omit thinking blocks"));
         assert!(SUMMARY_INSTRUCTIONS.contains("Truncate tool output"));
+    }
+
+    #[test]
+    #[spec("CTX-001")]
+    fn spec_ctx_001_threshold_accounts_for_reserve_and_prompt() {
+        let history = vec![Message::user("x".repeat(40_000))];
+        let prompt = Message::user("y".repeat(4_000));
+        // 10,000 + 1,000 tokens exceeds a 20,000-token window minus 16,384 reserve.
+        assert!(needs_compaction(&history, &prompt, 20_000));
+        // A 100,000-token window leaves enough room.
+        assert!(!needs_compaction(&history, &prompt, 100_000));
+        assert!(!needs_compaction(&history, &prompt, 0));
+    }
+
+    #[test]
+    #[spec("CTX-006")]
+    fn spec_ctx_006_overflow_detection_matches_provider_wording() {
+        let overflow = |text: &str| {
+            Message::Assistant(codie_core::AssistantMessage::error(
+                "api",
+                "provider",
+                "model",
+                StopReason::Error,
+                text,
+            ))
+        };
+        assert!(is_context_overflow(&overflow(
+            "This model's maximum context length is 128000 tokens"
+        )));
+        assert!(is_context_overflow(&overflow(
+            "The prompt is too long for the context window"
+        )));
+        assert!(!is_context_overflow(&overflow("invalid API key")));
+        assert!(!is_context_overflow(&Message::user("context length")));
+
+        let mut length = codie_core::AssistantMessage::partial("api", "provider", "model");
+        length.stop_reason = StopReason::Length;
+        length.error_message = Some("maximum context length".to_owned());
+        assert!(
+            !is_context_overflow(&Message::Assistant(length)),
+            "only terminal errors trigger recovery"
+        );
     }
 }

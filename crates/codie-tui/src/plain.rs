@@ -216,6 +216,9 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
                             &history,
                             custom,
                             Some(current.id().to_owned()),
+                            u64::from(options.context_window)
+                                .saturating_sub(crate::compaction::DEFAULT_RESERVE_TOKENS)
+                                .clamp(4_000, 200_000),
                         )
                         .await
                         {

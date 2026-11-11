@@ -57,5 +57,10 @@ Steps, Critical Context, read/modified files). The summary is appended as a `com
 stay in the file. The projection keeps the system message, inserts the summary, and retains the recent tail
 within a 20,000-token budget without starting at a tool result.
 
+Compaction also runs automatically before a request when the estimated history plus prompt exceeds the model's
+context window minus a 16,384-token reserve. If a provider still reports a context-overflow error, codie hides
+the failed message with a context edit, compacts, and retries once with the same transcript. Both interactive and
+headless runs use this path.
+
 Token estimates use `chars / 4` (images count as 4,800 characters) and are shown as a context percentage in the
 footer. Estimates are never used for billing.
