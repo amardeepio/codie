@@ -97,9 +97,13 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
                 Command::Quit => break,
                 Command::Help | Command::Hotkeys => {
                     println!(
-                        "/help /quit /new /session /tree /fork /clone /name /export /model [id] /thinking [level] /compact"
+                        "/help /quit /new /session /tree /fork /clone /name /export /theme /model [id] /thinking [level] /compact"
                     )
                 }
+                Command::Theme(argument) => match argument {
+                    Some(name) => println!("Theme: {name} (full mode only)"),
+                    None => println!("Themes: system, dark, light"),
+                },
                 Command::Model(argument) => {
                     if let Some(model) = argument {
                         options.model.model = model;

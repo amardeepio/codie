@@ -28,6 +28,8 @@ fn main() {
             model: "deepseek-flash".into(),
         },
         ThinkingLevel::Medium,
+        1_000_000,
+        Vec::new(),
         Theme::load(Some("dark")).expect("dark theme"),
         None,
         Vec::new(),

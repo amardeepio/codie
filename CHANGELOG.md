@@ -21,6 +21,8 @@ that major series, with migrations applied on read.
   one-shot overflow recovery using `Agent::resume`.
 - Token estimation (`chars / 4`, images as 4,800 characters) and a context percentage in the footer.
 - Read-only `codie sessions list/show/export` commands.
+- Command palette on `/` with filtering and scrolling; live model, theme, and reasoning pickers; tokens-per-second
+  in the footer.
 - Session format v1 is frozen: new `compaction`, `branch_summary`, `context_edit`, `label`, `custom`, and `leaf`
   entry types, `parent_session` header provenance, and tests for round-tripping and refusing unknown versions.
 - Property test for random append/branch/compaction sequences, a 10,000-entry resume benchmark, and a SIGKILL

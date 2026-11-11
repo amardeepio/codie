@@ -41,10 +41,15 @@ An empty list unbinds the action; unknown actions and keys are rejected at start
 
 ## Slash commands
 
-`/help`, `/hotkeys`, `/new`, `/session`, `/tree`, `/fork [entry]`, `/clone`, `/name [text]`, `/export [path]`,
-`/model [id]`, `/thinking [level]`, `/compact [instructions]`, `/quit`.
+Pressing `/` in an empty editor opens the command palette. Type to filter, use `Up`/`Down` or `PageUp`/`PageDown`
+to scroll, and `Enter` to select. `Esc` closes it.
 
-`/model` and `/thinking` apply to the next run. Session commands are described in [Sessions](sessions.md).
+`/help`, `/hotkeys`, `/new`, `/session`, `/tree`, `/fork [entry]`, `/clone`, `/name [text]`, `/export [path]`,
+`/theme [name]`, `/model [id]`, `/thinking [level]`, `/compact [instructions]`, `/quit`.
+
+`/theme`, `/model`, and `/thinking` without an argument open live pickers. Model selection updates the context
+window and is persisted; reasoning selection is persisted with the session. The footer shows context usage and
+tokens per second, with a live estimate while streaming.
 
 ## Permissions
 

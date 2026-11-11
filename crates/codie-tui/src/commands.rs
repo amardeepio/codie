@@ -25,6 +25,8 @@ pub enum Command {
     Name(Option<String>),
     /// Export the session as JSONL.
     Export(Option<String>),
+    /// Change or report the theme.
+    Theme(Option<String>),
     /// Change or report the model.
     Model(Option<String>),
     /// Change or report the thinking level.
@@ -61,6 +63,7 @@ pub fn parse(input: &str) -> Option<Command> {
         "clone" => Command::Clone,
         "name" => Command::Name(argument),
         "export" => Command::Export(argument),
+        "theme" => Command::Theme(argument),
         "model" => Command::Model(argument),
         "thinking" => Command::Thinking(argument),
         "compact" => Command::Compact(argument),
@@ -88,6 +91,7 @@ pub fn names() -> &'static [&'static str] {
         "/clone",
         "/name",
         "/export",
+        "/theme",
         "/model",
         "/thinking",
         "/compact",

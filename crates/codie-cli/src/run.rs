@@ -9,7 +9,8 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
 use codie_ai::{
-    AuthStore, OpenAiProvider, OpenRouterCatalog, fallback_model, find_model, resolve_key,
+    AuthStore, OpenAiProvider, OpenRouterCatalog, builtin_models, fallback_model, find_model,
+    resolve_key,
 };
 use codie_core::{
     Agent, AgentConfig, AgentEvent, ChatClient, Message, ModelRef, RunStatus, StopReason,
@@ -211,6 +212,16 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
     let allowed = allowed_tools(&config, args.allow.as_deref(), args.allow_all);
     let session_dir = config.session_dir_for(&cwd);
     let max_turns = args.max_turns.unwrap_or(config.max_turns);
+    let models = builtin_models()
+        .into_iter()
+        .filter(|candidate| candidate.provider.as_ref() == provider_id)
+        .map(|candidate| codie_tui::app::ModelChoice {
+            provider: candidate.provider.to_string(),
+            id: candidate.id,
+            name: candidate.name,
+            context_window: candidate.context_window,
+        })
+        .collect::<Vec<_>>();
     if max_turns == 0 {
         bail!("--max-turns must be greater than zero");
     }
@@ -236,6 +247,7 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
                 model: model_id.clone(),
             },
             context_window: model.context_window,
+            models,
             thinking,
             max_turns,
             session,

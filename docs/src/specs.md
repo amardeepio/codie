@@ -76,6 +76,7 @@ snake-case requirement ID so failures are readable.
 | [Permissions](../../specs/security/0001-permissions.md) | `SEC-001`..`SEC-006` | accepted | 1 |
 | [Interactive terminal](../../specs/tui/0001-layout-and-rendering.md) | `TUI-001`..`TUI-010` | accepted | 2 |
 | [Session controls and picker](../../specs/tui/0002-session-controls.md) | `TUI-011`..`TUI-013` | implemented | 3 |
+| [Command palette and live pickers](../../specs/tui/0003-command-palette.md) | `TUI-014`..`TUI-017` | implemented | 3 |
 
 The full planned index, including Phase 4–7 areas, is in [`PLAN.MD`](../../PLAN.MD) Appendix D.
 
