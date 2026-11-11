@@ -112,20 +112,23 @@ snake_case so failures are readable without the macro.
 |---|---|---|---|
 | [`SPEC-MSG-001`](message/0001-message-model.md) — Message model | `MSG-001`..`MSG-010`, `MSG-040`..`MSG-044` | accepted | 1 |
 | [`SPEC-AGENT-001`](agent/0001-turn-loop.md) — Agent turn loop | `AGENT-001`..`AGENT-012` | accepted | 1 |
+| [`SPEC-AGENT-002`](agent/0002-continuation.md) — Transcript continuation | `AGENT-013` | implemented | 3 |
 | [`SPEC-PROV-001`](provider/0001-openai-compatible.md) — OpenAI-compatible provider | `PROV-001`..`PROV-005`, `PROV-010`..`PROV-022` | accepted | 1 |
 | [`SPEC-PROV-002`](provider/0002-deepseek.md) — DeepSeek profile | none (profile) | accepted | 1 |
 | [`SPEC-PROV-003`](provider/0003-openrouter.md) — OpenRouter profile | none (profile) | accepted | 1 |
 | [`SPEC-PROV-004`](provider/0004-auth.md) — Authentication | `PROV-030`..`PROV-034` | accepted | 1 |
 | [`SPEC-TOOL-001`](tools/0001-tool-contract.md) — Tool contract | `TOOL-001`..`TOOL-008` | accepted | 1 |
 | [`SPEC-SESS-001`](session/0001-jsonl-format.md) — Session JSONL v1 | `SESS-001`..`SESS-009` | accepted | 1 |
-| [`SPEC-SESS-002`](session/0002-tree-operations.md) — Session tree operations | `SESS-010`..`SESS-023` | implemented | 3 |
-| [`SPEC-CTX-001`](context/0001-compaction.md) — Context compaction | `CTX-002`..`CTX-005`, `CTX-007` | implemented | 3 |
+| [`SPEC-SESS-002`](session/0002-tree-operations.md) — Session tree operations | `SESS-010`..`SESS-025` | implemented | 3 |
+| [`SPEC-CTX-001`](context/0001-compaction.md) — Context compaction | `CTX-001`..`CTX-007` | implemented | 3 |
 | [`SPEC-PRMPT-001`](prompt/0001-system-prompt.md) — System prompt | `PRMPT-001`..`PRMPT-008` | accepted | 1 |
 | [`SPEC-CLI-001`](cli/0001-cli-surface.md) — CLI surface | `CLI-001`..`CLI-007` | accepted | 1 |
 | [`SPEC-PROTO-001`](protocol/0001-json-events.md) — JSON events | `PROTO-001`, `PROTO-002`, `PROTO-004`, `PROTO-005` | accepted | 1 |
 | [`SPEC-SEC-001`](security/0001-permissions.md) — Permissions | `SEC-001`..`SEC-006` | accepted | 1 |
 | [`SPEC-TUI-001`](tui/0001-layout-and-rendering.md) — Interactive terminal | `TUI-001`..`TUI-010` | accepted | 2 |
 | [`SPEC-TUI-002`](tui/0002-session-controls.md) — Session controls and picker | `TUI-011`..`TUI-013` | implemented | 3 |
+| [`SPEC-TUI-003`](tui/0003-command-palette.md) — Command palette and live pickers | `TUI-014`..`TUI-017` | implemented | 3 |
+| [`SPEC-TUI-004`](tui/0004-permission-mode.md) — Permission choices and full access | `TUI-018`, `TUI-019` | implemented | 3 |
 
 `PROTO-003`/`PROTO-006` (RPC) are reserved for Phase 5. `SEC-007`/`SEC-008` (project trust and approval
 prompts) are reserved for Phase 4. The full planned index is in `PLAN.MD` Appendix D.

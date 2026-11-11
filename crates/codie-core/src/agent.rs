@@ -244,6 +244,24 @@ impl Agent {
         history: Vec<Message>,
         config: AgentConfig,
     ) -> AgentEventStream {
+        self.spawn(prompt.into(), history, config)
+    }
+
+    /// Continues an existing transcript without adding a new user prompt.
+    ///
+    /// Used for one-shot recovery after a context overflow: the caller compacts
+    /// the persisted session, rebuilds the projection, and retries the same
+    /// request without duplicating the user message (`CTX-006`).
+    pub fn resume(&self, history: Vec<Message>, config: AgentConfig) -> AgentEventStream {
+        self.spawn(None, history, config)
+    }
+
+    fn spawn(
+        &self,
+        prompt: Option<Message>,
+        history: Vec<Message>,
+        config: AgentConfig,
+    ) -> AgentEventStream {
         let (stream, sender) = AgentEventStream::channel(256);
         let client = Arc::clone(&self.client);
         let toolbox = Arc::clone(&self.toolbox);
@@ -266,7 +284,7 @@ async fn run_inner(
     client: Arc<dyn ChatClient>,
     toolbox: Arc<dyn Toolbox>,
     hooks: Option<Arc<dyn Hooks>>,
-    prompt: Message,
+    prompt: Option<Message>,
     history: Vec<Message>,
     mut config: AgentConfig,
     initial_steering: Vec<Message>,
@@ -274,7 +292,9 @@ async fn run_inner(
     sender: AgentEventSender,
 ) {
     let mut context = history;
-    context.push(prompt.clone());
+    if let Some(prompt) = prompt.as_ref() {
+        context.push(prompt.clone());
+    }
     context.extend(initial_steering.clone());
     let hooks = hooks.as_deref();
 
@@ -304,7 +324,7 @@ async fn run_inner(
 
     emit(&sender, AgentEvent::AgentStart).await;
     emit(&sender, AgentEvent::TurnStart).await;
-    for message in std::iter::once(prompt).chain(initial_steering) {
+    for message in prompt.into_iter().chain(initial_steering) {
         emit(
             &sender,
             AgentEvent::MessageStart {

@@ -9,11 +9,12 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
 use codie_ai::{
-    AuthStore, OpenAiProvider, OpenRouterCatalog, fallback_model, find_model, resolve_key,
+    AuthStore, OpenAiProvider, OpenRouterCatalog, builtin_models, fallback_model, find_model,
+    resolve_key,
 };
 use codie_core::{
-    Agent, AgentConfig, AgentEvent, Message, ModelRef, RunStatus, StopReason, ThinkingLevel, Tool,
-    Toolbox,
+    Agent, AgentConfig, AgentEvent, ChatClient, Message, ModelRef, RunStatus, StopReason,
+    ThinkingLevel, Tool, Toolbox,
 };
 use codie_prompt::{PromptInput, build_system_message, load_project_context};
 use codie_session::Session;
@@ -211,6 +212,16 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
     let allowed = allowed_tools(&config, args.allow.as_deref(), args.allow_all);
     let session_dir = config.session_dir_for(&cwd);
     let max_turns = args.max_turns.unwrap_or(config.max_turns);
+    let models = builtin_models()
+        .into_iter()
+        .filter(|candidate| candidate.provider.as_ref() == provider_id)
+        .map(|candidate| codie_tui::app::ModelChoice {
+            provider: candidate.provider.to_string(),
+            id: candidate.id,
+            name: candidate.name,
+            context_window: candidate.context_window,
+        })
+        .collect::<Vec<_>>();
     if max_turns == 0 {
         bail!("--max-turns must be greater than zero");
     }
@@ -235,6 +246,8 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
                 provider: provider_id.clone(),
                 model: model_id.clone(),
             },
+            context_window: model.context_window,
+            models,
             thinking,
             max_turns,
             session,
@@ -289,14 +302,16 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
         provider: provider_id.clone(),
         model: model_id.clone(),
     };
-    let mut agent_config = AgentConfig::new(model_ref, cwd.clone()).map_err(anyhow::Error::msg)?;
+    let mut agent_config =
+        AgentConfig::new(model_ref.clone(), cwd.clone()).map_err(anyhow::Error::msg)?;
     agent_config.thinking = thinking;
     agent_config.max_turns = max_turns;
     agent_config.session_id = session.as_ref().map(|session| session.id().to_owned());
     agent_config.cancel = cancel.clone();
 
     let catalog_endpoint = format!("{}/models", provider.base_url().trim_end_matches('/'));
-    let agent = Agent::new(Arc::new(provider), Arc::clone(&toolbox));
+    let provider: Arc<dyn ChatClient> = Arc::new(provider);
+    let agent = Agent::new(Arc::clone(&provider), Arc::clone(&toolbox));
 
     if matches!(args.mode, OutputMode::Json) {
         match session.as_ref() {
@@ -321,38 +336,136 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
         Arc::new(catalog).spawn_refresh();
     }
 
-    let mut events = agent.run(Message::user(text), history, agent_config);
-    let mut final_text = String::new();
-    let mut final_stop = None;
-    let mut status = RunStatus::Error;
-
-    while let Some(event) = events.recv().await {
-        if matches!(args.mode, OutputMode::Json) {
-            let line = serde_json::to_string(&event)?;
-            let mut stdout = std::io::stdout().lock();
-            writeln!(stdout, "{line}")?;
-            stdout.flush()?;
-        }
-
-        match &event {
-            AgentEvent::MessageEnd { message } => {
-                if let Some(session) = session.as_mut() {
-                    session.append_message(message)?;
+    let context_window = u64::from(model.context_window);
+    let input_limit = context_window
+        .saturating_sub(codie_tui::compaction::DEFAULT_RESERVE_TOKENS)
+        .clamp(4_000, 200_000);
+    let prompt_message = Message::user(text.clone());
+    if let Some(current) = session.as_mut()
+        && history
+            .iter()
+            .any(|message| !matches!(message, Message::System(_)))
+        && codie_tui::compaction::needs_compaction(&history, &prompt_message, context_window)
+    {
+        match codie_tui::compaction::summarize(
+            Arc::clone(&provider),
+            model_ref.clone(),
+            thinking,
+            &history,
+            None,
+            Some(current.id().to_owned()),
+            input_limit,
+        )
+        .await
+        {
+            Ok(outcome) => {
+                history = codie_tui::compaction::apply(current, &outcome, None)
+                    .map_err(anyhow::Error::msg)?;
+                if !matches!(args.mode, OutputMode::Json) {
+                    eprintln!("Compacted the context before the request.");
                 }
-                if let Some(assistant) = message.as_assistant() {
-                    final_stop = Some(assistant.stop_reason);
-                    let text = assistant.text();
-                    if !text.is_empty() {
-                        final_text = text;
+            }
+            Err(error) if !matches!(args.mode, OutputMode::Json) => {
+                eprintln!("warning: automatic compaction failed: {error}");
+            }
+            Err(_) => {}
+        }
+    }
+
+    let mut final_text = String::new();
+    let mut final_stop;
+    let mut status;
+    let mut recovered = false;
+
+    loop {
+        let mut events = if recovered {
+            agent.resume(history.clone(), agent_config.clone())
+        } else {
+            agent.run(
+                Message::user(text.clone()),
+                history.clone(),
+                agent_config.clone(),
+            )
+        };
+        final_text.clear();
+        final_stop = None;
+        status = RunStatus::Error;
+        let mut last_assistant = None;
+
+        while let Some(event) = events.recv().await {
+            if matches!(args.mode, OutputMode::Json) {
+                let line = serde_json::to_string(&event)?;
+                let mut stdout = std::io::stdout().lock();
+                writeln!(stdout, "{line}")?;
+                stdout.flush()?;
+            }
+
+            match &event {
+                AgentEvent::MessageEnd { message } => {
+                    if let Some(session) = session.as_mut() {
+                        session.append_message(message)?;
+                    }
+                    if let Some(assistant) = message.as_assistant() {
+                        final_stop = Some(assistant.stop_reason);
+                        last_assistant = Some(assistant.clone());
+                        let text = assistant.text();
+                        if !text.is_empty() {
+                            final_text = text;
+                        }
                     }
                 }
+                AgentEvent::AgentEnd { status: ended, .. } => {
+                    status = *ended;
+                    break;
+                }
+                _ => {}
             }
-            AgentEvent::AgentEnd { status: ended, .. } => {
-                status = *ended;
+        }
+
+        let overflow = last_assistant.as_ref().is_some_and(|assistant| {
+            codie_tui::compaction::is_context_overflow(&Message::Assistant(assistant.clone()))
+        });
+        if status != RunStatus::Error || recovered || !overflow {
+            break;
+        }
+
+        // CTX-006: one compaction and one retry per invocation.
+        let Some(current) = session.as_mut() else {
+            break;
+        };
+        if let Some(leaf) = current.leaf_target().map(str::to_owned)
+            && current
+                .entries()
+                .iter()
+                .any(|entry| entry.id() == leaf && entry.message().is_some())
+        {
+            current.append_context_edit(&leaf, None)?;
+        }
+        history = current.projection();
+        let session_id = current.id().to_owned();
+        let outcome = match codie_tui::compaction::summarize(
+            Arc::clone(&provider),
+            model_ref.clone(),
+            thinking,
+            &history,
+            None,
+            Some(session_id),
+            input_limit,
+        )
+        .await
+        {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                eprintln!("context recovery failed: {error}");
                 break;
             }
-            _ => {}
+        };
+        history =
+            codie_tui::compaction::apply(current, &outcome, None).map_err(anyhow::Error::msg)?;
+        if !matches!(args.mode, OutputMode::Json) {
+            eprintln!("Context overflow recovered; retrying once.");
         }
+        recovered = true;
     }
 
     if matches!(args.mode, OutputMode::Json) {

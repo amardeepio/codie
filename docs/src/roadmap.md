@@ -50,9 +50,11 @@ not commitments; the exit criteria are the real gate.
 
 - Session tree operations, persisted leaf markers, fork, clone, export, and read-only `codie sessions` commands.
 - `/tree`, `/fork`, `/clone`, `/name`, `/export`, and a searchable picker with rename and delete.
-- Compaction with a fixed summary structure, a tool-call-safe cut point, and manual `/compact [instructions]`.
-- Token estimates and context percentage, a frozen format v1, a property test, and a 10k-entry resume budget.
-- Remaining: automatic threshold compaction, overflow recovery, and the `0.3.0` tag.
+- Compaction with a fixed summary structure, a tool-call-safe cut point, manual `/compact [instructions]`,
+  automatic threshold triggering, and one-shot overflow recovery.
+- Token estimates and context percentage, a frozen format v1, a migration harness, a property test, a 10k-entry
+  resume budget, and a SIGKILL recovery test.
+- Remaining: the `0.3.0` version bump, tag, and release notes.
 
 Later phase criteria are listed in [`PLAN.MD`](../../PLAN.MD) §8. This page mirrors `ROADMAP.md` and is updated at
 each phase boundary. Scope changes require an RFC; phase changes require maintainer approval recorded in

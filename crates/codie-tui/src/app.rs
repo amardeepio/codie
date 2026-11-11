@@ -44,6 +44,120 @@ pub enum TuiRunMode {
     Plain,
 }
 
+/// One model available in the interactive picker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelChoice {
+    /// Provider identifier.
+    pub provider: String,
+    /// Model identifier.
+    pub id: String,
+    /// Human-readable name.
+    pub name: String,
+    /// Context window in tokens.
+    pub context_window: u32,
+}
+
+/// One selectable row in a list overlay.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChoiceItem {
+    /// Primary text.
+    pub label: String,
+    /// Secondary text shown after the label.
+    pub detail: String,
+    /// Value applied when the row is selected.
+    pub value: String,
+}
+
+/// What selecting a list row does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChoiceKind {
+    /// Slash commands.
+    Commands,
+    /// Models for the active provider.
+    Models,
+    /// Built-in themes.
+    Themes,
+    /// Reasoning levels.
+    Thinking,
+}
+
+/// A filterable, scrollable list overlay.
+#[derive(Debug, Clone)]
+pub struct ChoiceList {
+    /// Overlay title.
+    pub title: String,
+    /// Selection behavior.
+    pub kind: ChoiceKind,
+    /// Every item.
+    pub items: Vec<ChoiceItem>,
+    /// Indices matching the query, in display order.
+    pub visible: Vec<usize>,
+    /// Selected position within `visible`.
+    pub selected: usize,
+    /// Filter text.
+    pub query: String,
+    /// Footer hint.
+    pub hint: String,
+}
+
+impl ChoiceList {
+    /// Builds a list and applies the empty query.
+    #[must_use]
+    pub fn new(
+        kind: ChoiceKind,
+        title: impl Into<String>,
+        items: Vec<ChoiceItem>,
+        hint: impl Into<String>,
+    ) -> Self {
+        let mut list = Self {
+            title: title.into(),
+            kind,
+            items,
+            visible: Vec::new(),
+            selected: 0,
+            query: String::new(),
+            hint: hint.into(),
+        };
+        list.refresh();
+        list
+    }
+
+    /// Recomputes visible rows after a query change.
+    pub fn refresh(&mut self) {
+        let query = self.query.to_lowercase();
+        self.visible = self
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| {
+                query.is_empty()
+                    || item.label.to_lowercase().contains(&query)
+                    || item.detail.to_lowercase().contains(&query)
+            })
+            .map(|(index, _)| index)
+            .collect();
+        self.selected = self.selected.min(self.visible.len().saturating_sub(1));
+    }
+
+    /// Returns the selected item.
+    #[must_use]
+    pub fn current(&self) -> Option<&ChoiceItem> {
+        self.visible
+            .get(self.selected)
+            .and_then(|index| self.items.get(*index))
+    }
+
+    /// Moves the selection by `delta`, clamped to the list.
+    pub fn move_by(&mut self, delta: isize) {
+        if self.visible.is_empty() {
+            self.selected = 0;
+            return;
+        }
+        let next = self.selected as isize + delta;
+        self.selected = next.clamp(0, self.visible.len() as isize - 1) as usize;
+    }
+}
+
 /// Everything the interactive app needs from the CLI.
 pub struct TuiOptions {
     /// Provider client.
@@ -52,6 +166,10 @@ pub struct TuiOptions {
     pub cwd: PathBuf,
     /// Model identity.
     pub model: ModelRef,
+    /// Context window in tokens for the selected model.
+    pub context_window: u32,
+    /// Models offered by the picker.
+    pub models: Vec<ModelChoice>,
     /// Initial thinking level.
     pub thinking: ThinkingLevel,
     /// Maximum assistant requests per run.
@@ -105,6 +223,8 @@ pub enum Overlay {
     Tree(Vec<TreeEntry>),
     /// The session picker.
     Picker(Picker),
+    /// A command, model, theme, or reasoning list.
+    List(ChoiceList),
 }
 
 /// Interactive session picker state (`SESS-008`).
@@ -222,6 +342,8 @@ pub struct Footer {
     pub tokens: u64,
     /// Total cost in nano-USD.
     pub cost: u64,
+    /// Most recent or live tokens per second.
+    pub tokens_per_sec: Option<f64>,
     /// Session identifier.
     pub session: Option<String>,
     /// Estimated context usage percentage.
@@ -239,6 +361,8 @@ pub enum Action {
     FollowUp(String),
     /// Cancel the current run.
     Cancel,
+    /// Toggle automatic approval for mutating tools.
+    ToggleAutoApprove,
     /// Quit the app.
     Quit,
 }
@@ -259,18 +383,34 @@ pub struct App {
     pub overlay: Option<Overlay>,
     /// True when the app should exit.
     pub should_quit: bool,
+    /// True when mutating tools run without a prompt.
+    pub auto_approve: bool,
     /// Animation tick.
     pub tick: u64,
     /// Current model identity.
     pub model: ModelRef,
     /// Current thinking level.
     pub thinking: ThinkingLevel,
+    /// Context window used for the threshold and footer.
+    pub context_window: u32,
+    /// Models offered by the picker.
+    pub models: Vec<ModelChoice>,
+    /// When the current run started, for live tokens/sec.
+    pub run_started: Option<std::time::Instant>,
     /// Conversation history.
     pub history: Vec<Message>,
     /// Active session, when persisted.
     pub session: Option<Session>,
     /// Pending manual compaction instructions.
     pub pending_compact: Option<String>,
+    /// Prompt to run after a compaction finishes.
+    pub pending_prompt: Option<String>,
+    /// True when `pending_prompt` is a retry of the current transcript.
+    pub pending_retry: bool,
+    /// Last submitted prompt, used for one overflow retry.
+    pub last_prompt: Option<String>,
+    /// True after the one allowed overflow recovery attempt.
+    pub overflow_retried: bool,
     /// Session root for `/new`.
     session_dir: PathBuf,
     /// Working directory for file completion.
@@ -294,6 +434,8 @@ impl App {
         cwd: impl Into<PathBuf>,
         model: ModelRef,
         thinking: ThinkingLevel,
+        context_window: u32,
+        models: Vec<ModelChoice>,
         theme: Theme,
         session: Option<Session>,
         history: Vec<Message>,
@@ -323,12 +465,20 @@ impl App {
             status: Status::Idle,
             overlay: None,
             should_quit: false,
+            auto_approve: false,
             tick: 0,
             model,
             thinking,
+            context_window,
+            models,
+            run_started: None,
             history,
             session,
             pending_compact: None,
+            pending_prompt: None,
+            pending_retry: false,
+            last_prompt: None,
+            overflow_retried: false,
             session_dir,
             cwd: binding_cwd,
             permissions: VecDeque::new(),
@@ -344,6 +494,9 @@ impl App {
         if key.kind == KeyEventKind::Release {
             return Action::None;
         }
+        if key.code == KeyCode::BackTab {
+            return self.dispatch_action(ActionId::ToggleAutoApprove);
+        }
         if self.overlay.is_some() {
             return self.handle_overlay_key(key);
         }
@@ -357,6 +510,10 @@ impl App {
         match key.code {
             KeyCode::Char('l') if control => {
                 self.editor.clear();
+                Action::None
+            }
+            KeyCode::Char('/') if !control && !alt && self.editor.text().trim().is_empty() => {
+                self.open_palette();
                 Action::None
             }
             KeyCode::Char(character) if !control && !alt => {
@@ -478,10 +635,17 @@ impl App {
                 self.overlay = Some(Overlay::Hotkeys);
                 Action::None
             }
+            ActionId::ToggleAutoApprove => {
+                self.auto_approve = !self.auto_approve;
+                Action::ToggleAutoApprove
+            }
         }
     }
 
     fn handle_overlay_key(&mut self, key: KeyEvent) -> Action {
+        if matches!(self.overlay, Some(Overlay::List(_))) {
+            return self.handle_list_key(key);
+        }
         if matches!(self.overlay, Some(Overlay::Picker(_))) {
             return self.handle_picker_key(key);
         }
@@ -497,15 +661,233 @@ impl App {
         }
 
         let decision = match key.code {
-            KeyCode::Char('a') => Some(Decision::Allow),
+            KeyCode::Char('y' | 'Y' | 'a') => Some(Decision::Allow),
             KeyCode::Char('A') => Some(Decision::Always),
-            KeyCode::Char('d') | KeyCode::Esc => Some(Decision::Deny),
+            KeyCode::Char('n' | 'N' | 'd' | 'D') | KeyCode::Esc => Some(Decision::Deny),
+            KeyCode::Enter => Some(Decision::Allow),
             _ => None,
         };
         if let Some(decision) = decision {
             self.resolve_permission(decision);
         }
         Action::None
+    }
+
+    fn handle_list_key(&mut self, key: KeyEvent) -> Action {
+        let Some(Overlay::List(mut list)) = self.overlay.take() else {
+            return Action::None;
+        };
+        match key.code {
+            KeyCode::Up => list.move_by(-1),
+            KeyCode::Down => list.move_by(1),
+            KeyCode::PageUp => list.move_by(-5),
+            KeyCode::PageDown => list.move_by(5),
+            KeyCode::Enter => {
+                if let Some(item) = list.current().cloned() {
+                    self.apply_choice(list.kind, &item);
+                }
+                return Action::None;
+            }
+            KeyCode::Esc => return Action::None,
+            KeyCode::Backspace => {
+                list.query.pop();
+                list.refresh();
+            }
+            KeyCode::Char(character)
+                if !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                list.query.push(character);
+                list.refresh();
+            }
+            _ => {}
+        }
+        self.overlay = Some(Overlay::List(list));
+        Action::None
+    }
+
+    fn apply_choice(&mut self, kind: ChoiceKind, item: &ChoiceItem) {
+        match kind {
+            ChoiceKind::Commands => match item.value.as_str() {
+                "model" => self.open_models(),
+                "theme" => self.open_themes(),
+                "thinking" => self.open_thinking(),
+                "quit" => self.should_quit = true,
+                "name" | "export" => {
+                    self.editor.insert_str(&format!("/{} ", item.value));
+                }
+                _ => {
+                    self.handle_command(&format!("/{}", item.value));
+                }
+            },
+            ChoiceKind::Models => {
+                if let Some(choice) = self
+                    .models
+                    .iter()
+                    .find(|model| model.id == item.value)
+                    .cloned()
+                {
+                    self.model.provider = choice.provider.clone();
+                    self.model.model = choice.id.clone();
+                    self.context_window = choice.context_window;
+                    self.footer.model = choice.id.clone();
+                    if let Some(session) = self.session.as_mut() {
+                        let _ = session.append_model_change(choice.provider, choice.id.clone());
+                    }
+                    self.refresh_context();
+                    self.transcript
+                        .push_info(format!("Model: {} ({})", choice.name, choice.id));
+                }
+            }
+            ChoiceKind::Themes => match Theme::load(Some(&item.value)) {
+                Ok(theme) => {
+                    self.theme_watcher = std::path::Path::new(&theme.name)
+                        .is_file()
+                        .then(|| crate::theme::ThemeWatcher::new(&theme.name));
+                    self.theme = theme;
+                    self.transcript.push_info(format!("Theme: {}", item.value));
+                }
+                Err(error) => self
+                    .transcript
+                    .push_error(format!("Cannot load theme: {error}")),
+            },
+            ChoiceKind::Thinking => {
+                if let Some(level) = ThinkingLevel::parse(&item.value) {
+                    self.thinking = level;
+                    self.footer.thinking = level.as_str().to_owned();
+                    if let Some(session) = self.session.as_mut() {
+                        let _ = session.append_thinking_level_change(level);
+                    }
+                    self.transcript
+                        .push_info(format!("Reasoning level: {}", level.as_str()));
+                }
+            }
+        }
+    }
+
+    fn open_palette(&mut self) {
+        let commands = [
+            ("help", "Show all commands"),
+            ("model", "Choose a model"),
+            ("theme", "Choose a theme"),
+            ("thinking", "Set the reasoning level"),
+            ("new", "Start a new session"),
+            ("session", "Show the current session"),
+            ("tree", "Show the session tree"),
+            ("fork", "Branch at an entry"),
+            ("clone", "Clone this session"),
+            ("name", "Name the session"),
+            ("export", "Export the session as JSONL"),
+            ("compact", "Compact the context"),
+            ("hotkeys", "Show keybindings"),
+            ("quit", "Exit codie"),
+        ];
+        let items = commands
+            .into_iter()
+            .map(|(name, description)| ChoiceItem {
+                label: format!("/{name}"),
+                detail: description.to_owned(),
+                value: name.to_owned(),
+            })
+            .collect();
+        self.overlay = Some(Overlay::List(ChoiceList::new(
+            ChoiceKind::Commands,
+            " commands ",
+            items,
+            "type to filter · ↑/↓ scroll · Enter select · Esc close",
+        )));
+    }
+
+    fn open_models(&mut self) {
+        let current = self.model.model.clone();
+        let mut items = self
+            .models
+            .iter()
+            .map(|model| ChoiceItem {
+                label: if model.id == current {
+                    format!("{} (current)", model.name)
+                } else {
+                    model.name.clone()
+                },
+                detail: format!("{} · {}k ctx", model.id, model.context_window / 1000),
+                value: model.id.clone(),
+            })
+            .collect::<Vec<_>>();
+        if items.is_empty() {
+            items.push(ChoiceItem {
+                label: format!("{current} (current)"),
+                detail: format!("{}k ctx", self.context_window / 1000),
+                value: current,
+            });
+        }
+        self.overlay = Some(Overlay::List(ChoiceList::new(
+            ChoiceKind::Models,
+            " models ",
+            items,
+            "type to filter · ↑/↓ scroll · Enter select",
+        )));
+    }
+
+    fn open_themes(&mut self) {
+        let current = self.theme.name.clone();
+        let items = ["system", "dark", "light"]
+            .into_iter()
+            .map(|name| ChoiceItem {
+                label: if name == current {
+                    format!("{name} (current)")
+                } else {
+                    name.to_owned()
+                },
+                detail: "Built-in theme".to_owned(),
+                value: name.to_owned(),
+            })
+            .collect();
+        self.overlay = Some(Overlay::List(ChoiceList::new(
+            ChoiceKind::Themes,
+            " themes ",
+            items,
+            "type to filter · ↑/↓ scroll · Enter select",
+        )));
+    }
+
+    fn open_thinking(&mut self) {
+        let current = self.thinking;
+        let items = [
+            ThinkingLevel::Off,
+            ThinkingLevel::Minimal,
+            ThinkingLevel::Low,
+            ThinkingLevel::Medium,
+            ThinkingLevel::High,
+            ThinkingLevel::XHigh,
+            ThinkingLevel::Max,
+        ]
+        .into_iter()
+        .map(|level| ChoiceItem {
+            label: if level == current {
+                format!("{} (current)", level.as_str())
+            } else {
+                level.as_str().to_owned()
+            },
+            detail: if level.is_enabled() {
+                "Reasoning enabled".to_owned()
+            } else {
+                "Reasoning disabled".to_owned()
+            },
+            value: level.as_str().to_owned(),
+        })
+        .collect();
+        self.overlay = Some(Overlay::List(ChoiceList::new(
+            ChoiceKind::Thinking,
+            " reasoning level ",
+            items,
+            "type to filter · ↑/↓ scroll · Enter select",
+        )));
+    }
+
+    fn refresh_context(&mut self) {
+        let tokens = self.history.iter().map(message_chars).sum::<u64>() / 4;
+        let percent = tokens.saturating_mul(100) / u64::from(self.context_window.max(1));
+        self.footer.context_percent = Some(u8::try_from(percent.min(100)).unwrap_or(100));
     }
 
     fn handle_picker_key(&mut self, key: KeyEvent) -> Action {
@@ -716,14 +1098,44 @@ impl App {
                 }
             }
             Command::Export(argument) => self.export_session(argument),
+            Command::Theme(argument) => {
+                if let Some(name) = argument {
+                    match Theme::load(Some(&name)) {
+                        Ok(theme) => {
+                            self.theme_watcher = std::path::Path::new(&theme.name)
+                                .is_file()
+                                .then(|| crate::theme::ThemeWatcher::new(&theme.name));
+                            self.theme = theme;
+                            self.transcript.push_info(format!("Theme: {name}"));
+                        }
+                        Err(error) => self
+                            .transcript
+                            .push_error(format!("Cannot load theme: {error}")),
+                    }
+                } else {
+                    self.open_themes();
+                }
+            }
             Command::Model(argument) => {
                 if let Some(model) = argument {
                     self.model.model = model.clone();
-                    self.footer.model = model;
+                    self.footer.model = model.clone();
+                    if let Some(choice) = self
+                        .models
+                        .iter()
+                        .find(|choice| choice.id == model)
+                        .cloned()
+                    {
+                        self.model.provider = choice.provider.clone();
+                        self.context_window = choice.context_window;
+                        if let Some(session) = self.session.as_mut() {
+                            let _ = session.append_model_change(choice.provider, choice.id.clone());
+                        }
+                    }
+                    self.refresh_context();
                     self.transcript.push_info("Model changed for the next run.");
                 } else {
-                    self.transcript
-                        .push_info(format!("Model: {}", self.model.model));
+                    self.open_models();
                 }
             }
             Command::Thinking(argument) => {
@@ -731,15 +1143,17 @@ impl App {
                     if let Some(level) = parse_thinking(&value) {
                         self.thinking = level;
                         self.footer.thinking = level.as_str().to_owned();
+                        if let Some(session) = self.session.as_mut() {
+                            let _ = session.append_thinking_level_change(level);
+                        }
                         self.transcript
-                            .push_info(format!("Thinking level: {}", level.as_str()));
+                            .push_info(format!("Reasoning level: {}", level.as_str()));
                     } else {
                         self.transcript
                             .push_error(format!("Unknown thinking level `{value}`."));
                     }
                 } else {
-                    self.transcript
-                        .push_info(format!("Thinking level: {}", self.thinking.as_str()));
+                    self.open_thinking();
                 }
             }
             Command::Compact(argument) => {
@@ -810,19 +1224,14 @@ impl App {
             .ok_or_else(|| codie_core::Error::session("no session is being persisted"))
             .and_then(|session| {
                 session.set_leaf(Some(entry_id))?;
-                Ok((
-                    session.projection(),
-                    session.id().to_owned(),
-                    session.estimate_tokens(),
-                ))
+                Ok((session.projection(), session.id().to_owned()))
             });
         match result {
-            Ok((history, id, tokens)) => {
+            Ok((history, id)) => {
                 self.history = history;
                 self.transcript.clear();
                 self.footer.session = Some(id);
-                self.footer.context_percent =
-                    Some(u8::try_from((tokens * 100 / 200_000).min(100)).unwrap_or(100));
+                self.refresh_context();
                 self.transcript
                     .push_info(format!("Forked at entry {entry_id}."));
             }
@@ -936,12 +1345,16 @@ impl App {
     }
 
     /// Updates footer usage from the latest message.
-    pub fn update_usage(&mut self, usage: &Usage) {
+    pub fn update_usage(&mut self, usage: &Usage, duration_ms: Option<u64>) {
         self.footer.tokens = self.footer.tokens.saturating_add(usage.total_tokens);
         self.footer.cost = self.footer.cost.saturating_add(usage.cost.total);
-        let context = self.history.iter().map(message_chars).sum::<u64>() / 4;
-        let percent = context.saturating_mul(100) / 200_000;
-        self.footer.context_percent = Some(u8::try_from(percent.min(100)).unwrap_or(100));
+        if usage.output > 0
+            && let Some(ms) = duration_ms
+            && ms > 0
+        {
+            self.footer.tokens_per_sec = Some(usage.output as f64 * 1000.0 / ms as f64);
+        }
+        self.refresh_context();
     }
 }
 
@@ -984,6 +1397,7 @@ async fn run_full(mut options: TuiOptions) -> Result<u8> {
     let registry = Arc::clone(&options.registry);
     let (permission_tx, mut permission_rx) = mpsc::unbounded_channel();
     let broker = PermissionBroker::new(permission_tx, options.auto_allowed.clone());
+    let permission_broker = broker.clone();
     let toolbox: Arc<dyn Toolbox> = Arc::new(PermissionToolbox::new(registry.clone(), broker));
     let agent = Arc::new(Agent::new(
         Arc::clone(&options.client),
@@ -995,6 +1409,8 @@ async fn run_full(mut options: TuiOptions) -> Result<u8> {
         options.cwd.clone(),
         options.model.clone(),
         options.thinking,
+        options.context_window,
+        options.models.clone(),
         theme,
         options.session.take(),
         history.clone(),
@@ -1037,6 +1453,7 @@ async fn run_full(mut options: TuiOptions) -> Result<u8> {
         toolbox,
         options,
         &mut permission_rx,
+        permission_broker,
     )
     .await;
     restore_terminal();
@@ -1135,6 +1552,7 @@ async fn event_loop(
     toolbox: Arc<dyn Toolbox>,
     options: TuiOptions,
     permission_rx: &mut mpsc::UnboundedReceiver<PermissionRequest>,
+    broker: PermissionBroker,
 ) -> Result<u8> {
     let mut input = spawn_input();
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
@@ -1144,7 +1562,7 @@ async fn event_loop(
     let mut signal_code = 0_i32;
 
     if let Some(prompt) = options.initial_prompt.clone() {
-        start_run(app, &agent, &options, &event_tx, prompt);
+        submit_prompt(app, &agent, &options, &event_tx, &compact_tx, prompt);
     }
 
     loop {
@@ -1162,6 +1580,19 @@ async fn event_loop(
                         match action {
                             Action::None => {}
                             Action::Quit => break,
+                            Action::ToggleAutoApprove => {
+                                broker.set_auto_approve(app.auto_approve);
+                                if app.auto_approve {
+                                    if matches!(app.overlay, Some(Overlay::Permission(_))) {
+                                        app.resolve_permission(Decision::Allow);
+                                    }
+                                    app.transcript
+                                        .push_info("Full access on: mutating tools run without prompts.");
+                                } else {
+                                    app.transcript
+                                        .push_info("Full access off: mutating tools ask again.");
+                                }
+                            }
                             Action::Cancel => {
                                 app.cancel.cancel();
                                 app.transcript.push_info("Cancelling…");
@@ -1173,7 +1604,9 @@ async fn event_loop(
                                     agent.steer(Message::user(text.clone()));
                                     app.transcript.push_user(text);
                                 } else {
-                                    start_run(app, &agent, &options, &event_tx, text);
+                                    submit_prompt(
+                                        app, &agent, &options, &event_tx, &compact_tx, text,
+                                    );
                                 }
                             }
                             Action::FollowUp(text) => {
@@ -1198,10 +1631,21 @@ async fn event_loop(
             Some(event) = event_rx.recv() => {
                 dirty = true;
                 handle_agent_event(app, event);
+                if maybe_recover_overflow(app) {
+                    start_compaction(app, &options, &compact_tx, String::new());
+                }
             }
             Some((instructions, result)) = compact_rx.recv() => {
                 dirty = true;
                 apply_compaction(app, instructions, result);
+                if let Some(prompt) = app.pending_prompt.take() {
+                    let retry = std::mem::take(&mut app.pending_retry);
+                    if retry {
+                        start_resume(app, &agent, &options, &event_tx);
+                    } else {
+                        start_run(app, &agent, &options, &event_tx, prompt);
+                    }
+                }
             }
             _ = tick.tick() => {
                 app.tick = app.tick.wrapping_add(1);
@@ -1242,6 +1686,42 @@ async fn event_loop(
     Ok(u8::try_from(signal_code).unwrap_or(0))
 }
 
+fn submit_prompt(
+    app: &mut App,
+    agent: &Arc<Agent>,
+    options: &TuiOptions,
+    sender: &mpsc::UnboundedSender<AgentEvent>,
+    compact_sender: &mpsc::UnboundedSender<(
+        Option<String>,
+        Result<crate::compaction::CompactionOutcome, String>,
+    )>,
+    prompt: String,
+) {
+    app.last_prompt = Some(prompt.clone());
+    app.overflow_retried = false;
+
+    let window = u64::from(app.context_window);
+    let history_has_messages = app
+        .history
+        .iter()
+        .any(|message| !matches!(message, Message::System(_)));
+    let prompt_message = Message::user(prompt.clone());
+    if app.session.is_some()
+        && history_has_messages
+        && crate::compaction::needs_compaction(&app.history, &prompt_message, window)
+    {
+        app.pending_prompt = Some(prompt);
+        app.pending_retry = false;
+        app.status = Status::Streaming;
+        app.transcript
+            .push_info("Compacting the context before this request…");
+        start_compaction(app, options, compact_sender, String::new());
+        return;
+    }
+
+    start_run(app, agent, options, sender, prompt);
+}
+
 fn start_run(
     app: &mut App,
     agent: &Arc<Agent>,
@@ -1251,6 +1731,8 @@ fn start_run(
 ) {
     app.transcript.push_user(prompt.clone());
     app.status = Status::Streaming;
+    app.run_started = Some(std::time::Instant::now());
+    app.footer.tokens_per_sec = None;
 
     let mut config = match AgentConfig::new(app.model.clone(), options.cwd.clone()) {
         Ok(config) => config,
@@ -1267,8 +1749,43 @@ fn start_run(
     config.cancel = app.cancel.clone();
 
     let history = app.history.clone();
-    let mut stream = agent.run(Message::user(prompt), history, config);
-    let sender = sender.clone();
+    let stream = agent.run(Message::user(prompt), history, config);
+    forward_events(stream, sender.clone());
+}
+
+fn start_resume(
+    app: &mut App,
+    agent: &Arc<Agent>,
+    options: &TuiOptions,
+    sender: &mpsc::UnboundedSender<AgentEvent>,
+) {
+    app.status = Status::Streaming;
+    app.run_started = Some(std::time::Instant::now());
+    app.footer.tokens_per_sec = None;
+
+    let mut config = match AgentConfig::new(app.model.clone(), options.cwd.clone()) {
+        Ok(config) => config,
+        Err(error) => {
+            app.transcript.push_error(error);
+            app.status = Status::Error;
+            return;
+        }
+    };
+    config.thinking = app.thinking;
+    config.max_turns = options.max_turns;
+    config.session_id = app.session.as_ref().map(|session| session.id().to_owned());
+    app.cancel = tokio_util::sync::CancellationToken::new();
+    config.cancel = app.cancel.clone();
+
+    let history = app.history.clone();
+    let stream = agent.resume(history, config);
+    forward_events(stream, sender.clone());
+}
+
+fn forward_events(
+    mut stream: codie_core::AgentEventStream,
+    sender: mpsc::UnboundedSender<AgentEvent>,
+) {
     tokio::spawn(async move {
         while let Some(event) = stream.recv().await {
             let terminal = matches!(event, AgentEvent::AgentEnd { .. });
@@ -1277,6 +1794,48 @@ fn start_run(
             }
         }
     });
+}
+
+fn maybe_recover_overflow(app: &mut App) -> bool {
+    if app.status != Status::Error || app.overflow_retried {
+        return false;
+    }
+    let Some(prompt) = app.last_prompt.clone() else {
+        return false;
+    };
+    let overflow = app
+        .history
+        .last()
+        .is_some_and(crate::compaction::is_context_overflow);
+    if !overflow {
+        return false;
+    }
+
+    app.overflow_retried = true;
+    if matches!(
+        app.history.last(),
+        Some(Message::Assistant(assistant))
+            if assistant.stop_reason == codie_core::StopReason::Error
+    ) {
+        app.history.pop();
+    }
+    if let Some(session) = app.session.as_mut()
+        && let Some(leaf) = session.leaf_target().map(str::to_owned)
+        && session
+            .entries()
+            .iter()
+            .any(|entry| entry.id() == leaf && entry.message().is_some())
+    {
+        let _ = session.append_context_edit(&leaf, None);
+        app.history = session.projection();
+    }
+
+    app.pending_prompt = Some(prompt);
+    app.pending_retry = true;
+    app.status = Status::Streaming;
+    app.transcript
+        .push_info("Context overflow: compacting and retrying once…");
+    true
 }
 
 fn start_compaction(
@@ -1293,12 +1852,23 @@ fn start_compaction(
     let thinking = app.thinking;
     let messages = app.history.clone();
     let session_id = app.session.as_ref().map(|session| session.id().to_owned());
+    let context_window = app.context_window;
     let sender = sender.clone();
     tokio::spawn(async move {
         let custom = (!instructions.trim().is_empty()).then_some(instructions.as_str());
-        let result =
-            crate::compaction::summarize(client, model, thinking, &messages, custom, session_id)
-                .await;
+        let input_limit = u64::from(context_window)
+            .saturating_sub(crate::compaction::DEFAULT_RESERVE_TOKENS)
+            .clamp(4_000, 200_000);
+        let result = crate::compaction::summarize(
+            client,
+            model,
+            thinking,
+            &messages,
+            custom,
+            session_id,
+            input_limit,
+        )
+        .await;
         let _ = sender.send((
             (!instructions.trim().is_empty()).then_some(instructions),
             result,
@@ -1316,6 +1886,7 @@ fn apply_compaction(
         Failed(String),
     }
 
+    let window = app.context_window;
     let applied = {
         let Some(session) = app.session.as_mut() else {
             app.status = Status::Error;
@@ -1328,7 +1899,7 @@ fn apply_compaction(
                 match crate::compaction::apply(session, &outcome, instructions.as_deref()) {
                     Ok(history) => Applied::Done(
                         history,
-                        session.context_percent(200_000),
+                        session.context_percent(u64::from(window)),
                         outcome
                             .summary
                             .lines()
@@ -1352,6 +1923,8 @@ fn apply_compaction(
                 .push_info(format!("Compacted the context: {first_line}"));
         }
         Applied::Failed(error) => {
+            app.pending_prompt = None;
+            app.pending_retry = false;
             app.status = Status::Error;
             app.transcript
                 .push_error(format!("Compaction failed: {error}"));
@@ -1375,6 +1948,13 @@ fn handle_agent_event(app: &mut App, event: AgentEvent) {
         AgentEvent::MessageUpdate { message, .. } => {
             if let Message::Assistant(assistant) = message {
                 app.transcript.set_text(assistant.text());
+                if let Some(started) = app.run_started {
+                    let seconds = started.elapsed().as_secs_f64();
+                    if seconds > 0.25 {
+                        let tokens = assistant.text().chars().count().div_ceil(4) as f64;
+                        app.footer.tokens_per_sec = Some(tokens / seconds);
+                    }
+                }
                 let thinking = assistant
                     .content
                     .iter()
@@ -1393,7 +1973,13 @@ fn handle_agent_event(app: &mut App, event: AgentEvent) {
                 Message::Assistant(assistant) => {
                     app.transcript.set_text(assistant.text());
                     app.transcript.finish_assistant();
-                    app.update_usage(&assistant.usage);
+                    app.update_usage(
+                        &assistant.usage,
+                        assistant.duration_ms.or_else(|| {
+                            app.run_started
+                                .map(|started| started.elapsed().as_millis() as u64)
+                        }),
+                    );
                 }
                 Message::ToolResult(result) => persist_tool_result(app, result),
                 _ => {}
@@ -1489,6 +2075,8 @@ mod tests {
                 model: "deepseek-flash".into(),
             },
             ThinkingLevel::Medium,
+            128_000,
+            Vec::new(),
             Theme::load(Some("dark")).unwrap(),
             None,
             Vec::new(),
@@ -1560,6 +2148,8 @@ mod tests {
                 model: "deepseek-flash".into(),
             },
             ThinkingLevel::Medium,
+            128_000,
+            Vec::new(),
             Theme::load(Some("dark")).unwrap(),
             None,
             Vec::new(),
@@ -1627,6 +2217,47 @@ mod tests {
     }
 
     #[test]
+    #[spec("TUI-018")]
+    fn spec_tui_018_permission_prompt_accepts_y_and_n() {
+        let mut app = app();
+        let (reply, answer) = oneshot::channel();
+        app.push_permission(PermissionRequest {
+            tool: "write".to_owned(),
+            arguments: serde_json::json!({"path": "a.txt"}),
+            reply,
+        });
+        app.handle_key(key(KeyCode::Char('y')));
+        assert_eq!(answer.blocking_recv().unwrap(), Decision::Allow);
+        assert!(app.overlay.is_none());
+
+        let (reply, answer) = oneshot::channel();
+        app.push_permission(PermissionRequest {
+            tool: "write".to_owned(),
+            arguments: serde_json::json!({"path": "a.txt"}),
+            reply,
+        });
+        app.handle_key(key(KeyCode::Char('n')));
+        assert_eq!(answer.blocking_recv().unwrap(), Decision::Deny);
+        assert!(app.overlay.is_none());
+    }
+
+    #[test]
+    #[spec("TUI-019")]
+    fn spec_tui_019_shift_tab_toggles_full_access() {
+        let mut app = app();
+        assert_eq!(
+            app.handle_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE)),
+            Action::ToggleAutoApprove
+        );
+        assert!(app.auto_approve);
+        assert_eq!(
+            app.handle_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)),
+            Action::ToggleAutoApprove
+        );
+        assert!(!app.auto_approve);
+    }
+
+    #[test]
     #[spec("TUI-011")]
     fn spec_tui_011_tree_fork_and_export_commands() {
         let dir = tempfile::tempdir().unwrap();
@@ -1642,6 +2273,8 @@ mod tests {
                 model: "deepseek-flash".into(),
             },
             ThinkingLevel::Medium,
+            128_000,
+            Vec::new(),
             Theme::load(Some("dark")).unwrap(),
             Some(session),
             Vec::new(),
@@ -1711,6 +2344,8 @@ mod tests {
                 model: "deepseek-flash".into(),
             },
             ThinkingLevel::Medium,
+            128_000,
+            Vec::new(),
             Theme::load(Some("dark")).unwrap(),
             None,
             Vec::new(),
@@ -1763,6 +2398,8 @@ mod tests {
                 model: "deepseek-flash".into(),
             },
             ThinkingLevel::Medium,
+            128_000,
+            Vec::new(),
             Theme::load(Some("dark")).unwrap(),
             Some(session),
             Vec::new(),
@@ -1799,6 +2436,215 @@ mod tests {
                 .entries()
                 .iter()
                 .any(|entry| matches!(entry, crate::transcript::Entry::Info(text) if text.contains("No session")))
+        );
+    }
+
+    #[test]
+    #[spec("CTX-006")]
+    fn spec_ctx_006_overflow_recovery_runs_once_and_hides_the_error() {
+        let (_dir, mut app) = app_with_named_session();
+        let error = Message::Assistant(codie_core::AssistantMessage::error(
+            "openai-completions",
+            "deepseek",
+            "deepseek-flash",
+            codie_core::StopReason::Error,
+            "This model's maximum context length is 128000 tokens",
+        ));
+        app.session
+            .as_mut()
+            .unwrap()
+            .append_message(&error)
+            .unwrap();
+        app.history = app.session.as_ref().unwrap().projection();
+        app.status = Status::Error;
+        app.last_prompt = Some("keep going".to_owned());
+
+        assert!(maybe_recover_overflow(&mut app));
+        assert!(app.overflow_retried);
+        assert_eq!(app.pending_prompt.as_deref(), Some("keep going"));
+        assert!(app.pending_retry);
+        assert!(
+            !app.session
+                .as_ref()
+                .unwrap()
+                .projection()
+                .iter()
+                .any(|message| matches!(message, Message::Assistant(assistant) if assistant.stop_reason == codie_core::StopReason::Error)),
+            "the failed message must be hidden by a context edit"
+        );
+
+        app.status = Status::Error;
+        assert!(
+            !maybe_recover_overflow(&mut app),
+            "only one recovery attempt is allowed"
+        );
+    }
+
+    struct NoopClient;
+
+    impl codie_core::ChatClient for NoopClient {
+        fn stream(
+            &self,
+            _context: &[Message],
+            _options: &codie_core::StreamOptions,
+        ) -> codie_core::AssistantEventStream {
+            let (stream, sender) = codie_core::AssistantEventStream::channel(1);
+            tokio::spawn(async move {
+                let mut message = codie_core::AssistantMessage::partial("api", "provider", "model");
+                message.content = vec![Content::text("## Goal\nfinish")];
+                message.stop_reason = codie_core::StopReason::Stop;
+                let _ = sender
+                    .send(codie_core::AssistantDelta::Done {
+                        reason: codie_core::StopReason::Stop,
+                        message,
+                    })
+                    .await;
+            });
+            stream
+        }
+    }
+
+    #[tokio::test]
+    #[spec("CTX-001")]
+    async fn spec_ctx_001_threshold_starts_compaction_before_a_request() {
+        let (dir, mut app) = app_with_named_session();
+        app.context_window = 20_000;
+        app.session
+            .as_mut()
+            .unwrap()
+            .append_message(&Message::user("x".repeat(80_000)))
+            .unwrap();
+        app.history = app.session.as_ref().unwrap().projection();
+        let cwd = dir.path().join("project");
+        let options = TuiOptions {
+            client: Arc::new(NoopClient),
+            cwd: cwd.clone(),
+            model: app.model.clone(),
+            context_window: 20_000,
+            models: Vec::new(),
+            thinking: ThinkingLevel::Medium,
+            max_turns: 10,
+            session: None,
+            history: app.history.clone(),
+            initial_prompt: None,
+            auto_allowed: Vec::new(),
+            theme: None,
+            mode: TuiRunMode::Full,
+            session_dir: dir.path().join("sessions"),
+            resume_picker: false,
+            signal: Arc::new(std::sync::atomic::AtomicI32::new(0)),
+            registry: Arc::new(Registry::new(Vec::new())),
+            keybindings: None,
+        };
+        let agent = Arc::new(Agent::new(
+            Arc::clone(&options.client),
+            Arc::new(Registry::new(Vec::new())),
+        ));
+        let (events, _event_rx) = mpsc::unbounded_channel();
+        let (compact, _compact_rx) = mpsc::unbounded_channel();
+
+        submit_prompt(&mut app, &agent, &options, &events, &compact, "next".into());
+        assert_eq!(app.pending_prompt.as_deref(), Some("next"));
+        assert!(!app.pending_retry);
+        assert_eq!(app.status, Status::Streaming);
+    }
+
+    #[test]
+    #[spec("TUI-014")]
+    fn spec_tui_014_slash_opens_a_filterable_command_palette() {
+        let mut app = app();
+        assert_eq!(app.handle_key(key(KeyCode::Char('/'))), Action::None);
+        let Some(Overlay::List(list)) = &app.overlay else {
+            panic!("expected the command palette");
+        };
+        assert_eq!(list.kind, ChoiceKind::Commands);
+        assert!(list.visible.len() >= 10);
+
+        for character in "theme".chars() {
+            app.handle_key(key(KeyCode::Char(character)));
+        }
+        let Some(Overlay::List(list)) = &app.overlay else {
+            panic!("expected the command palette");
+        };
+        assert_eq!(list.visible.len(), 1);
+        assert_eq!(
+            list.current().map(|item| item.value.as_str()),
+            Some("theme")
+        );
+
+        // Enter opens the theme picker.
+        app.handle_key(key(KeyCode::Enter));
+        assert!(matches!(
+            &app.overlay,
+            Some(Overlay::List(list)) if list.kind == ChoiceKind::Themes
+        ));
+
+        // Escape closes without changing anything.
+        app.handle_key(key(KeyCode::Esc));
+        assert!(app.overlay.is_none());
+    }
+
+    #[test]
+    #[spec("TUI-015")]
+    fn spec_tui_015_model_and_theme_pickers_apply_selection() {
+        let (_dir, mut app) = app_with_named_session();
+        app.models = vec![
+            ModelChoice {
+                provider: "deepseek".to_owned(),
+                id: "deepseek-flash".to_owned(),
+                name: "DeepSeek Flash".to_owned(),
+                context_window: 1_000_000,
+            },
+            ModelChoice {
+                provider: "deepseek".to_owned(),
+                id: "deepseek-v4-pro".to_owned(),
+                name: "DeepSeek V4 Pro".to_owned(),
+                context_window: 128_000,
+            },
+        ];
+        assert!(app.handle_command("/model"));
+        app.handle_key(key(KeyCode::Down));
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.model.model, "deepseek-v4-pro");
+        assert_eq!(app.context_window, 128_000);
+        assert_eq!(
+            app.session.as_ref().unwrap().latest_model(),
+            Some(("deepseek", "deepseek-v4-pro"))
+        );
+
+        assert!(app.handle_command("/theme"));
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.theme.name, "system");
+    }
+
+    #[test]
+    #[spec("TUI-016")]
+    fn spec_tui_016_reasoning_picker_sets_and_persists_the_level() {
+        let (_dir, mut app) = app_with_named_session();
+        assert!(app.handle_command("/thinking"));
+        app.handle_key(key(KeyCode::Down));
+        app.handle_key(key(KeyCode::Down));
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.thinking, ThinkingLevel::Low);
+        assert_eq!(app.footer.thinking, "low");
+        assert_eq!(
+            app.session.as_ref().unwrap().latest_thinking_level(),
+            Some(ThinkingLevel::Low)
+        );
+    }
+
+    #[test]
+    #[spec("TUI-017")]
+    fn spec_tui_017_footer_reports_tokens_per_second() {
+        let mut app = app();
+        app.update_usage(&Usage::new(0, 120, 0, 0), Some(2_000));
+        assert_eq!(app.footer.tokens_per_sec, Some(60.0));
+
+        app.update_usage(&Usage::new(0, 10, 0, 0), None);
+        assert_eq!(
+            app.footer.tokens_per_sec,
+            Some(60.0),
+            "missing duration must keep the previous rate"
         );
     }
 }

@@ -386,3 +386,72 @@ async fn signals_map_to_documented_exit_codes() {
         );
     }
 }
+
+#[spec("CTX-006")]
+#[tokio::test]
+async fn context_overflow_compacts_and_retries_once() {
+    let server = MockServer::start().await;
+    let queue: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::from(vec![
+        r#"{"error":{"message":"This model's maximum context length is 128000 tokens"}}"#
+            .to_owned(),
+        sse(&[
+            r#"{"id":"resp","choices":[{"index":0,"delta":{"role":"assistant","content":"Goal: continue"}}]}"#,
+            &finish("stop"),
+            usage(),
+        ]),
+        sse(&[
+            r#"{"id":"resp","choices":[{"index":0,"delta":{"role":"assistant","content":"recovered answer"}}]}"#,
+            &finish("stop"),
+            usage(),
+        ]),
+    ])));
+    let responder = Arc::clone(&queue);
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(move |_request: &wiremock::Request| {
+            let mut queue = responder.lock().expect("script queue");
+            let body = queue.pop_front().expect("a scripted response per request");
+            if body.starts_with('{') {
+                ResponseTemplate::new(400)
+                    .insert_header("content-type", "application/json")
+                    .set_body_string(body)
+            } else {
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(body)
+            }
+        })
+        .expect(3)
+        .mount(&server)
+        .await;
+
+    let home = TempHome::new().expect("temp home");
+    let work = tempfile::tempdir().expect("temp repo");
+    let mut command = Command::cargo_bin("codie").expect("codie binary");
+    for (key, value) in home.envs() {
+        command.env(key, value);
+    }
+    let output = command
+        .env("DEEPSEEK_API_KEY", "test-key")
+        .env_remove("OPENROUTER_API_KEY")
+        .arg("-p")
+        .arg("--cwd")
+        .arg(work.path())
+        .arg("--base-url")
+        .arg(server.uri())
+        .arg("hello")
+        .output()
+        .expect("run codie");
+
+    assert!(
+        output.status.success(),
+        "recovery failed: {}\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("utf-8 stdout");
+    assert!(stdout.contains("recovered answer"));
+    let stderr = String::from_utf8(output.stderr).expect("utf-8 stderr");
+    assert!(stderr.contains("Context overflow recovered"));
+    assert!(queue.lock().expect("script queue").is_empty());
+}

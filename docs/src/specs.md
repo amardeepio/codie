@@ -61,20 +61,23 @@ snake-case requirement ID so failures are readable.
 |---|---|---|---|
 | [Message model](../../specs/message/0001-message-model.md) | `MSG-001`..`MSG-010`, `MSG-040`..`MSG-044` | accepted | 1 |
 | [Agent turn loop](../../specs/agent/0001-turn-loop.md) | `AGENT-001`..`AGENT-012` | accepted | 1 |
+| [Transcript continuation](../../specs/agent/0002-continuation.md) | `AGENT-013` | implemented | 3 |
 | [OpenAI-compatible provider](../../specs/provider/0001-openai-compatible.md) | `PROV-001`..`PROV-005`, `PROV-010`..`PROV-022` | accepted | 1 |
 | [DeepSeek profile](../../specs/provider/0002-deepseek.md) | none (profile) | accepted | 1 |
 | [OpenRouter profile](../../specs/provider/0003-openrouter.md) | none (profile) | accepted | 1 |
 | [Authentication](../../specs/provider/0004-auth.md) | `PROV-030`..`PROV-034` | accepted | 1 |
 | [Tool contract](../../specs/tools/0001-tool-contract.md) | `TOOL-001`..`TOOL-008` | accepted | 1 |
 | [Session JSONL v1](../../specs/session/0001-jsonl-format.md) | `SESS-001`..`SESS-009` | accepted | 1 |
-| [Session tree operations](../../specs/session/0002-tree-operations.md) | `SESS-010`..`SESS-023` | implemented | 3 |
-| [Context compaction](../../specs/context/0001-compaction.md) | `CTX-002`..`CTX-005`, `CTX-007` | implemented | 3 |
+| [Session tree operations](../../specs/session/0002-tree-operations.md) | `SESS-010`..`SESS-025` | implemented | 3 |
+| [Context compaction](../../specs/context/0001-compaction.md) | `CTX-001`..`CTX-007` | implemented | 3 |
 | [System prompt](../../specs/prompt/0001-system-prompt.md) | `PRMPT-001`..`PRMPT-008` | accepted | 1 |
 | [CLI surface](../../specs/cli/0001-cli-surface.md) | `CLI-001`..`CLI-007` | accepted | 1 |
 | [JSON events](../../specs/protocol/0001-json-events.md) | `PROTO-001`, `PROTO-002`, `PROTO-004`, `PROTO-005` | accepted | 1 |
 | [Permissions](../../specs/security/0001-permissions.md) | `SEC-001`..`SEC-006` | accepted | 1 |
 | [Interactive terminal](../../specs/tui/0001-layout-and-rendering.md) | `TUI-001`..`TUI-010` | accepted | 2 |
 | [Session controls and picker](../../specs/tui/0002-session-controls.md) | `TUI-011`..`TUI-013` | implemented | 3 |
+| [Command palette and live pickers](../../specs/tui/0003-command-palette.md) | `TUI-014`..`TUI-017` | implemented | 3 |
+| [Permission choices and full access](../../specs/tui/0004-permission-mode.md) | `TUI-018`, `TUI-019` | implemented | 3 |
 
 The full planned index, including Phase 4–7 areas, is in [`PLAN.MD`](../../PLAN.MD) Appendix D.
 

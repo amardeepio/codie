@@ -17,14 +17,23 @@ that major series, with migrations applied on read.
   `--resume` picker with search, sorting, rename, and delete.
 - Manual compaction via `/compact [instructions]` with a fixed summary structure, a tool-call-safe cut point, and
   append-only `compaction` entries.
+- Automatic compaction before a request when the estimated context exceeds the model window minus reserve, plus
+  one-shot overflow recovery using `Agent::resume`.
 - Token estimation (`chars / 4`, images as 4,800 characters) and a context percentage in the footer.
 - Read-only `codie sessions list/show/export` commands.
+- Command palette on `/` with filtering and scrolling; live model, theme, and reasoning pickers; tokens-per-second
+  in the footer.
+- Permission prompts accept `y`/`Y` and `n`/`N` (plus the existing allow-always key), and `Shift+Tab` toggles a
+  visible full-access mode that skips prompts for the session.
 - Session format v1 is frozen: new `compaction`, `branch_summary`, `context_edit`, `label`, `custom`, and `leaf`
   entry types, `parent_session` header provenance, and tests for round-tripping and refusing unknown versions.
-- Property test for random append/branch/compaction sequences and a 10,000-entry resume benchmark.
+- Property test for random append/branch/compaction sequences, a 10,000-entry resume benchmark, and a SIGKILL
+  mid-stream recovery test.
+- Read-time migration harness with a monotonic table and unsupported-version refusal.
 
 ### Changed
 
+- `Agent::resume` continues a transcript without duplicating the user prompt, used by overflow recovery.
 - `Session::set_leaf` now appends a persisted leaf marker, so resuming lands on the selected branch.
 - `Session::projection` honors compaction, branch summaries, and context edits, and always retains the system
   message.

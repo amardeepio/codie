@@ -83,14 +83,14 @@ Status: in progress.
 - Tree sessions with persisted branch markers, `--continue`, `--resume`, `--session`, `--fork`, `--clone`, and
   `--no-session`.
 - `/tree`, `/fork`, `/clone`, `/name`, `/export`, and an interactive picker with search, sort, rename, and delete.
-- Compaction with a fixed summary structure, a safe cut point, and a retained recent tail.
+- Compaction with a fixed summary structure, a safe cut point, a retained recent tail, automatic threshold
+  triggering, and one-shot overflow recovery.
 - Token estimation and a context percentage in the footer.
 - Read-only `codie sessions list/show/export`.
-- Session format v1 freeze, a migration/refusal test, a property test for tree operations, and a 10k-entry
-  resume benchmark.
+- Session format v1 freeze, a read-time migration harness, a property test for tree operations, a 10k-entry
+  resume benchmark, and a SIGKILL mid-stream recovery test.
 
-Remaining exit work: automatic threshold compaction (`CTX-001`) and one-shot overflow recovery (`CTX-006`), then
-the `0.3.0` tag and release notes.
+Remaining exit work: the `0.3.0` version bump, tag, and release notes after maintainer review.
 
 Exit criteria: random sequences of appends, branches, edits, and compactions reopen to the same projection;
 resume after `kill -9` loses at most the in-flight partial message; 10k-entry resume is under 150 ms; the format

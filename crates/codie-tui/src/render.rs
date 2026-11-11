@@ -33,8 +33,90 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
     draw_footer(frame, chunks[2], app);
 
     if let Some(overlay) = &app.overlay {
-        draw_overlay(frame, area, overlay, app);
+        match overlay {
+            Overlay::List(list) => draw_list_overlay(frame, area, list, app),
+            _ => draw_overlay(frame, area, overlay, app),
+        }
     }
+}
+
+fn draw_list_overlay(frame: &mut Frame<'_>, area: Rect, list: &crate::app::ChoiceList, app: &App) {
+    let palette = app.theme.palette;
+    let width = area.width.saturating_mul(4) / 5;
+    let height = area.height.saturating_mul(3) / 5;
+    let rect = centered(area, width.max(30), height.max(8));
+    frame.render_widget(Clear, rect);
+
+    let block = Block::bordered()
+        .title(list.title.clone())
+        .border_style(Style::default().fg(palette.accent));
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+
+    let visible_height = usize::from(inner.height).saturating_sub(4).max(1);
+    let offset = if list.selected >= visible_height {
+        list.selected + 1 - visible_height
+    } else {
+        0
+    };
+
+    let query = if list.query.is_empty() {
+        "—".to_owned()
+    } else {
+        list.query.clone()
+    };
+    let mut lines = vec![
+        Line::from(Span::styled(
+            format!("filter: {query}"),
+            Style::default().fg(palette.muted),
+        )),
+        Line::default(),
+    ];
+    if list.visible.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No matches.",
+            Style::default().fg(palette.muted),
+        )));
+    }
+    for (position, index) in list
+        .visible
+        .iter()
+        .enumerate()
+        .skip(offset)
+        .take(visible_height)
+    {
+        let Some(item) = list.items.get(*index) else {
+            continue;
+        };
+        let selected = position == list.selected;
+        let marker = if selected { "› " } else { "  " };
+        let style = if selected {
+            Style::default()
+                .fg(palette.accent)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(palette.foreground)
+        };
+        let mut spans = vec![Span::styled(format!("{marker}{}", item.label), style)];
+        if !item.detail.is_empty() {
+            spans.push(Span::styled(
+                format!("  {}", item.detail),
+                Style::default().fg(palette.muted),
+            ));
+        }
+        lines.push(Line::from(spans));
+    }
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        list.hint.clone(),
+        Style::default().fg(palette.muted),
+    )));
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .style(Style::default().fg(palette.foreground)),
+        inner,
+    );
 }
 
 fn draw_transcript(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
@@ -72,7 +154,7 @@ fn transcript_lines(app: &App, width: u16) -> Vec<Line<'static>> {
                 .add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(Span::styled(
-            "Type a prompt, or /help for commands. Enter submits; Shift+Enter adds a line.",
+            "Type a prompt, or press / for the command palette.",
             Style::default().fg(palette.muted),
         )));
         lines.push(Line::default());
@@ -227,12 +309,18 @@ fn draw_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
     );
 
     let mut right = format!("{} · {}", app.footer.model, app.footer.thinking);
+    if app.auto_approve {
+        right.push_str(" · FULL ACCESS");
+    }
     if app.footer.tokens > 0 {
         right.push_str(&format!(
             " · {} tok · ${:.4}",
             app.footer.tokens,
             app.footer.cost as f64 / 1_000_000_000.0
         ));
+    }
+    if let Some(rate) = app.footer.tokens_per_sec {
+        right.push_str(&format!(" · {rate:.0} t/s"));
     }
     if let Some(percent) = app.footer.context_percent {
         right.push_str(&format!(" · {percent}% ctx"));
@@ -271,6 +359,7 @@ fn draw_overlay(frame: &mut Frame<'_>, area: Rect, overlay: &Overlay, app: &App)
                 "/clone             clone this session",
                 "/name [text]       set or clear the name",
                 "/export [path]     export JSONL",
+                "/theme [name]      choose a theme",
                 "/model [id]        change the model",
                 "/thinking [level]  change reasoning effort",
                 "/compact [note]    compact the context",
@@ -282,7 +371,7 @@ fn draw_overlay(frame: &mut Frame<'_>, area: Rect, overlay: &Overlay, app: &App)
         Overlay::Permission(prompt) => (
             " permission ",
             format!(
-                "Allow `{}`?\n\n{}\n\n[a] allow once   [A] always   [d] deny",
+                "Allow `{}`?\n\n{}\n\n[y] yes   [n] no   [A] always allow   [Shift+Tab] full access (no prompts)",
                 prompt.tool,
                 serde_json::to_string_pretty(&prompt.arguments).unwrap_or_default()
             ),
@@ -302,6 +391,7 @@ fn draw_overlay(frame: &mut Frame<'_>, area: Rect, overlay: &Overlay, app: &App)
                 .collect::<Vec<_>>()
                 .join("\n"),
         ),
+        Overlay::List(_) => (" list ", String::new()),
         Overlay::Picker(picker) => {
             let mut lines = vec![format!(
                 "search: {}   sort: {}   (↑/↓ select, Enter resume, r rename, d delete, s sort, Esc close)",
@@ -401,6 +491,8 @@ mod tests {
                 model: "deepseek-flash".into(),
             },
             codie_core::ThinkingLevel::Medium,
+            128_000,
+            Vec::new(),
             crate::theme::Theme::load(Some("dark")).unwrap(),
             None,
             Vec::new(),
@@ -478,7 +570,9 @@ mod tests {
         });
         let text = buffer(&mut app);
         assert!(text.contains("permission"));
-        assert!(text.contains("allow once"));
+        assert!(text.contains("[y] yes"));
+        assert!(text.contains("[n] no"));
+        assert!(text.contains("full access"));
         assert!(text.contains("cargo test"));
     }
 }

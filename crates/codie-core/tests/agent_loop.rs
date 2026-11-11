@@ -578,6 +578,30 @@ async fn spec_agent_001_agent_end_is_last() {
 }
 
 // ---------------------------------------------------------------------------
+// AGENT-013: continuation retries without duplicating the prompt
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[spec("AGENT-013")]
+async fn spec_agent_013_resume_continues_without_adding_a_prompt() {
+    let client = Arc::new(FakeClient::new(vec![text("done")]));
+    let agent = Agent::new(client.clone(), toolbox(Vec::new()));
+    let history = vec![
+        Message::system("system prompt", Vec::new()),
+        Message::user("hi"),
+    ];
+
+    let events = collect_run(agent.resume(history, run_config())).await;
+    let (messages, status) = agent_end(&events);
+    assert_eq!(status, RunStatus::Completed);
+    assert_eq!(user_texts(&messages), vec!["hi".to_owned()]);
+    assert_eq!(client.request_count(), 1);
+    let request = &client.requests()[0];
+    assert_eq!(request.len(), 2, "resume must not append a new prompt");
+    assert!(matches!(request[1], Message::User(_)));
+}
+
+// ---------------------------------------------------------------------------
 // AGENT-002: assistant finalized before any tool starts
 // ---------------------------------------------------------------------------
 

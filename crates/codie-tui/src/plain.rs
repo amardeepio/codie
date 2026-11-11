@@ -97,9 +97,13 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
                 Command::Quit => break,
                 Command::Help | Command::Hotkeys => {
                     println!(
-                        "/help /quit /new /session /tree /fork /clone /name /export /model [id] /thinking [level] /compact"
+                        "/help /quit /new /session /tree /fork /clone /name /export /theme /model [id] /thinking [level] /compact"
                     )
                 }
+                Command::Theme(argument) => match argument {
+                    Some(name) => println!("Theme: {name} (full mode only)"),
+                    None => println!("Themes: system, dark, light"),
+                },
                 Command::Model(argument) => {
                     if let Some(model) = argument {
                         options.model.model = model;
@@ -216,6 +220,9 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
                             &history,
                             custom,
                             Some(current.id().to_owned()),
+                            u64::from(options.context_window)
+                                .saturating_sub(crate::compaction::DEFAULT_RESERVE_TOKENS)
+                                .clamp(4_000, 200_000),
                         )
                         .await
                         {
@@ -370,7 +377,7 @@ async fn run_prompt(
 
 async fn resolve_permission(request: PermissionRequest) {
     println!(
-        "\npermission: allow `{}`?\n{}\n[a] once  [A] always  [d] deny",
+        "\npermission: allow `{}`?\n{}\n[y] yes  [n] no  [A] always allow",
         request.tool,
         serde_json::to_string_pretty(&request.arguments).unwrap_or_default()
     );
@@ -378,7 +385,7 @@ async fn resolve_permission(request: PermissionRequest) {
         let mut line = String::new();
         let _ = std::io::stdin().read_line(&mut line);
         match line.trim() {
-            "a" => Decision::Allow,
+            "y" | "Y" | "a" => Decision::Allow,
             "A" => Decision::Always,
             _ => Decision::Deny,
         }

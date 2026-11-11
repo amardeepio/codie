@@ -14,10 +14,14 @@
 #![deny(missing_docs)]
 
 mod entry;
+mod migration;
 mod session;
 mod time;
 
 pub use entry::{Entry, HeaderType, SESSION_FORMAT_VERSION, SessionHeader};
+pub use migration::{
+    MIGRATIONS, MIN_SUPPORTED_VERSION, Migration, is_supported, migrate_value, validate_table,
+};
 pub use session::{Session, SessionSummary, TreeEntry};
 
 /// Returns the session format version written by this build.

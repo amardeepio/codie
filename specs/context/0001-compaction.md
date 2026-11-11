@@ -4,7 +4,7 @@ title: Context compaction and token estimates
 status: implemented
 version: 1.0.0
 owners: ["@codie-maintainers"]
-requirements: ["CTX-002", "CTX-003", "CTX-004", "CTX-005", "CTX-007"]
+requirements: ["CTX-001", "CTX-002", "CTX-003", "CTX-004", "CTX-005", "CTX-006", "CTX-007"]
 ---
 
 # Context
@@ -14,10 +14,14 @@ a summary while retaining the append-only file, and token estimates let the UI s
 the limit. This spec covers the estimate, the cut point, the summary shape, append-only persistence, and the
 manual `/compact` command.
 
-Automatic threshold triggering (`CTX-001`) and one-shot overflow recovery (`CTX-006`) are deferred to the next
-Phase 3 increment; they are not claimed here.
+Automatic threshold triggering (`CTX-001`) and one-shot overflow recovery (`CTX-006`) share the same summary
+and persistence path as manual compaction.
 
 # Normative behavior
+
+**CTX-001 (MUST)** Before a request, compaction triggers when the estimated history plus prompt exceeds
+`context_window - 16,384`; the caller compacts first and then sends the original prompt.
+Verification: `crates/codie-tui/src/app.rs::spec_ctx_001_threshold_starts_compaction_before_a_request`
 
 **CTX-002 (MUST)** Token estimation uses `chars / 4` for text, thinking, and tool-call JSON, counts an image as
 4,800 characters, and reports a context percentage capped at 100. It is never used for billing.
@@ -36,6 +40,11 @@ Verification: `crates/codie-tui/src/compaction.rs::spec_ctx_004_summary_prompt_h
 `tokens_before`, optional host details, and optional usage. The projection replaces the hidden prefix with the
 summary after the system message. An unknown or non-message first kept entry is refused.
 Verification: `crates/codie-session/tests/compaction.rs::spec_ctx_005_compaction_is_append_only_and_rewrites_the_projection`
+
+**CTX-006 (MUST)** After one terminal context-overflow error, the caller compacts and resumes the same
+transcript without duplicating the user prompt, hiding the failed assistant message with a context edit. A
+second overflow in the same turn is surfaced, not retried.
+Verification: `crates/codie-tui/src/app.rs::spec_ctx_006_overflow_recovery_runs_once_and_hides_the_error`
 
 **CTX-007 (MUST)** Manual `/compact [instructions]` records the user's instructions for the compaction request
 and refuses to start one when no session is active.
@@ -61,8 +70,8 @@ so only the newest summary is model-visible.
 
 # Non-goals
 
-Automatic threshold compaction and one-shot overflow recovery are deferred. HTML export and RPC compaction are
-Phase 5. Summary quality evaluation is not specified.
+HTML export and RPC compaction are Phase 5. Summary quality evaluation is not specified. Automatic compaction and
+recovery apply to interactive and headless callers that persist a session.
 
 # Security and performance
 
