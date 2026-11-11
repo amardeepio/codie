@@ -1,8 +1,8 @@
 ---
 id: SPEC-TUI-001
 title: Interactive terminal interface
-status: draft
-version: 0.1.0
+status: accepted
+version: 1.0.0
 owners: ["@codie-maintainers"]
 requirements: ["TUI-001", "TUI-002", "TUI-003", "TUI-004", "TUI-005", "TUI-006", "TUI-007", "TUI-008", "TUI-009", "TUI-010"]
 ---
@@ -10,9 +10,7 @@ requirements: ["TUI-001", "TUI-002", "TUI-003", "TUI-004", "TUI-005", "TUI-006",
 # Context
 
 Phase 2 adds the primary human experience: an alternate-screen transcript with a fixed editor dock, streaming
-assistant output, tool blocks, a footer, themes, slash commands, steering, and permission prompts. This spec is
-**draft** while Phase 2 lands; requirements marked below as implemented have named tests today, and the
-remaining ones are scheduled for this phase.
+assistant output, tool blocks, a footer, themes, slash commands, steering, keybindings, and permission prompts.
 
 # Requirements
 
@@ -34,17 +32,17 @@ Verification: `crates/codie-tui/src/transcript.rs::tool_blocks_transition_and_ex
 **TUI-006 (MUST)** The footer shows the working directory, git branch when present, model, thinking level, tokens, cost, context estimate, and session identifier.
 Verification: `crates/codie-tui/src/render.rs::empty_state_and_footer_render`
 
-**TUI-007 (MUST)** Keybindings are configurable in `keybindings.toml`; unbinding is supported with an empty key list. (Scheduled: the default keymap is implemented, the config file is not yet loaded.)
-Verification: `crates/codie-tui/tests/keybindings.rs::spec_tui_007_keybindings_load_and_unbind`
+**TUI-007 (MUST)** Keybindings are configurable in `keybindings.toml`; unbinding is supported with an empty key list, and unknown actions or keys are rejected with an error.
+Verification: `crates/codie-tui/src/keybindings.rs::spec_tui_007_default_bindings_and_unbind`
 
-**TUI-008 (MUST)** Themes are declarative TOML files with semantic tokens; `system`, `dark`, and `light` are built in, and the body text must meet a 4.5:1 contrast ratio.
-Verification: `crates/codie-tui/src/theme.rs::custom_theme_is_parsed`
+**TUI-008 (MUST)** Themes are declarative TOML files with semantic tokens; `system`, `dark`, and `light` are built in, the body text must meet a 4.5:1 contrast ratio, and a theme file reloads when it changes.
+Verification: `crates/codie-tui/src/theme.rs::spec_tui_008_theme_hot_reload`
 
-**TUI-009 (MUST)** A panic or terminal error restores raw mode, leaves the alternate screen, and shows the cursor before the error is printed. (Scheduled: the guard and panic hook are implemented; the PTY integration test is pending.)
-Verification: `crates/codie-tui/tests/restore.rs::spec_tui_009_terminal_restored_on_panic`
+**TUI-009 (MUST)** A panic, SIGINT, SIGTERM, or SIGHUP restores raw mode, leaves the alternate screen, and shows the cursor before the process exits.
+Verification: `crates/codie-cli/tests/pty.rs::spec_tui_009_terminal_restored_on_signals`
 
 **TUI-010 (MUST)** `--tui-mode plain` emits append-only text with no alternate screen and no cursor movement.
-Verification: `crates/codie-tui/tests/plain_mode.rs::spec_tui_010_plain_mode_is_append_only`
+Verification: `crates/codie-cli/tests/pty.rs::spec_tui_010_plain_mode_is_append_only`
 
 # Steering and permissions
 
@@ -64,8 +62,13 @@ Verification: `crates/codie-tui/tests/plain_mode.rs::spec_tui_010_plain_mode_is_
 The TUI never prints an API key. Tool output is bounded per block. Rendering happens at most once per tick
 (about 30 frames per second) and uses ratatui's cell diffing.
 
-# Out of scope for this draft
+# Performance
 
-- Keybinding file loading, hot reload, and `/hotkeys` customization.
-- OSC 8 hyperlinks and full syntax grammars.
-- PTY-based terminal-restore and 5k-token-per-second benchmarks.
+`cargo bench -p codie-tui --bench streaming` simulates 5,000 tokens over 60 frames. The release build must stay
+inside one second total and 16.7 ms per frame; the recorded baseline is 24–35 ms total (0.4–0.6 ms per frame,
+over 140k tokens/s).
+
+# Out of scope
+
+- OSC 8 hyperlinks and full language grammars; code fences use lightweight keyword highlighting.
+- A terminal-emulator matrix; restore is verified through PTY integration tests.

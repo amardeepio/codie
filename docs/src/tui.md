@@ -26,7 +26,18 @@ Phase 2 adds the primary human experience. Running `codie` with a terminal attac
 | `Ctrl+K` / `Ctrl+Y` | Kill to end of line / yank |
 | `Ctrl+P` / `Ctrl+N` | Prompt history |
 | `PgUp` / `PgDn`, `Esc` | Scroll transcript, return to the bottom |
-| `Tab` | Complete a slash command |
+| `Tab` | Complete a slash command or an `@file` path |
+
+Keybindings can be overridden in `~/.config/codie/keybindings.toml`:
+
+```toml
+[keys]
+submit = ["enter"]
+newline = ["shift+enter", "ctrl+j"]
+quit = []
+```
+
+An empty list unbinds the action; unknown actions and keys are rejected at startup.
 
 ## Slash commands
 
@@ -57,5 +68,10 @@ tool = "#bb9af7"
 error = "#f7768e"
 ```
 
-Custom themes must meet a 4.5:1 body contrast ratio. `system` follows `COLORFGBG`, with `CODIE_THEME` as an
-override.
+Custom themes must meet a 4.5:1 body contrast ratio. A theme file reloads within a second of being edited.
+`system` follows `COLORFGBG`, with `CODIE_THEME` as an override.
+
+## Performance
+
+`cargo bench -p codie-tui --bench streaming` simulates 5,000 tokens over 60 frames. The accepted baseline is
+under 40 ms total and about 0.5 ms per frame, well inside the 16.7 ms frame budget.

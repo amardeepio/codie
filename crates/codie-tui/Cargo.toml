@@ -29,6 +29,7 @@ similar.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 toml.workspace = true
+tracing.workspace = true
 unicode-segmentation.workspace = true
 unicode-width.workspace = true
 
@@ -36,3 +37,7 @@ unicode-width.workspace = true
 codie-testkit.workspace = true
 insta.workspace = true
 tempfile.workspace = true
+
+[[bench]]
+name = "streaming"
+harness = false

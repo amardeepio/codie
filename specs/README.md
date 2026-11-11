@@ -122,7 +122,7 @@ snake_case so failures are readable without the macro.
 | [`SPEC-CLI-001`](cli/0001-cli-surface.md) — CLI surface | `CLI-001`..`CLI-007` | accepted | 1 |
 | [`SPEC-PROTO-001`](protocol/0001-json-events.md) — JSON events | `PROTO-001`, `PROTO-002`, `PROTO-004`, `PROTO-005` | accepted | 1 |
 | [`SPEC-SEC-001`](security/0001-permissions.md) — Permissions | `SEC-001`..`SEC-006` | accepted | 1 |
-| [`SPEC-TUI-001`](tui/0001-layout-and-rendering.md) — Interactive terminal | `TUI-001`..`TUI-010` | draft | 2 |
+| [`SPEC-TUI-001`](tui/0001-layout-and-rendering.md) — Interactive terminal | `TUI-001`..`TUI-010` | accepted | 2 |
 
 `PROTO-003`/`PROTO-006` (RPC) are reserved for Phase 5. `SEC-007`/`SEC-008` (project trust and approval
 prompts) are reserved for Phase 4. The full planned index is in `PLAN.MD` Appendix D.

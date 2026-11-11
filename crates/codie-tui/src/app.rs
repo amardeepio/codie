@@ -16,7 +16,7 @@ use codie_tools::Registry;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{DisableBracketedPaste, EnableBracketedPaste, Event};
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -26,6 +26,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::commands::{Command, parse as parse_command, parse_thinking};
 use crate::editor::Editor;
+use crate::keybindings::{ActionId, Bindings};
 use crate::permissions::{Decision, PermissionBroker, PermissionRequest, PermissionToolbox};
 use crate::plain;
 use crate::render;
@@ -73,6 +74,8 @@ pub struct TuiOptions {
     pub signal: Arc<std::sync::atomic::AtomicI32>,
     /// Tool registry selected by the CLI.
     pub registry: Arc<Registry>,
+    /// Optional keybindings file.
+    pub keybindings: Option<PathBuf>,
 }
 
 /// Live status shown in the editor border.
@@ -172,12 +175,18 @@ pub struct App {
     pub session: Option<Session>,
     /// Session root for `/new`.
     session_dir: PathBuf,
+    /// Working directory for file completion.
+    cwd: PathBuf,
     /// Pending permission prompts.
     permissions: VecDeque<PermissionPrompt>,
     /// Exit code from a signal.
     pub signal: Arc<std::sync::atomic::AtomicI32>,
     /// Cancellation token for the current run.
     pub cancel: tokio_util::sync::CancellationToken,
+    /// Active keymap.
+    pub bindings: Bindings,
+    /// Optional watcher for a TOML theme file.
+    theme_watcher: Option<crate::theme::ThemeWatcher>,
 }
 
 impl App {
@@ -192,9 +201,14 @@ impl App {
         history: Vec<Message>,
         session_dir: PathBuf,
         signal: Arc<std::sync::atomic::AtomicI32>,
+        bindings: Bindings,
     ) -> Self {
         let cwd = cwd.into();
         let git_branch = git_branch(&cwd);
+        let binding_cwd = cwd.clone();
+        let theme_watcher = std::path::Path::new(&theme.name)
+            .is_file()
+            .then(|| crate::theme::ThemeWatcher::new(&theme.name));
         let session_id = session.as_ref().map(|session| session.id().to_owned());
         Self {
             transcript: Transcript::new(),
@@ -217,92 +231,37 @@ impl App {
             history,
             session,
             session_dir,
+            cwd: binding_cwd,
             permissions: VecDeque::new(),
             signal,
             cancel: tokio_util::sync::CancellationToken::new(),
+            bindings,
+            theme_watcher,
         }
     }
 
     /// Handles one terminal key event.
     pub fn handle_key(&mut self, key: KeyEvent) -> Action {
+        if key.kind == KeyEventKind::Release {
+            return Action::None;
+        }
         if self.overlay.is_some() {
             return self.handle_overlay_key(key);
         }
 
+        if let Some(action) = self.bindings.action_for(&key) {
+            return self.dispatch_action(action);
+        }
+
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
-        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-
         match key.code {
-            KeyCode::Char('c') if control => {
-                if self.status == Status::Streaming {
-                    self.status = Status::Waiting;
-                    Action::Cancel
-                } else if self.editor.is_empty() {
-                    Action::Quit
-                } else {
-                    self.editor.clear();
-                    Action::None
-                }
-            }
-            KeyCode::Char('d') if control => {
-                if self.editor.is_empty() {
-                    Action::Quit
-                } else {
-                    self.editor.delete_forward();
-                    Action::None
-                }
-            }
-            KeyCode::Char('o') if control => {
-                self.transcript.toggle_last_tool();
-                Action::None
-            }
-            KeyCode::Char('z') if control && shift => {
-                self.editor.redo();
-                Action::None
-            }
-            KeyCode::Char('z') if control => {
-                self.editor.undo();
-                Action::None
-            }
-            KeyCode::Char('k') if control => {
-                self.editor.kill_to_end();
-                Action::None
-            }
-            KeyCode::Char('y') if control => {
-                self.editor.yank();
-                Action::None
-            }
-            KeyCode::Char('p') if control => {
-                self.editor.history_previous();
-                Action::None
-            }
-            KeyCode::Char('n') if control => {
-                self.editor.history_next();
-                Action::None
-            }
-            KeyCode::Char('j') if control => {
-                self.editor.insert_newline();
-                Action::None
-            }
             KeyCode::Char('l') if control => {
                 self.editor.clear();
                 Action::None
             }
-            KeyCode::Enter if alt => Action::FollowUp(self.editor.submit()),
-            KeyCode::Enter if shift => {
-                self.editor.insert_newline();
-                Action::None
-            }
-            KeyCode::Enter => {
-                let text = self.editor.submit();
-                if text.trim().is_empty() {
-                    return Action::None;
-                }
-                Action::Submit(text)
-            }
-            KeyCode::Tab => {
-                self.complete();
+            KeyCode::Char(character) if !control && !alt => {
+                self.editor.insert_char(character);
                 Action::None
             }
             KeyCode::Backspace => {
@@ -337,23 +296,89 @@ impl App {
                 self.editor.end();
                 Action::None
             }
-            KeyCode::PageUp => {
-                self.transcript.scroll_up(8);
-                Action::None
-            }
-            KeyCode::PageDown => {
-                self.transcript.scroll_down(8);
-                Action::None
-            }
             KeyCode::Esc => {
                 self.transcript.scroll_to_bottom();
                 Action::None
             }
-            KeyCode::Char(character) => {
-                self.editor.insert_char(character);
+            _ => Action::None,
+        }
+    }
+
+    fn dispatch_action(&mut self, action: ActionId) -> Action {
+        match action {
+            ActionId::Submit => {
+                let text = self.editor.submit();
+                if text.trim().is_empty() {
+                    Action::None
+                } else {
+                    Action::Submit(text)
+                }
+            }
+            ActionId::Newline => {
+                self.editor.insert_newline();
                 Action::None
             }
-            _ => Action::None,
+            ActionId::FollowUp => Action::FollowUp(self.editor.submit()),
+            ActionId::Cancel => {
+                if self.status == Status::Streaming {
+                    self.status = Status::Waiting;
+                    Action::Cancel
+                } else if self.editor.is_empty() {
+                    Action::Quit
+                } else {
+                    self.editor.clear();
+                    Action::None
+                }
+            }
+            ActionId::Quit => Action::Quit,
+            ActionId::ExpandTool => {
+                self.transcript.toggle_last_tool();
+                Action::None
+            }
+            ActionId::Undo => {
+                self.editor.undo();
+                Action::None
+            }
+            ActionId::Redo => {
+                self.editor.redo();
+                Action::None
+            }
+            ActionId::KillLine => {
+                self.editor.kill_to_end();
+                Action::None
+            }
+            ActionId::Yank => {
+                self.editor.yank();
+                Action::None
+            }
+            ActionId::HistoryPrevious => {
+                self.editor.history_previous();
+                Action::None
+            }
+            ActionId::HistoryNext => {
+                self.editor.history_next();
+                Action::None
+            }
+            ActionId::ScrollUp => {
+                self.transcript.scroll_up(8);
+                Action::None
+            }
+            ActionId::ScrollDown => {
+                self.transcript.scroll_down(8);
+                Action::None
+            }
+            ActionId::Complete => {
+                self.complete();
+                Action::None
+            }
+            ActionId::Help => {
+                self.overlay = Some(Overlay::Help);
+                Action::None
+            }
+            ActionId::Hotkeys => {
+                self.overlay = Some(Overlay::Hotkeys);
+                Action::None
+            }
         }
     }
 
@@ -482,15 +507,50 @@ impl App {
     }
 
     fn complete(&mut self) {
-        let text = self.editor.text();
-        let first_line = text.lines().next().unwrap_or_default();
-        if first_line.starts_with('/') && !first_line.contains(' ') {
-            let matches = crate::commands::completions(first_line);
-            if let Some(first) = matches.first() {
-                let suffix = text.strip_prefix(first_line).unwrap_or_default().to_owned();
-                self.editor.set_text(&format!("{first}{suffix}"));
+        let cursor = self.editor.cursor();
+        let line = self
+            .editor
+            .lines()
+            .get(cursor.row)
+            .cloned()
+            .unwrap_or_default();
+        let col = cursor.col.min(line.len());
+        let before = &line[..col];
+        let start = before.rfind(char::is_whitespace).map_or(0, |index| {
+            index + before[index..].chars().next().map_or(1, char::len_utf8)
+        });
+        let token = &before[start..];
+
+        if let Some(prefix) = token.strip_prefix('@') {
+            if let Some(path) = self.complete_file(prefix) {
+                self.editor.replace_token(start, &format!("@{path}"));
+            }
+            return;
+        }
+
+        if token.starts_with('/') {
+            if let Some(command) = crate::commands::completions(token).first() {
+                self.editor.replace_token(start, command);
             }
         }
+    }
+
+    fn complete_file(&self, prefix: &str) -> Option<String> {
+        let mut matches = ignore::WalkBuilder::new(&self.cwd)
+            .hidden(true)
+            .git_ignore(true)
+            .build()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
+            .filter_map(|entry| {
+                let path = entry.path().strip_prefix(&self.cwd).ok()?;
+                let display = path.to_string_lossy().replace('\\', "/");
+                display.starts_with(prefix).then_some(display)
+            })
+            .take(200)
+            .collect::<Vec<_>>();
+        matches.sort();
+        matches.into_iter().next()
     }
 
     /// Appends a finalized message to the active session.
@@ -568,6 +628,7 @@ async fn run_full(mut options: TuiOptions) -> Result<u8> {
         history.clone(),
         options.session_dir.clone(),
         Arc::clone(&options.signal),
+        Bindings::load(options.keybindings.as_deref())?,
     );
 
     if !matches!(history.first(), Some(Message::System(_))) {
@@ -616,7 +677,12 @@ fn setup_terminal(mode: TuiRunMode) -> Result<Terminal<CrosstermBackend<std::io:
 fn restore_terminal() {
     let _ = disable_raw_mode();
     let mut stdout = std::io::stdout();
-    let _ = execute!(stdout, DisableBracketedPaste, LeaveAlternateScreen);
+    let _ = execute!(
+        stdout,
+        DisableBracketedPaste,
+        LeaveAlternateScreen,
+        ratatui::crossterm::cursor::Show
+    );
 }
 
 fn install_panic_hook() {
@@ -663,7 +729,11 @@ fn spawn_input() -> mpsc::UnboundedReceiver<Input> {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{SignalKind, signal};
-        for (kind, code) in [(SignalKind::terminate(), 143), (SignalKind::hangup(), 129)] {
+        for (kind, code) in [
+            (SignalKind::interrupt(), 130),
+            (SignalKind::terminate(), 143),
+            (SignalKind::hangup(), 129),
+        ] {
             let sender = sender.clone();
             tokio::spawn(async move {
                 if let Ok(mut stream) = signal(kind)
@@ -749,6 +819,15 @@ async fn event_loop(
             }
             _ = tick.tick() => {
                 app.tick = app.tick.wrapping_add(1);
+                if app.tick % 30 == 0
+                    && let Some(theme) = app
+                        .theme_watcher
+                        .as_mut()
+                        .and_then(crate::theme::ThemeWatcher::poll)
+                {
+                    app.theme = theme;
+                    dirty = true;
+                }
                 if app.status == Status::Streaming {
                     dirty = true;
                 }
@@ -939,6 +1018,7 @@ mod tests {
             Vec::new(),
             PathBuf::from("."),
             Arc::new(std::sync::atomic::AtomicI32::new(0)),
+            Bindings::default(),
         )
     }
 
@@ -986,6 +1066,40 @@ mod tests {
             app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
             Action::Quit
         );
+    }
+
+    #[test]
+    #[spec("TUI-003")]
+    fn spec_tui_003_file_and_command_completion() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("hello.txt"), "hi").unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/main.rs"), "fn main() {}").unwrap();
+
+        let mut app = App::new(
+            dir.path(),
+            ModelRef {
+                api: "openai-completions".into(),
+                provider: "deepseek".into(),
+                model: "deepseek-flash".into(),
+            },
+            ThinkingLevel::Medium,
+            Theme::load(Some("dark")).unwrap(),
+            None,
+            Vec::new(),
+            dir.path().join("sessions"),
+            Arc::new(std::sync::atomic::AtomicI32::new(0)),
+            Bindings::default(),
+        );
+
+        app.editor.insert_str("@hel");
+        app.handle_key(key(KeyCode::Tab));
+        assert_eq!(app.editor.text(), "@hello.txt");
+
+        app.editor.clear();
+        app.editor.insert_str("/he");
+        app.handle_key(key(KeyCode::Tab));
+        assert_eq!(app.editor.text(), "/help");
     }
 
     #[test]

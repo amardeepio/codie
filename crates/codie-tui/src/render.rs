@@ -273,22 +273,7 @@ fn draw_overlay(frame: &mut Frame<'_>, area: Rect, overlay: &Overlay, app: &App)
             ]
             .join("\n"),
         ),
-        Overlay::Hotkeys => (
-            " keys ",
-            [
-                "Enter          submit (steer while streaming)",
-                "Alt+Enter      queue a follow-up",
-                "Shift+Enter    insert a newline",
-                "Ctrl+J         insert a newline",
-                "Ctrl+C         cancel the run, then quit",
-                "Ctrl+O         expand the last tool block",
-                "Ctrl+Z / Y     undo / yank",
-                "Ctrl+P / N     prompt history",
-                "PgUp / PgDn    scroll transcript",
-                "Esc            back to the bottom",
-            ]
-            .join("\n"),
-        ),
+        Overlay::Hotkeys => (" keys ", app.bindings.describe()),
         Overlay::Permission(prompt) => (
             " permission ",
             format!(
@@ -358,6 +343,7 @@ mod tests {
             Vec::new(),
             "/tmp/sessions".into(),
             std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
+            crate::keybindings::Bindings::default(),
         );
         app.footer = Footer {
             cwd: "/tmp/project".into(),

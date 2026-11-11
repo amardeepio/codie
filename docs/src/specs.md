@@ -71,7 +71,7 @@ snake-case requirement ID so failures are readable.
 | [CLI surface](../../specs/cli/0001-cli-surface.md) | `CLI-001`..`CLI-007` | accepted | 1 |
 | [JSON events](../../specs/protocol/0001-json-events.md) | `PROTO-001`, `PROTO-002`, `PROTO-004`, `PROTO-005` | accepted | 1 |
 | [Permissions](../../specs/security/0001-permissions.md) | `SEC-001`..`SEC-006` | accepted | 1 |
-| [Interactive terminal](../../specs/tui/0001-layout-and-rendering.md) | `TUI-001`..`TUI-010` | draft | 2 |
+| [Interactive terminal](../../specs/tui/0001-layout-and-rendering.md) | `TUI-001`..`TUI-010` | accepted | 2 |
 
 The full planned index, including Phase 4–7 areas, is in [`PLAN.MD`](../../PLAN.MD) Appendix D.
 

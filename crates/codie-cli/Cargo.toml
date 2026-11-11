@@ -40,6 +40,7 @@ assert_cmd.workspace = true
 codie-testkit.workspace = true
 insta.workspace = true
 jsonschema.workspace = true
+portable-pty = "0.9"
 predicates.workspace = true
 tempfile.workspace = true
 wiremock.workspace = true

@@ -118,6 +118,52 @@ impl Theme {
     }
 }
 
+/// Watches a TOML theme file and reloads it when its modification time changes.
+#[derive(Debug, Clone)]
+pub struct ThemeWatcher {
+    path: std::path::PathBuf,
+    modified: Option<std::time::SystemTime>,
+}
+
+impl ThemeWatcher {
+    /// Creates a watcher for `path`.
+    #[must_use]
+    pub fn new(path: impl Into<std::path::PathBuf>) -> Self {
+        let path = path.into();
+        let modified = std::fs::metadata(&path)
+            .and_then(|metadata| metadata.modified())
+            .ok();
+        Self { path, modified }
+    }
+
+    /// Returns the reloaded theme when the file changed and still parses.
+    ///
+    /// Invalid edits are rejected and the previous theme stays active.
+    #[must_use]
+    pub fn poll(&mut self) -> Option<Theme> {
+        let modified = std::fs::metadata(&self.path)
+            .and_then(|metadata| metadata.modified())
+            .ok()?;
+        if self.modified == Some(modified) {
+            return None;
+        }
+        self.modified = Some(modified);
+        match Theme::load(Some(&self.path.display().to_string())) {
+            Ok(theme) => Some(theme),
+            Err(error) => {
+                tracing::warn!(%error, "theme reload failed; keeping the previous theme");
+                None
+            }
+        }
+    }
+
+    /// Returns the watched path.
+    #[must_use]
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
 fn system_palette() -> Palette {
     // `COLORFGBG` ends with the terminal background index; 7 and above are
     // normally light. `CODIE_THEME` overrides detection for unusual terminals.
@@ -266,6 +312,23 @@ mod tests {
                 theme.body_contrast()
             );
         }
+    }
+
+    #[test]
+    #[spec("TUI-008")]
+    fn spec_tui_008_theme_hot_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("theme.toml");
+        std::fs::write(&path, "accent = \"#ff0000\"\n").unwrap();
+        let mut watcher = ThemeWatcher::new(&path);
+        assert!(
+            watcher.poll().is_none(),
+            "an unchanged file must not reload"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&path, "accent = \"#00ff00\"\n").unwrap();
+        let theme = watcher.poll().expect("the changed theme reloads");
+        assert_eq!(theme.palette.accent, Color::Rgb(0, 255, 0));
     }
 
     #[test]
