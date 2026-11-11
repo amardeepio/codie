@@ -361,6 +361,8 @@ pub enum Action {
     FollowUp(String),
     /// Cancel the current run.
     Cancel,
+    /// Toggle automatic approval for mutating tools.
+    ToggleAutoApprove,
     /// Quit the app.
     Quit,
 }
@@ -381,6 +383,8 @@ pub struct App {
     pub overlay: Option<Overlay>,
     /// True when the app should exit.
     pub should_quit: bool,
+    /// True when mutating tools run without a prompt.
+    pub auto_approve: bool,
     /// Animation tick.
     pub tick: u64,
     /// Current model identity.
@@ -461,6 +465,7 @@ impl App {
             status: Status::Idle,
             overlay: None,
             should_quit: false,
+            auto_approve: false,
             tick: 0,
             model,
             thinking,
@@ -488,6 +493,9 @@ impl App {
     pub fn handle_key(&mut self, key: KeyEvent) -> Action {
         if key.kind == KeyEventKind::Release {
             return Action::None;
+        }
+        if key.code == KeyCode::BackTab {
+            return self.dispatch_action(ActionId::ToggleAutoApprove);
         }
         if self.overlay.is_some() {
             return self.handle_overlay_key(key);
@@ -627,6 +635,10 @@ impl App {
                 self.overlay = Some(Overlay::Hotkeys);
                 Action::None
             }
+            ActionId::ToggleAutoApprove => {
+                self.auto_approve = !self.auto_approve;
+                Action::ToggleAutoApprove
+            }
         }
     }
 
@@ -649,9 +661,10 @@ impl App {
         }
 
         let decision = match key.code {
-            KeyCode::Char('a') => Some(Decision::Allow),
+            KeyCode::Char('y' | 'Y' | 'a') => Some(Decision::Allow),
             KeyCode::Char('A') => Some(Decision::Always),
-            KeyCode::Char('d') | KeyCode::Esc => Some(Decision::Deny),
+            KeyCode::Char('n' | 'N' | 'd' | 'D') | KeyCode::Esc => Some(Decision::Deny),
+            KeyCode::Enter => Some(Decision::Allow),
             _ => None,
         };
         if let Some(decision) = decision {
@@ -1384,6 +1397,7 @@ async fn run_full(mut options: TuiOptions) -> Result<u8> {
     let registry = Arc::clone(&options.registry);
     let (permission_tx, mut permission_rx) = mpsc::unbounded_channel();
     let broker = PermissionBroker::new(permission_tx, options.auto_allowed.clone());
+    let permission_broker = broker.clone();
     let toolbox: Arc<dyn Toolbox> = Arc::new(PermissionToolbox::new(registry.clone(), broker));
     let agent = Arc::new(Agent::new(
         Arc::clone(&options.client),
@@ -1439,6 +1453,7 @@ async fn run_full(mut options: TuiOptions) -> Result<u8> {
         toolbox,
         options,
         &mut permission_rx,
+        permission_broker,
     )
     .await;
     restore_terminal();
@@ -1537,6 +1552,7 @@ async fn event_loop(
     toolbox: Arc<dyn Toolbox>,
     options: TuiOptions,
     permission_rx: &mut mpsc::UnboundedReceiver<PermissionRequest>,
+    broker: PermissionBroker,
 ) -> Result<u8> {
     let mut input = spawn_input();
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
@@ -1564,6 +1580,19 @@ async fn event_loop(
                         match action {
                             Action::None => {}
                             Action::Quit => break,
+                            Action::ToggleAutoApprove => {
+                                broker.set_auto_approve(app.auto_approve);
+                                if app.auto_approve {
+                                    if matches!(app.overlay, Some(Overlay::Permission(_))) {
+                                        app.resolve_permission(Decision::Allow);
+                                    }
+                                    app.transcript
+                                        .push_info("Full access on: mutating tools run without prompts.");
+                                } else {
+                                    app.transcript
+                                        .push_info("Full access off: mutating tools ask again.");
+                                }
+                            }
                             Action::Cancel => {
                                 app.cancel.cancel();
                                 app.transcript.push_info("Cancelling…");
@@ -2185,6 +2214,47 @@ mod tests {
         app.handle_key(key(KeyCode::Char('a')));
         assert_eq!(answer.blocking_recv().unwrap(), Decision::Allow);
         assert!(app.overlay.is_none());
+    }
+
+    #[test]
+    #[spec("TUI-018")]
+    fn spec_tui_018_permission_prompt_accepts_y_and_n() {
+        let mut app = app();
+        let (reply, answer) = oneshot::channel();
+        app.push_permission(PermissionRequest {
+            tool: "write".to_owned(),
+            arguments: serde_json::json!({"path": "a.txt"}),
+            reply,
+        });
+        app.handle_key(key(KeyCode::Char('y')));
+        assert_eq!(answer.blocking_recv().unwrap(), Decision::Allow);
+        assert!(app.overlay.is_none());
+
+        let (reply, answer) = oneshot::channel();
+        app.push_permission(PermissionRequest {
+            tool: "write".to_owned(),
+            arguments: serde_json::json!({"path": "a.txt"}),
+            reply,
+        });
+        app.handle_key(key(KeyCode::Char('n')));
+        assert_eq!(answer.blocking_recv().unwrap(), Decision::Deny);
+        assert!(app.overlay.is_none());
+    }
+
+    #[test]
+    #[spec("TUI-019")]
+    fn spec_tui_019_shift_tab_toggles_full_access() {
+        let mut app = app();
+        assert_eq!(
+            app.handle_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE)),
+            Action::ToggleAutoApprove
+        );
+        assert!(app.auto_approve);
+        assert_eq!(
+            app.handle_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)),
+            Action::ToggleAutoApprove
+        );
+        assert!(!app.auto_approve);
     }
 
     #[test]

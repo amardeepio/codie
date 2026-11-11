@@ -55,11 +55,13 @@ pub enum ActionId {
     Help,
     /// Show the keybinding reference.
     Hotkeys,
+    /// Toggle automatic approval for mutating tools.
+    ToggleAutoApprove,
 }
 
 impl ActionId {
     /// Every action in display order.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::Submit,
         Self::Newline,
         Self::FollowUp,
@@ -77,6 +79,7 @@ impl ActionId {
         Self::Complete,
         Self::Help,
         Self::Hotkeys,
+        Self::ToggleAutoApprove,
     ];
 
     /// Returns the configuration name.
@@ -100,6 +103,7 @@ impl ActionId {
             Self::Complete => "complete",
             Self::Help => "help",
             Self::Hotkeys => "hotkeys",
+            Self::ToggleAutoApprove => "toggle_auto_approve",
         }
     }
 
@@ -124,6 +128,7 @@ impl ActionId {
             Self::Complete => "complete",
             Self::Help => "help",
             Self::Hotkeys => "keybindings",
+            Self::ToggleAutoApprove => "toggle auto-approve (full access)",
         }
     }
 
@@ -169,6 +174,7 @@ impl Key {
         let code = match name {
             "enter" | "return" => KeyCode::Enter,
             "tab" => KeyCode::Tab,
+            "backtab" | "back_tab" => KeyCode::BackTab,
             "esc" | "escape" => KeyCode::Esc,
             "space" => KeyCode::Char(' '),
             "backspace" => KeyCode::Backspace,
@@ -292,6 +298,7 @@ impl Default for Bindings {
         bind(ActionId::Complete, &["tab"]);
         bind(ActionId::Help, &["f1"]);
         bind(ActionId::Hotkeys, &["f2"]);
+        bind(ActionId::ToggleAutoApprove, &["shift+tab", "backtab"]);
         Self { map }
     }
 }

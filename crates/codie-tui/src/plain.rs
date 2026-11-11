@@ -377,7 +377,7 @@ async fn run_prompt(
 
 async fn resolve_permission(request: PermissionRequest) {
     println!(
-        "\npermission: allow `{}`?\n{}\n[a] once  [A] always  [d] deny",
+        "\npermission: allow `{}`?\n{}\n[y] yes  [n] no  [A] always allow",
         request.tool,
         serde_json::to_string_pretty(&request.arguments).unwrap_or_default()
     );
@@ -385,7 +385,7 @@ async fn resolve_permission(request: PermissionRequest) {
         let mut line = String::new();
         let _ = std::io::stdin().read_line(&mut line);
         match line.trim() {
-            "a" => Decision::Allow,
+            "y" | "Y" | "a" => Decision::Allow,
             "A" => Decision::Always,
             _ => Decision::Deny,
         }

@@ -5,6 +5,7 @@
 //! "always" adds the tool to the in-memory allow set for this run.
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -42,6 +43,7 @@ pub struct PermissionRequest {
 pub struct PermissionBroker {
     sender: mpsc::UnboundedSender<PermissionRequest>,
     allowed: Arc<Mutex<HashSet<String>>>,
+    auto_approve: Arc<AtomicBool>,
 }
 
 impl PermissionBroker {
@@ -54,13 +56,26 @@ impl PermissionBroker {
         Self {
             sender,
             allowed: Arc::new(Mutex::new(auto_allowed.into_iter().collect())),
+            auto_approve: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Enables or disables full-access mode at runtime.
+    pub fn set_auto_approve(&self, enabled: bool) {
+        self.auto_approve.store(enabled, Ordering::SeqCst);
+    }
+
+    /// Returns true when full-access mode is enabled.
+    #[must_use]
+    pub fn auto_approve(&self) -> bool {
+        self.auto_approve.load(Ordering::SeqCst)
     }
 
     /// Returns true when a call may run without prompting.
     #[must_use]
     pub fn is_allowed(&self, tool: &str) -> bool {
-        is_read_only(tool)
+        self.auto_approve()
+            || is_read_only(tool)
             || self
                 .allowed
                 .lock()
@@ -188,6 +203,7 @@ impl Tool for PermissionTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codie_testkit::spec;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct FakeTool {
@@ -318,5 +334,29 @@ mod tests {
         assert!(broker.is_allowed("read"));
         assert!(!broker.is_allowed("write"));
         assert!(receiver.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    #[spec("TUI-019")]
+    async fn spec_tui_019_full_access_skips_prompts() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let inner = Arc::new(OneTool {
+            tool: Arc::new(FakeTool {
+                calls: Arc::clone(&calls),
+            }),
+        });
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        let broker = PermissionBroker::new(sender, Vec::new());
+        broker.set_auto_approve(true);
+        let toolbox = PermissionToolbox::new(inner, broker);
+        let tool = toolbox.get("write").expect("tool");
+
+        let result = tool.execute(&call(), &context(), None).await;
+        assert!(!result.is_error);
+        assert!(
+            receiver.try_recv().is_err(),
+            "full access must not send a permission request"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 }

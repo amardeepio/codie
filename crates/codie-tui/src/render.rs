@@ -309,6 +309,9 @@ fn draw_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
     );
 
     let mut right = format!("{} · {}", app.footer.model, app.footer.thinking);
+    if app.auto_approve {
+        right.push_str(" · FULL ACCESS");
+    }
     if app.footer.tokens > 0 {
         right.push_str(&format!(
             " · {} tok · ${:.4}",
@@ -368,7 +371,7 @@ fn draw_overlay(frame: &mut Frame<'_>, area: Rect, overlay: &Overlay, app: &App)
         Overlay::Permission(prompt) => (
             " permission ",
             format!(
-                "Allow `{}`?\n\n{}\n\n[a] allow once   [A] always   [d] deny",
+                "Allow `{}`?\n\n{}\n\n[y] yes   [n] no   [A] always allow   [Shift+Tab] full access (no prompts)",
                 prompt.tool,
                 serde_json::to_string_pretty(&prompt.arguments).unwrap_or_default()
             ),
@@ -567,7 +570,9 @@ mod tests {
         });
         let text = buffer(&mut app);
         assert!(text.contains("permission"));
-        assert!(text.contains("allow once"));
+        assert!(text.contains("[y] yes"));
+        assert!(text.contains("[n] no"));
+        assert!(text.contains("full access"));
         assert!(text.contains("cargo test"));
     }
 }

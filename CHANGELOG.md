@@ -23,6 +23,8 @@ that major series, with migrations applied on read.
 - Read-only `codie sessions list/show/export` commands.
 - Command palette on `/` with filtering and scrolling; live model, theme, and reasoning pickers; tokens-per-second
   in the footer.
+- Permission prompts accept `y`/`Y` and `n`/`N` (plus the existing allow-always key), and `Shift+Tab` toggles a
+  visible full-access mode that skips prompts for the session.
 - Session format v1 is frozen: new `compaction`, `branch_summary`, `context_edit`, `label`, `custom`, and `leaf`
   entry types, `parent_session` header provenance, and tests for round-tripping and refusing unknown versions.
 - Property test for random append/branch/compaction sequences, a 10,000-entry resume benchmark, and a SIGKILL
