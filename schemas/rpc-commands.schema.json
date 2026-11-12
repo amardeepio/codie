@@ -1,0 +1,245 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One command read from stdin.",
+  "oneOf": [
+    {
+      "description": "Start a run with a user message.",
+      "properties": {
+        "command": {
+          "const": "prompt",
+          "type": "string"
+        },
+        "message": {
+          "description": "Prompt text. `@path` attachments are expanded.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command",
+        "message"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Steer the active run with an extra message.",
+      "properties": {
+        "command": {
+          "const": "steer",
+          "type": "string"
+        },
+        "message": {
+          "description": "Steering text.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command",
+        "message"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Queue a message for after the active run settles.",
+      "properties": {
+        "command": {
+          "const": "follow_up",
+          "type": "string"
+        },
+        "message": {
+          "description": "Follow-up text.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command",
+        "message"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Cancel the active run.",
+      "properties": {
+        "command": {
+          "const": "abort",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Report the current model, thinking level, and session state.",
+      "properties": {
+        "command": {
+          "const": "get_state",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Return the projected transcript messages.",
+      "properties": {
+        "command": {
+          "const": "get_messages",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Return the session entry tree.",
+      "properties": {
+        "command": {
+          "const": "get_entries",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Return token, cost, and context statistics.",
+      "properties": {
+        "command": {
+          "const": "get_session_stats",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Start a new session for the current directory.",
+      "properties": {
+        "command": {
+          "const": "new_session",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Change the model for subsequent runs.",
+      "properties": {
+        "command": {
+          "const": "set_model",
+          "type": "string"
+        },
+        "model": {
+          "description": "Model identifier, used verbatim.",
+          "type": "string"
+        },
+        "provider": {
+          "description": "Optional provider override; defaults to the current provider.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "command",
+        "model"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Change the reasoning effort for subsequent runs.",
+      "properties": {
+        "command": {
+          "const": "set_thinking",
+          "type": "string"
+        },
+        "level": {
+          "description": "Thinking level: off, minimal, low, medium, high, xhigh, or max.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command",
+        "level"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Compact the context once.",
+      "properties": {
+        "command": {
+          "const": "compact",
+          "type": "string"
+        },
+        "instructions": {
+          "description": "Optional custom summarization instructions.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Export the current session as a self-contained HTML file.",
+      "properties": {
+        "command": {
+          "const": "export_html",
+          "type": "string"
+        },
+        "path": {
+          "description": "Destination path. Defaults to `codie-session-<id>.html` in the cwd.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Respond, then stop reading commands.",
+      "properties": {
+        "command": {
+          "const": "shutdown",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    }
+  ],
+  "properties": {
+    "id": {
+      "description": "Optional client identifier echoed in the response.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "RpcRequest",
+  "type": "object"
+}

@@ -23,6 +23,7 @@ codie reads configuration from three layers. Later layers do not override earlie
 | `CODIE_DATA_DIR` | Data directory (default `~/.local/share/codie`). |
 | `CODIE_CACHE_DIR` | Cache root, including the OpenRouter catalog (default `<data>/cache`). |
 | `CODIE_SESSION_DIR` | Session root (default `<data>/sessions`). |
+| `CODIE_NO_UPDATE_CHECK` | Set to disable the background update check in the interactive app. |
 | `CODIE_ENV_FILE` | Explicit `.env` file to load when `--env-file` is absent. |
 | `CODIE_RECORD_FIXTURES` | Opt in to fixture recording when built with `--features fixtures`. |
 | `CODIE_FIXTURE_DIR` | Directory for recorded fixtures (default `target/fixtures`). |

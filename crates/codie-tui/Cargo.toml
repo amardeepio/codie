@@ -15,6 +15,7 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
+codie-ai.workspace = true
 codie-core.workspace = true
 codie-prompt.workspace = true
 codie-session.workspace = true

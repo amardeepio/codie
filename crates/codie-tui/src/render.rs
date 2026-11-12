@@ -413,6 +413,10 @@ fn draw_overlay(frame: &mut Frame<'_>, area: Rect, overlay: &Overlay, app: &App)
                 "/clone             clone this session",
                 "/name [text]       set or clear the name",
                 "/export [path]     export JSONL",
+                "/export html [p]   export a self-contained HTML transcript",
+                "/copy              copy the last assistant message",
+                "/debug             print diagnostics",
+                "/update            install a newer release",
                 "/theme [name]      choose a theme",
                 "/model [id]        change the model",
                 "/thinking [level]  change reasoning effort",
@@ -449,6 +453,14 @@ fn draw_overlay(frame: &mut Frame<'_>, area: Rect, overlay: &Overlay, app: &App)
                 .join("\n"),
         ),
         Overlay::List(_) => (" list ", String::new()),
+        Overlay::Notice { title, body, ok } => (
+            title.as_str(),
+            if *ok {
+                format!("{body}\n\n[ Enter ] OK")
+            } else {
+                body.clone()
+            },
+        ),
         Overlay::Picker(picker) => {
             let mut lines = vec![format!(
                 "search: {}   sort: {}   (↑/↓ select, Enter resume, r rename, d delete, s sort, Esc close)",

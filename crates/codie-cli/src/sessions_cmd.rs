@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 use codie_session::Session;
 
 use crate::config::Config;
@@ -43,14 +43,26 @@ enum SessionsCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Export one session as JSONL.
+    /// Export one session as JSONL or HTML.
     Export {
         /// Session identifier, prefix, or file path.
         id: String,
         /// Write to this file instead of stdout.
         #[arg(short, long, value_name = "FILE")]
         output: Option<PathBuf>,
+        /// Output format.
+        #[arg(long, value_enum, default_value_t = ExportFormat::Jsonl)]
+        format: ExportFormat,
     },
+}
+
+/// Session export formats.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ExportFormat {
+    /// Canonical JSONL.
+    Jsonl,
+    /// Self-contained HTML transcript.
+    Html,
 }
 
 /// Runs one session command.
@@ -157,19 +169,25 @@ pub(crate) fn run(args: SessionsArgs, config: &Config) -> Result<u8> {
             }
             Ok(0)
         }
-        SessionsCommand::Export { id, output } => {
+        SessionsCommand::Export { id, output, format } => {
             let session = Session::resolve(&session_dir, &id)?;
             match output {
                 Some(path) => {
-                    let file = std::fs::File::create(&path)
+                    let mut file = std::fs::File::create(&path)
                         .with_context(|| format!("cannot create {}", path.display()))?;
-                    session.export(file)?;
+                    match format {
+                        ExportFormat::Jsonl => session.export(&mut file)?,
+                        ExportFormat::Html => session.export_html(&mut file)?,
+                    }
                     println!("Exported {} to {}.", session.id(), path.display());
                 }
                 None => {
                     let stdout = std::io::stdout();
                     let mut lock = stdout.lock();
-                    session.export(&mut lock)?;
+                    match format {
+                        ExportFormat::Jsonl => session.export(&mut lock)?,
+                        ExportFormat::Html => session.export_html(&mut lock)?,
+                    }
                     lock.flush()?;
                 }
             }

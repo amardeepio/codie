@@ -68,7 +68,14 @@ Pressing `/` in an empty editor opens the command palette. Type to filter, use `
 to scroll, and `Enter` to select. `Esc` closes it.
 
 `/help`, `/hotkeys`, `/new`, `/session`, `/tree`, `/fork [entry]`, `/clone`, `/name [text]`, `/export [path]`,
-`/theme [name]`, `/model [id]`, `/thinking [level]`, `/compact [instructions]`, `/quit`.
+`/export html [path]`, `/copy`, `/debug`, `/update`, `/theme [name]`, `/model [id]`, `/thinking [level]`,
+`/compact [instructions]`, `/quit`.
+
+`/update` checks for a newer release, installs it when one is available, and shows a banner with OK. The app
+also runs one silent background check at startup and only reports an available release; it never installs
+automatically. Disable the background check with `CODIE_NO_UPDATE_CHECK=1`. `/export html` writes a self-contained transcript; `/export` keeps the canonical JSONL format. `/copy` puts
+the last assistant message on the system clipboard. `/debug` prints version, model, cwd, session, and token
+diagnostics as a transcript line.
 
 `/theme`, `/model`, and `/thinking` without an argument open live pickers. Model selection updates the context
 window and is persisted; reasoning selection is persisted with the session. The footer shows context usage and

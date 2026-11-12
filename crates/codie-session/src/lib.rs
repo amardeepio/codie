@@ -14,6 +14,7 @@
 #![deny(missing_docs)]
 
 mod entry;
+mod html;
 mod migration;
 mod session;
 mod time;

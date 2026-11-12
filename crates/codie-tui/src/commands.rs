@@ -25,6 +25,14 @@ pub enum Command {
     Name(Option<String>),
     /// Export the session as JSONL.
     Export(Option<String>),
+    /// Export the session as a self-contained HTML file.
+    ExportHtml(Option<String>),
+    /// Copy the last assistant message to the clipboard.
+    Copy,
+    /// Print diagnostic state.
+    Debug,
+    /// Check for a newer release.
+    Update,
     /// Change or report the theme.
     Theme(Option<String>),
     /// Change or report the model.
@@ -81,7 +89,16 @@ pub fn parse(input: &str) -> Option<Command> {
         "fork" => Command::Fork(argument),
         "clone" => Command::Clone,
         "name" => Command::Name(argument),
-        "export" => Command::Export(argument),
+        "export" => match argument {
+            Some(argument) if argument == "html" => Command::ExportHtml(None),
+            Some(argument) if argument.starts_with("html ") => {
+                Command::ExportHtml(Some(argument["html ".len()..].trim().to_owned()))
+            }
+            other => Command::Export(other),
+        },
+        "copy" => Command::Copy,
+        "debug" => Command::Debug,
+        "update" => Command::Update,
         "theme" => Command::Theme(argument),
         "model" => Command::Model(argument),
         "thinking" => Command::Thinking(argument),
@@ -111,6 +128,9 @@ pub fn names() -> &'static [&'static str] {
         "/clone",
         "/name",
         "/export",
+        "/copy",
+        "/debug",
+        "/update",
         "/theme",
         "/model",
         "/thinking",
@@ -146,6 +166,23 @@ mod tests {
             parse("/compact keep tool results"),
             Some(Command::Compact(Some("keep tool results".to_owned())))
         );
+    }
+
+    #[test]
+    fn parses_export_html_copy_and_debug() {
+        assert_eq!(parse("/export"), Some(Command::Export(None)));
+        assert_eq!(
+            parse("/export notes.jsonl"),
+            Some(Command::Export(Some("notes.jsonl".to_owned())))
+        );
+        assert_eq!(parse("/export html"), Some(Command::ExportHtml(None)));
+        assert_eq!(
+            parse("/export html out/transcript.html"),
+            Some(Command::ExportHtml(Some("out/transcript.html".to_owned())))
+        );
+        assert_eq!(parse("/copy"), Some(Command::Copy));
+        assert_eq!(parse("/debug"), Some(Command::Debug));
+        assert_eq!(parse("/update"), Some(Command::Update));
     }
 
     #[test]

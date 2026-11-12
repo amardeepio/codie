@@ -11,10 +11,24 @@ that major series, with migrations applied on read.
 
 ### Added
 
-- Nothing yet.
+- RPC mode (`--mode rpc`): line-delimited JSON commands and events for editor integrations, with prompt, steer,
+  follow-up, abort, session inspection, model/thinking changes, compaction, HTML export, and orderly shutdown.
+- `codie-protocol` crate with published, generated JSON schemas for RPC commands and server records
+  (`cargo xtask schemas [--check]`).
+- Self-contained HTML transcript export: `codie sessions export --format html`, `/export html`, and the RPC
+  `export_html` command.
+- `/copy` copies the last assistant message to the clipboard; `/debug` prints diagnostics.
+- `codie update` installs the latest checksum-verified prebuilt release; `--check` only reports it.
+- `examples/rpc-client`, a minimal Python integration.
+- The interactive app checks for a newer release in the background and reports it in the transcript. `/update`
+  shows a checking banner, installs a newer release, or reports "No update found" with an OK prompt. The
+  background check never installs automatically; disable it with `CODIE_NO_UPDATE_CHECK=1`.
+- Panic crash reports under the data directory (`crashes/crash-<timestamp>.txt`); they contain the panic
+  message, location, and backtrace, never environment variables or transcript content.
 
 ### Changed
 
+- `codie sessions export` now takes `--format jsonl|html` (JSONL remains the default).
 - The footer abbreviates token totals (`999`, `1k`, `70.2k`, `1.2M`) instead of printing raw digits.
 
 ### Fixed

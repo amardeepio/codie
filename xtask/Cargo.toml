@@ -15,7 +15,9 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
+codie-protocol = { workspace = true, features = ["schema"] }
 regex.workspace = true
+serde_json.workspace = true
 walkdir.workspace = true
 
 [dev-dependencies]

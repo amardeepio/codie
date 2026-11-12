@@ -26,6 +26,7 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
     let agent = Arc::new(Agent::new(Arc::clone(&options.client), toolbox.clone()));
 
     let mut history = options.history.clone();
+    let mut last_assistant = String::new();
     let mut session = options.session.take();
     if !matches!(history.first(), Some(Message::System(_))) {
         let declarations = toolbox.declarations();
@@ -75,6 +76,7 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
             &options,
             &cancel,
             &mut permission_rx,
+            &mut last_assistant,
             prompt,
         )
         .await?;
@@ -98,7 +100,7 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
                 Command::Quit => break,
                 Command::Help | Command::Hotkeys => {
                     println!(
-                        "/help /quit /new /session /tree /fork /clone /name /export /theme /model [id] /thinking [level] /compact /skill:<name> /template:<name> /reload"
+                        "/help /quit /new /session /tree /fork /clone /name /export [path] /export html [path] /copy /debug /update /theme /model [id] /thinking [level] /compact /skill:<name> /template:<name> /reload"
                     )
                 }
                 Command::Theme(argument) => match argument {
@@ -206,6 +208,94 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
                     }
                     None => println!("no session"),
                 },
+                Command::ExportHtml(argument) => match session.as_ref() {
+                    Some(current) => {
+                        let path = argument.map_or_else(
+                            || {
+                                options
+                                    .cwd
+                                    .join(format!("codie-session-{}.html", current.id()))
+                            },
+                            std::path::PathBuf::from,
+                        );
+                        let result = std::fs::File::create(&path)
+                            .map_err(|error| codie_core::Error::io(&path, error))
+                            .and_then(|file| current.export_html(file));
+                        match result {
+                            Ok(()) => println!("Exported HTML to {}.", path.display()),
+                            Err(error) => println!("Cannot export HTML: {error}"),
+                        }
+                    }
+                    None => println!("No session is being persisted."),
+                },
+                Command::Copy => {
+                    if last_assistant.is_empty() {
+                        println!("No assistant message to copy.");
+                    } else {
+                        match crate::copy_to_clipboard(&last_assistant) {
+                            Ok(()) => println!("Copied the last message to the clipboard."),
+                            Err(error) => println!("Cannot copy to the clipboard: {error}"),
+                        }
+                    }
+                }
+                Command::Debug => {
+                    let session_id = session
+                        .as_ref()
+                        .map_or_else(|| "ephemeral".to_owned(), |current| current.id().to_owned());
+                    let entries = session
+                        .as_ref()
+                        .map_or(0, |current| current.entries().len());
+                    let tokens = session.as_ref().map_or_else(
+                        || {
+                            history
+                                .iter()
+                                .map(|message| match message {
+                                    Message::System(message) => {
+                                        message.content.chars().count() as u64
+                                    }
+                                    Message::User(message) => message
+                                        .content
+                                        .iter()
+                                        .filter_map(Content::as_text)
+                                        .map(|text| text.chars().count() as u64)
+                                        .sum(),
+                                    Message::Assistant(message) => {
+                                        message.text().chars().count() as u64
+                                    }
+                                    Message::ToolResult(message) => message
+                                        .content
+                                        .iter()
+                                        .filter_map(Content::as_text)
+                                        .map(|text| text.chars().count() as u64)
+                                        .sum(),
+                                })
+                                .sum::<u64>()
+                                / 4
+                        },
+                        codie_session::Session::estimate_tokens,
+                    );
+                    println!(
+                        "codie {} · {} · {} · cwd {} · session {session_id} · {} messages · {entries} entries · ~{tokens} tok",
+                        env!("CARGO_PKG_VERSION"),
+                        options.model.model,
+                        options.thinking.as_str(),
+                        options.cwd.display(),
+                        history.len(),
+                    );
+                }
+                Command::Update => match codie_ai::update::check(None).await {
+                    Ok(status) if status.newer() => {
+                        println!(
+                            "Update available: codie {} → {}. Reinstall with: curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh | sh",
+                            status.current, status.latest
+                        );
+                    }
+                    Ok(status) => println!(
+                        "codie {} — up to date (latest {}).",
+                        status.current, status.latest
+                    ),
+                    Err(error) => println!("Update check failed: {error}"),
+                },
                 Command::New => {
                     session = Some(Session::create(&options.cwd, &options.session_dir)?);
                     history.clear();
@@ -254,6 +344,7 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
                             &options,
                             &cancel,
                             &mut permission_rx,
+                            &mut last_assistant,
                             prompt,
                         )
                         .await?;
@@ -271,6 +362,7 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
                                 &options,
                                 &cancel,
                                 &mut permission_rx,
+                                &mut last_assistant,
                                 prompt,
                             )
                             .await?;
@@ -298,6 +390,7 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
             &options,
             &cancel,
             &mut permission_rx,
+            &mut last_assistant,
             line,
         )
         .await?;
@@ -314,6 +407,7 @@ async fn run_prompt(
     options: &TuiOptions,
     cancel: &CancellationToken,
     permission_rx: &mut mpsc::UnboundedReceiver<PermissionRequest>,
+    last_assistant: &mut String,
     prompt: String,
 ) -> Result<()> {
     let mut config =
@@ -368,6 +462,7 @@ async fn run_prompt(
                             if text.len() > printed {
                                 print!("{}", &text[printed..]);
                             }
+                            *last_assistant = text.clone();
                             if in_text {
                                 println!();
                                 in_text = false;

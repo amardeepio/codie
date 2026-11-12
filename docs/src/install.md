@@ -75,6 +75,18 @@ Run the installer again. It replaces the existing binary in place.
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh | sh
 ```
 
+Install a newer release from the published artifacts:
+
+```bash
+codie update
+```
+
+Check without installing anything:
+
+```bash
+codie update --check
+```
+
 ## Uninstall
 
 ```bash

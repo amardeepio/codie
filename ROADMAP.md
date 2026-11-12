@@ -4,10 +4,10 @@ codie is built in gated phases. Each phase ends with a demoable, installable art
 No phase starts before the previous phase's exit criteria are met. Durations are planning bounds for one
 full-time engineer, not commitments; the exit criteria are the real gate.
 
-**Current status: Phase 4 (Customization and trust) complete, released as `0.4.0`.** `0.1.0` shipped the
-headless core, `0.2.0` the interactive app, and `0.3.0` full-fidelity sessions. Phase 4 adds read-only search
-tools, skills, prompt templates, project trust, `SYSTEM.md`, `@file` attachments, image inputs, and `web_fetch`.
-Phase 5 is next.
+**Current status: Phase 5 (Protocols and polish) implemented; the `0.5.0` release is pending.** `0.1.0`
+shipped the headless core, `0.2.0` the interactive app, `0.3.0` full-fidelity sessions, and `0.4.0`
+customization and trust. Phase 5 adds RPC mode, generated JSON schemas, self-contained HTML export,
+`/copy` and `/debug`, `codie update --check`, and the performance gate.
 
 ## Phase summary
 

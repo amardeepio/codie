@@ -19,11 +19,13 @@ implementation language, the safety posture, and the provider scope.
 
 The command is `codie`.
 
-**Status: Phase 4 complete (`0.4.0`), pre-alpha.** The one-shot agent, the interactive app, full-fidelity
-sessions, and customization all work end to end: streaming transcript, editor dock, themes, slash commands,
-steering, permission prompts, plain mode, resume/fork/compact, search tools, skills, prompt templates, project
-trust, system instructions, `@file` and image inputs, and guarded `web_fetch`. See
-[`docs/src/configuration.md`](docs/src/configuration.md) and [`ROADMAP.md`](ROADMAP.md).
+**Status: Phase 5 implemented, `0.5.0` release pending, pre-alpha.** The one-shot agent, the interactive app,
+full-fidelity sessions, customization, and automation all work end to end: streaming transcript, editor dock,
+themes, slash commands, steering, permission prompts, plain mode, resume/fork/compact, search tools, skills,
+prompt templates, project trust, system instructions, `@file` and image inputs, guarded `web_fetch`, RPC mode,
+generated JSON schemas, HTML transcript export, and `codie update --check`. See
+[`docs/src/configuration.md`](docs/src/configuration.md), [`docs/src/rpc.md`](docs/src/rpc.md), and
+[`ROADMAP.md`](ROADMAP.md).
 
 ## Why codie
 
@@ -58,10 +60,10 @@ flowchart LR
     M --> I["Interactive TUI"]
     M --> P1["Print"]
     M --> J["JSON events"]
-    M --> R["RPC<br/>Phase 5"]
+    M --> R["RPC"]
 ```
 
-Crate graph (solid = shipping in 0.4.0, dashed = planned):
+Crate graph (solid = shipping, dashed = planned):
 
 ```mermaid
 flowchart TD
@@ -74,7 +76,7 @@ flowchart TD
     PROMPT["codie-prompt<br/>system prompt"]
 
     TUI["codie-tui<br/>interactive"]
-    PROTO["codie-protocol<br/>Phase 5"]
+    PROTO["codie-protocol<br/>RPC · schemas"]
     CONTEXT["codie-context<br/>Phase 3"]
 
     CLI --> CORE
@@ -82,6 +84,7 @@ flowchart TD
     CLI --> TOOLS
     CLI --> SESSION
     CLI --> PROMPT
+    CLI --> PROTO
 
     AI --> CORE
     TOOLS --> CORE
@@ -89,7 +92,6 @@ flowchart TD
     PROMPT --> CORE
 
     TUI --> CORE
-    PROTO -.-> CORE
     CONTEXT -.-> CORE
 
     TESTKIT["codie-testkit<br/>dev only"] -.-> CORE
@@ -168,6 +170,8 @@ cargo run -- -p --allow-all --cwd /path/to/project \
 
 # Automation
 cargo run -- --mode json -p "Summarize this repository"
+cargo run -- --mode rpc          # line-delimited JSON commands on stdin
+cargo run -- update --check      # report newer releases without installing
 ```
 
 Environment variables and `.env`:
@@ -181,7 +185,7 @@ cargo run -- --env-file .env.local models
 Process environment always wins over `.env`. Supported variables: `DEEPSEEK_API_KEY`,
 `OPENROUTER_API_KEY`, `CODIE_PROVIDER`, `CODIE_MODEL`, `CODIE_THINKING`, `CODIE_MAX_TURNS`,
 `CODIE_ALLOW`, `CODIE_BASE_URL`, `CODIE_CONFIG_DIR`, `CODIE_DATA_DIR`, `CODIE_CACHE_DIR`,
-`CODIE_SESSION_DIR`, `CODIE_ENV_FILE`.
+`CODIE_SESSION_DIR`, `CODIE_ENV_FILE`, `CODIE_NO_UPDATE_CHECK`.
 
 Run `codie` with no arguments in a terminal for the interactive app. Use `-p/--print` for one-shot output and
 `--mode json` for automation. See [`docs/src/tui.md`](docs/src/tui.md) for keys, commands, themes, and

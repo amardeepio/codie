@@ -1710,8 +1710,8 @@ implementations.
 | `specs/prompt/0001-system-prompt.md` | PRMPT-001..008 | 1, 4 |
 | `specs/tui/0001-layout-and-rendering.md` | TUI-001..010 | 2 |
 | `specs/cli/0001-cli-surface.md` | CLI-001..007 | 1 |
-| `specs/protocol/0001-json-events.md` | PROTO-001..006 | 1, 5 |
-| `specs/protocol/0002-rpc.md` | PROTO-003..006 | 5 |
+| `specs/protocol/0001-json-events.md` | PROTO-001, PROTO-002, PROTO-004, PROTO-005 | 1 |
+| `specs/protocol/0002-rpc.md` | PROTO-003, PROTO-006 | 5 |
 | `specs/extensions/0001-jsonrpc-hooks.md` | EXT-001..006 | 6 |
 | `specs/security/0001-permissions.md` | SEC-001..008 | 1, 4 |
 

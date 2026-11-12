@@ -23,6 +23,7 @@ pub mod openai;
 pub mod record;
 pub mod redact;
 pub mod sse;
+pub mod update;
 
 pub use auth::{AuthError, AuthStore, resolve_key};
 pub use catalog::{
@@ -40,6 +41,10 @@ pub use openai::{
 };
 pub use redact::{is_secret_header, redact_header, redact_text, redacted_headers};
 pub use sse::{SseEvent, SseParser};
+pub use update::{
+    CHECK_TIMEOUT, RELEASES_URL, TAGS_URL, UpdateStatus, check, compare_versions,
+    latest_from_payload,
+};
 
 /// A provider identifier such as `deepseek` or `openrouter`.
 pub type ProviderId = Cow<'static, str>;
