@@ -107,8 +107,8 @@ impl Renderer {
             }
             Event::Code(text) => {
                 let style = Style::default()
-                    .fg(self.palette.tool)
-                    .bg(self.palette.border);
+                    .fg(self.palette.code)
+                    .bg(self.palette.surface_alt);
                 self.push_span(format!("`{text}`"), style);
             }
             Event::SoftBreak | Event::HardBreak => {
@@ -122,7 +122,7 @@ impl Renderer {
                 self.flush();
                 self.lines.push(Line::from(Span::styled(
                     "─".repeat(self.width.min(40)),
-                    Style::default().fg(self.palette.muted),
+                    Style::default().fg(self.palette.rule),
                 )));
             }
             Event::Html(text) | Event::InlineHtml(text) => self.push_text(&text),
@@ -168,15 +168,15 @@ impl Renderer {
             Tag::Item => {
                 self.flush();
                 self.push_prefix();
-                let marker = match self.lists.last_mut() {
+                let (marker, color) = match self.lists.last_mut() {
                     Some(list) if list.ordered => {
                         let number = list.next;
                         list.next += 1;
-                        format!("{number}. ")
+                        (format!("{number}. "), self.palette.list_enum)
                     }
-                    _ => "• ".to_owned(),
+                    _ => ("• ".to_owned(), self.palette.list),
                 };
-                self.push_span(marker, Style::default().fg(self.palette.accent));
+                self.push_span(marker, Style::default().fg(color));
             }
             Tag::Emphasis => self.emphasis = true,
             Tag::Strong => self.strong = true,
@@ -307,18 +307,23 @@ impl Renderer {
 
     fn push_text(&mut self, text: &str) {
         let mut style = Style::default().fg(self.palette.assistant);
+        if self.blockquote {
+            style = style.fg(self.palette.quote);
+        }
         if self.heading.is_some() {
-            style = style.fg(self.palette.accent).add_modifier(Modifier::BOLD);
+            style = style.fg(self.palette.heading).add_modifier(Modifier::BOLD);
         }
         if self.strong {
-            style = style.add_modifier(Modifier::BOLD);
+            style = style.fg(self.palette.strong).add_modifier(Modifier::BOLD);
         }
         if self.emphasis {
-            style = style.add_modifier(Modifier::ITALIC);
+            style = style
+                .fg(self.palette.emphasis)
+                .add_modifier(Modifier::ITALIC);
         }
         if self.link {
             style = style
-                .fg(self.palette.accent)
+                .fg(self.palette.link)
                 .add_modifier(Modifier::UNDERLINED);
         }
         self.push_span(text.to_owned(), style);
@@ -345,7 +350,7 @@ impl Renderer {
         if self.blockquote {
             self.current.push(Span::styled(
                 format!("{indent}│ "),
-                Style::default().fg(self.palette.muted),
+                Style::default().fg(self.palette.quote),
             ));
         } else if !indent.is_empty() {
             self.current.push(Span::raw(indent));
@@ -504,7 +509,7 @@ fn row_line(
                     Span::styled(
                         span.content,
                         Style::default()
-                            .fg(palette.accent)
+                            .fg(palette.heading)
                             .add_modifier(Modifier::BOLD),
                     )
                 })
@@ -573,7 +578,7 @@ fn stacked_lines(table: &TableState, palette: &Palette) -> Vec<Line<'static>> {
                 spans.push(Span::styled(
                     format!("{}: ", spans_text(label)),
                     Style::default()
-                        .fg(palette.accent)
+                        .fg(palette.heading)
                         .add_modifier(Modifier::BOLD),
                 ));
             }
@@ -595,14 +600,15 @@ fn stacked_lines(table: &TableState, palette: &Palette) -> Vec<Line<'static>> {
     lines
 }
 
-/// Highlights keywords in fenced code blocks.
+/// Highlights comments, strings, numbers, keywords, and function calls in
+/// fenced code blocks.
 ///
-/// This is intentionally lightweight: keywords are colored, the rest of the
-/// line keeps the body color. It is not a full parser.
+/// This is intentionally lightweight: it is line-based and not a full parser.
 #[must_use]
 pub fn highlight_code(line: &str, language: &str, palette: &Palette) -> Line<'static> {
+    let language = language.to_ascii_lowercase();
     if !matches!(
-        language.to_ascii_lowercase().as_str(),
+        language.as_str(),
         "rust" | "rs" | "python" | "py" | "javascript" | "js" | "typescript" | "ts" | "bash" | "sh"
     ) {
         return Line::from(Span::styled(
@@ -611,29 +617,36 @@ pub fn highlight_code(line: &str, language: &str, palette: &Palette) -> Line<'st
         ));
     }
 
-    static KEYWORDS: OnceLock<Regex> = OnceLock::new();
-    let keywords = KEYWORDS.get_or_init(|| {
-        Regex::new(
-            r"\b(fn|let|mut|pub|struct|enum|impl|trait|use|mod|match|if|else|for|while|loop|return|async|await|move|const|static|def|class|import|from|lambda|function|var|export|interface|type|echo|cd|git|cargo|npm|sudo)\b",
-        )
-        .expect("keyword regex")
-    });
+    let hash_comments = matches!(language.as_str(), "python" | "py" | "bash" | "sh");
+    let tokens = token_regex(hash_comments);
 
     let mut spans = Vec::new();
     let mut cursor = 0;
-    for found in keywords.find_iter(line) {
+    for captures in tokens.captures_iter(line) {
+        let Some(found) = captures.get(0) else {
+            continue;
+        };
         if found.start() > cursor {
             spans.push(Span::styled(
                 line[cursor..found.start()].to_owned(),
                 Style::default().fg(palette.assistant),
             ));
         }
-        spans.push(Span::styled(
-            found.as_str().to_owned(),
+        let token = found.as_str().to_owned();
+        let style = if captures.name("comment").is_some() {
+            Style::default().fg(palette.muted)
+        } else if captures.name("string").is_some() {
+            Style::default().fg(palette.code)
+        } else if captures.name("number").is_some() {
+            Style::default().fg(palette.warning)
+        } else if captures.name("keyword").is_some() {
             Style::default()
                 .fg(palette.accent)
-                .add_modifier(Modifier::BOLD),
-        ));
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(palette.primary)
+        };
+        spans.push(Span::styled(token, style));
         cursor = found.end();
     }
     if cursor < line.len() {
@@ -646,6 +659,24 @@ pub fn highlight_code(line: &str, language: &str, palette: &Palette) -> Line<'st
         spans.push(Span::raw(String::new()));
     }
     Line::from(spans)
+}
+
+fn token_regex(hash_comments: bool) -> &'static Regex {
+    static SLASH_COMMENTS: OnceLock<Regex> = OnceLock::new();
+    static HASH_COMMENTS: OnceLock<Regex> = OnceLock::new();
+
+    let cell = if hash_comments {
+        &HASH_COMMENTS
+    } else {
+        &SLASH_COMMENTS
+    };
+    cell.get_or_init(|| {
+        let comment = if hash_comments { "#.*" } else { r"//.*|/\*.*?\*/" };
+        Regex::new(&format!(
+            r#"(?P<comment>{comment})|(?P<string>"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(?P<number>\b\d+(?:\.\d+)?\b)|(?P<keyword>\b(fn|let|mut|pub|struct|enum|impl|trait|use|mod|match|if|else|for|while|loop|return|async|await|move|const|static|def|class|import|from|lambda|function|var|export|interface|type|echo|cd|git|cargo|npm|sudo)\b)|(?P<function>\b[A-Za-z_][A-Za-z0-9_]*\s*\()"#
+        ))
+        .expect("token regex")
+    })
 }
 
 #[cfg(test)]
@@ -778,6 +809,75 @@ mod tests {
             line.spans
                 .iter()
                 .any(|span| span.content == "fn" && span.style.fg == Some(palette.accent))
+        );
+    }
+
+    #[test]
+    fn markdown_semantic_colors_are_distinct() {
+        let palette = Palette::dark();
+        let lines = render(
+            "# Title\n\n**bold** *em* `code` [link](https://example.com)\n",
+            &palette,
+            80,
+        );
+        let spans = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .collect::<Vec<_>>();
+        let fg = |text: &str| {
+            spans
+                .iter()
+                .find(|span| span.content.as_ref() == text)
+                .and_then(|span| span.style.fg)
+        };
+
+        assert_eq!(fg("Title"), Some(palette.heading));
+        assert_eq!(fg("bold"), Some(palette.strong));
+        assert_eq!(fg("em"), Some(palette.emphasis));
+        assert_eq!(fg("`code`"), Some(palette.code));
+        assert_eq!(fg("link"), Some(palette.link));
+    }
+
+    #[test]
+    fn list_markers_use_distinct_colors() {
+        let palette = Palette::dark();
+        let lines = render("- bullet\n1. number\n", &palette, 80);
+        let spans = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .collect::<Vec<_>>();
+        let fg = |text: &str| {
+            spans
+                .iter()
+                .find(|span| span.content.as_ref() == text)
+                .and_then(|span| span.style.fg)
+        };
+
+        assert_eq!(fg("• "), Some(palette.list));
+        assert_eq!(fg("1. "), Some(palette.list_enum));
+    }
+
+    #[test]
+    fn code_tokens_use_syntax_colors() {
+        let palette = Palette::dark();
+        let line = highlight_code("let answer = 42; // note", "rust", &palette);
+        let fg = |text: &str| {
+            line.spans
+                .iter()
+                .find(|span| span.content.as_ref() == text)
+                .and_then(|span| span.style.fg)
+        };
+
+        assert_eq!(fg("let"), Some(palette.accent));
+        assert_eq!(fg("42"), Some(palette.warning));
+        assert_eq!(fg("// note"), Some(palette.muted));
+
+        let strings = highlight_code("let name = \"codie\";", "rust", &palette);
+        assert!(
+            strings
+                .spans
+                .iter()
+                .any(|span| { span.content == "\"codie\"" && span.style.fg == Some(palette.code) })
         );
     }
 

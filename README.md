@@ -27,6 +27,10 @@ generated JSON schemas, HTML transcript export, and `codie update --check`. See
 [`docs/src/configuration.md`](docs/src/configuration.md), [`docs/src/rpc.md`](docs/src/rpc.md), and
 [`ROADMAP.md`](ROADMAP.md).
 
+<p align="center">
+  <img src="assets/tui.png" alt="Codie TUI showing the startup banner and command palette" width="1000">
+</p>
+
 ## Why codie
 
 - **One static binary.** No Node or Bun runtime, predictable memory, fast startup.

@@ -14,9 +14,23 @@ use crate::transcript::{Entry, ToolStatus};
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
+/// The empty-state banner, 40 columns wide.
+const BANNER: [&str; 5] = [
+    " ██████╗  ██████╗ ██████╗ ██╗███████╗██╗",
+    "██╔════╝ ██╔═══██╗██╔══██╗██║██╔════╝██║",
+    "██║      ██║   ██║██║  ██║██║█████╗  ██║",
+    "╚██████╗ ╚██████╔╝██████╔╝╚═╝██╔══╝  ╚═╝",
+    " ╚═════╝  ╚═════╝ ╚═════╝    ███████╗   ",
+];
+
 /// Draws one frame.
 pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
     let area = frame.area();
+    let palette = app.theme.palette;
+    frame.render_widget(
+        Block::default().style(Style::default().bg(palette.background)),
+        area,
+    );
     let editor_height = u16::try_from(app.editor.lines().len())
         .unwrap_or(1)
         .saturating_add(2)
@@ -49,7 +63,7 @@ fn draw_list_overlay(frame: &mut Frame<'_>, area: Rect, list: &crate::app::Choic
 
     let block = Block::bordered()
         .title(list.title.clone())
-        .border_style(Style::default().fg(palette.accent));
+        .border_style(Style::default().fg(palette.primary));
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
 
@@ -90,19 +104,23 @@ fn draw_list_overlay(frame: &mut Frame<'_>, area: Rect, list: &crate::app::Choic
         };
         let selected = position == list.selected;
         let marker = if selected { "› " } else { "  " };
-        let style = if selected {
-            Style::default()
-                .fg(palette.accent)
-                .add_modifier(Modifier::BOLD)
+        let (style, detail_style) = if selected {
+            (
+                Style::default()
+                    .fg(palette.background)
+                    .bg(palette.primary)
+                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(palette.background).bg(palette.primary),
+            )
         } else {
-            Style::default().fg(palette.foreground)
+            (
+                Style::default().fg(palette.foreground),
+                Style::default().fg(palette.muted),
+            )
         };
         let mut spans = vec![Span::styled(format!("{marker}{}", item.label), style)];
         if !item.detail.is_empty() {
-            spans.push(Span::styled(
-                format!("  {}", item.detail),
-                Style::default().fg(palette.muted),
-            ));
+            spans.push(Span::styled(format!("  {}", item.detail), detail_style));
         }
         lines.push(Line::from(spans));
     }
@@ -112,9 +130,11 @@ fn draw_list_overlay(frame: &mut Frame<'_>, area: Rect, list: &crate::app::Choic
         Style::default().fg(palette.muted),
     )));
     frame.render_widget(
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .style(Style::default().fg(palette.foreground)),
+        Paragraph::new(lines).wrap(Wrap { trim: false }).style(
+            Style::default()
+                .fg(palette.foreground)
+                .bg(palette.background),
+        ),
         inner,
     );
 }
@@ -137,6 +157,11 @@ fn draw_transcript(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
     app.transcript.clamp_scroll(maximum);
     let paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
+        .style(
+            Style::default()
+                .fg(app.theme.palette.foreground)
+                .bg(app.theme.palette.background),
+        )
         .scroll((app.transcript.scroll(), 0));
     frame.render_widget(paragraph, area);
 }
@@ -146,12 +171,25 @@ fn transcript_lines(app: &App, width: u16) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
     if app.transcript.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "codie",
-            Style::default()
-                .fg(palette.accent)
-                .add_modifier(Modifier::BOLD),
-        )));
+        lines.push(Line::default());
+        if width >= 40 {
+            for row in BANNER {
+                lines.push(Line::from(Span::styled(
+                    row,
+                    Style::default()
+                        .fg(palette.primary)
+                        .add_modifier(Modifier::BOLD),
+                )));
+            }
+        } else {
+            lines.push(Line::from(Span::styled(
+                "Codie!",
+                Style::default()
+                    .fg(palette.primary)
+                    .add_modifier(Modifier::BOLD),
+            )));
+        }
+        lines.push(Line::default());
         lines.push(Line::from(Span::styled(
             "Type a prompt, or press / for the command palette.",
             Style::default().fg(palette.muted),
@@ -165,12 +203,15 @@ fn transcript_lines(app: &App, width: u16) -> Vec<Line<'static>> {
                 lines.push(Line::default());
                 lines.push(Line::from(vec![
                     Span::styled(
-                        "› ",
+                        "▌ ",
                         Style::default()
-                            .fg(palette.accent)
+                            .fg(palette.primary)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(text.clone(), Style::default().fg(palette.user)),
+                    Span::styled(
+                        text.clone(),
+                        Style::default().fg(palette.user).bg(palette.surface),
+                    ),
                 ]));
             }
             Entry::Assistant(assistant) => {
@@ -192,7 +233,7 @@ fn transcript_lines(app: &App, width: u16) -> Vec<Line<'static>> {
                 if assistant.streaming {
                     lines.push(Line::from(Span::styled(
                         "▌",
-                        Style::default().fg(palette.accent),
+                        Style::default().fg(palette.primary),
                     )));
                 }
                 lines.push(Line::default());
@@ -200,7 +241,7 @@ fn transcript_lines(app: &App, width: u16) -> Vec<Line<'static>> {
             Entry::Tool(block) => {
                 let (marker, color) = match block.status {
                     ToolStatus::Running => {
-                        (SPINNER[app.tick as usize % SPINNER.len()], palette.tool)
+                        (SPINNER[app.tick as usize % SPINNER.len()], palette.primary)
                     }
                     ToolStatus::Success => ("✓", palette.success),
                     ToolStatus::Error => ("✗", palette.error),
@@ -265,7 +306,7 @@ fn draw_editor(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
             } else {
                 " prompt · scrolled (Esc to bottom) ".to_owned()
             },
-            palette.border,
+            palette.border_active,
         ),
         Status::Streaming => {
             let frame = SPINNER[app.tick as usize % SPINNER.len()];
@@ -278,9 +319,9 @@ fn draw_editor(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
                 }
                 None => format!(" {frame} streaming "),
             };
-            (title, palette.accent)
+            (title, palette.primary)
         }
-        Status::Waiting => (" waiting ".to_owned(), palette.tool),
+        Status::Waiting => (" waiting ".to_owned(), palette.warning),
         Status::Error => (" error ".to_owned(), palette.error),
     };
     let block = Block::bordered()
@@ -300,7 +341,14 @@ fn draw_editor(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         .take(visible)
         .map(|line| Line::from(line.clone()))
         .collect::<Vec<_>>();
-    frame.render_widget(Paragraph::new(lines), inner);
+    frame.render_widget(
+        Paragraph::new(lines).style(
+            Style::default()
+                .fg(palette.foreground)
+                .bg(palette.background),
+        ),
+        inner,
+    );
 
     let row = cursor_row.saturating_sub(offset);
     if row < visible {
@@ -361,7 +409,7 @@ fn draw_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             right,
-            Style::default().fg(palette.muted),
+            Style::default().fg(palette.secondary),
         )))
         .alignment(Alignment::Right),
         columns[1],
@@ -508,12 +556,16 @@ fn draw_overlay(frame: &mut Frame<'_>, area: Rect, overlay: &Overlay, app: &App)
 
     let block = Block::bordered()
         .title(title)
-        .border_style(Style::default().fg(palette.accent));
+        .border_style(Style::default().fg(palette.primary));
     frame.render_widget(
         Paragraph::new(body)
             .block(block)
             .wrap(Wrap { trim: false })
-            .style(Style::default().fg(palette.foreground)),
+            .style(
+                Style::default()
+                    .fg(palette.foreground)
+                    .bg(palette.background),
+            ),
         rect,
     );
 }
@@ -596,9 +648,62 @@ mod tests {
     fn empty_state_and_footer_render() {
         let mut app = app();
         let text = buffer(&mut app);
-        assert!(text.contains("codie"));
+        assert!(text.contains("██████╗"), "banner missing: {text}");
+        assert!(text.contains("Type a prompt"));
         assert!(text.contains("deepseek-flash"));
         assert!(text.contains("/tmp/project"));
+    }
+
+    #[test]
+    fn empty_state_banner_uses_primary() {
+        let mut app = app();
+        let palette = app.theme.palette;
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(1, 1)].fg, palette.primary);
+    }
+
+    #[test]
+    fn editor_text_uses_the_theme_foreground() {
+        let mut app = app();
+        app.editor.insert_str("hello");
+        let palette = app.theme.palette;
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(1, 17)].fg, palette.foreground);
+    }
+
+    #[test]
+    fn user_messages_use_a_raised_surface() {
+        let mut app = app();
+        app.transcript.push_user("hello");
+        let palette = app.theme.palette;
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(0, 1)].fg, palette.primary);
+        assert_eq!(buffer[(2, 1)].bg, palette.surface);
+    }
+
+    #[test]
+    fn narrow_empty_state_falls_back_to_text_banner() {
+        let mut app = app();
+        let backend = TestBackend::new(30, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let text = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(text.contains("Codie!"), "{text}");
     }
 
     #[test]
