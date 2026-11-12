@@ -139,11 +139,17 @@ normalize_version() {
 resolve_latest_tag() {
     # The tags API is public and needs no token. Rate limits are fine for an
     # installer; if it fails, fall back to building from main.
+    # `grep -o` extracts one tag per match, so compact and pretty JSON both work;
+    # a greedy `sed` over compact JSON would capture the last tag instead.
     curl -fsSL --retry 2 --retry-delay 1 \
         -H "Accept: application/vnd.github+json" \
         "https://api.github.com/repos/${REPO}/tags" 2>/dev/null \
-        | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\(v[0-9][^"]*\)".*/\1/p' \
-        | head -n 1 || true
+        | grep -o '"name"[[:space:]]*:[[:space:]]*"v[0-9][^"]*"' \
+        | sed 's/.*"\(v[0-9][^"]*\)"$/\1/' \
+        | sed 's/^v//' \
+        | sort -t. -k1,1n -k2,2n -k3,3n \
+        | tail -n 1 \
+        | sed 's/^/v/' || true
 }
 
 if [ -z "$VERSION" ] || [ "$VERSION" = "latest" ]; then
@@ -349,6 +355,18 @@ say ""
 say "Installed ${BIN_NAME} to ${INSTALLED_PATH}"
 if version_output=$("$INSTALLED_PATH" --version 2>/dev/null); then
     say "$version_output"
+fi
+
+# Warn when another codie earlier in PATH will run instead of this install.
+resolved=$(command -v "$BIN_NAME" 2>/dev/null || true)
+if [ -n "$resolved" ] && [ "$resolved" != "$INSTALLED_PATH" ]; then
+    say ""
+    say "warning: \`${BIN_NAME}\` resolves to ${resolved}, not ${INSTALLED_PATH}."
+    shadow_version=$("$resolved" --version 2>/dev/null || true)
+    if [ -n "$shadow_version" ]; then
+        say "         That binary reports: ${shadow_version}"
+    fi
+    say "         Put ${BIN_DIR} first in PATH or remove the older binary."
 fi
 
 case ":${PATH:-}:" in
