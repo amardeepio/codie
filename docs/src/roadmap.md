@@ -11,7 +11,7 @@ not commitments; the exit criteria are the real gate.
 | 0 | Foundations: workspace, CI, spec framework, OSS files | 1 wk | 1 wk | repository + CI | Complete |
 | 1 | Headless core: providers, loop, tools, sessions, print/JSON | 3 wk | 4 wk | `0.1.0` — `codie -p` works | Complete |
 | 2 | Interactive TUI: streaming render, editor, themes, steering | 3 wk | 7 wk | `0.2.0` — interactive agent | Complete |
-| 3 | Sessions at full fidelity: resume, fork, compaction, picker | 2 wk | 9 wk | `0.3.0` — resume/fork/compact | In progress |
+| 3 | Sessions at full fidelity: resume, fork, compaction, picker | 2 wk | 9 wk | `0.3.0` — resume/fork/compact | Complete |
 | 4 | Customization and trust: skills, templates, `SYSTEM.md`, images | 2 wk | 11 wk | `0.4.0` — skills/templates/trust | Planned |
 | 5 | Protocols and polish: RPC, schemas, export, performance | 2 wk | 13 wk | `0.5.0` — RPC/export | Planned |
 | 6 | Extensions: JSON-RPC protocol, hooks, manifests, examples | 3 wk | 16 wk | `0.6.0` — extension protocol | Planned |
@@ -46,7 +46,7 @@ not commitments; the exit criteria are the real gate.
 - Accessibility: `--tui-mode plain` produces append-only output, verified in a PTY.
 - `SPEC-TUI-001` is accepted and all ten requirements have named tests.
 
-## Phase 3 (in progress)
+## Phase 3 exit criteria (met 2026-11-12)
 
 - Session tree operations, persisted leaf markers, fork, clone, export, and read-only `codie sessions` commands.
 - `/tree`, `/fork`, `/clone`, `/name`, `/export`, and a searchable picker with rename and delete.
@@ -54,7 +54,9 @@ not commitments; the exit criteria are the real gate.
   automatic threshold triggering, and one-shot overflow recovery.
 - Token estimates and context percentage, a frozen format v1, a migration harness, a property test, a 10k-entry
   resume budget, and a SIGKILL recovery test.
-- Remaining: the `0.3.0` version bump, tag, and release notes.
+- Random append/branch/compaction sequences reopen to the same projection; resume after `kill -9` loses at most
+  the in-flight partial message; 10k-entry resume stays within 150 ms.
+- Session format v1 is documented and announced as stable for the 1.x series; released as `0.3.0`.
 
 Later phase criteria are listed in [`PLAN.MD`](../../PLAN.MD) §8. This page mirrors `ROADMAP.md` and is updated at
 each phase boundary. Scope changes require an RFC; phase changes require maintainer approval recorded in

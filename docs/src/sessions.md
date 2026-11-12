@@ -5,6 +5,14 @@ branch, fork, clone, export, and compaction. The normative format is
 [`SPEC-SESS-001`](../../specs/session/0001-jsonl-format.md); tree operations are
 [`SPEC-SESS-002`](../../specs/session/0002-tree-operations.md).
 
+## Format stability
+
+Session format version 1 is frozen and **stable for the 1.x series**. Files written by `0.3.0` and later remain
+readable across that series, with migrations applied on read. New capabilities add entry types and fields
+within version 1; a file that declares an unsupported version is refused rather than guessed at. The header
+carries `version`, and the reader applies the monotonic migration table described in `SPEC-SESS-001` before
+projecting the transcript.
+
 ## Starting and resuming
 
 | Command | Behavior |

@@ -11,6 +11,31 @@ that major series, with migrations applied on read.
 
 ### Added
 
+- Nothing yet.
+
+### Changed
+
+- Nothing yet.
+
+### Fixed
+
+- Nothing yet.
+
+### Removed
+
+- Nothing yet.
+
+### Security
+
+- Nothing yet.
+
+## [0.3.0] - 2026-11-12
+
+Phase 3: sessions at full fidelity. Resume, fork, clone, and compact without losing work, with session format
+v1 frozen and announced as stable for the 1.x series.
+
+### Added
+
 - Session tree operations: persisted branch markers, `Session::fork_at`, `Session::clone_session`, and
   `Session::tree`, with `--resume`/`-r`, `--fork`, `--clone`, and `--session` accepting an identifier or path.
 - Interactive session controls: `/tree`, `/fork [entry]`, `/clone`, `/name [text]`, `/export [path]`, and a
@@ -37,7 +62,9 @@ that major series, with migrations applied on read.
 - `Session::set_leaf` now appends a persisted leaf marker, so resuming lands on the selected branch.
 - `Session::projection` honors compaction, branch summaries, and context edits, and always retains the system
   message.
-- Workspace version remains `0.2.0` until the Phase 3 release.
+- Session files written by `0.3.0` and later are stable for the 1.x series: they remain readable across that
+  series, with migrations applied on read.
+- Workspace version is `0.3.0`.
 
 ### Fixed
 

@@ -4,10 +4,10 @@ codie is built in gated phases. Each phase ends with a demoable, installable art
 No phase starts before the previous phase's exit criteria are met. Durations are planning bounds for one
 full-time engineer, not commitments; the exit criteria are the real gate.
 
-**Current status: Phase 3 (Sessions at full fidelity), in progress.** `0.1.0` shipped the headless core and
-`0.2.0` shipped the interactive app. Phase 3 now has session tree operations, fork/clone, compaction, token
-estimation, an interactive picker, read-only `codie sessions` commands, and a frozen format v1 with migration and
-property tests. The release artifact is `0.3.0`.
+**Current status: Phase 3 (Sessions at full fidelity) complete, released as `0.3.0`.** `0.1.0` shipped the
+headless core and `0.2.0` shipped the interactive app. Phase 3 has session tree operations, fork/clone,
+compaction, token estimation, an interactive picker, read-only `codie sessions` commands, and a frozen format v1
+with migration and property tests. Phase 4 is next.
 
 ## Phase summary
 
@@ -16,7 +16,7 @@ property tests. The release artifact is `0.3.0`.
 | 0 | Foundations: workspace, CI, spec framework, OSS files | 1 week | 1 week | repository + CI | Complete |
 | 1 | Headless core: providers, loop, tools, sessions, print/JSON | 3 weeks | 4 weeks | `0.1.0` — `codie -p` works | Complete |
 | 2 | Interactive TUI: streaming render, editor, themes, steering | 3 weeks | 7 weeks | `0.2.0` — interactive agent | Complete |
-| 3 | Sessions at full fidelity: resume, fork, compaction, picker | 2 weeks | 9 weeks | `0.3.0` — resume/fork/compact | In progress |
+| 3 | Sessions at full fidelity: resume, fork, compaction, picker | 2 weeks | 9 weeks | `0.3.0` — resume/fork/compact | Complete |
 | 4 | Customization and trust: skills, templates, `SYSTEM.md`, images | 2 weeks | 11 weeks | `0.4.0` — skills/templates/trust | Planned |
 | 5 | Protocols and polish: RPC, schemas, export, performance | 2 weeks | 13 weeks | `0.5.0` — RPC/export | Planned |
 | 6 | Extensions: JSON-RPC protocol, hooks, manifests, examples | 3 weeks | 16 weeks | `0.6.0` — extension protocol | Planned |
@@ -78,7 +78,7 @@ requirements tested.
 
 Goal: never lose work; branch and compact confidently.
 
-Status: in progress.
+Status: complete 2026-11-12; released as `0.3.0`.
 
 - Tree sessions with persisted branch markers, `--continue`, `--resume`, `--session`, `--fork`, `--clone`, and
   `--no-session`.
@@ -90,11 +90,9 @@ Status: in progress.
 - Session format v1 freeze, a read-time migration harness, a property test for tree operations, a 10k-entry
   resume benchmark, and a SIGKILL mid-stream recovery test.
 
-Remaining exit work: the `0.3.0` version bump, tag, and release notes after maintainer review.
-
-Exit criteria: random sequences of appends, branches, edits, and compactions reopen to the same projection;
-resume after `kill -9` loses at most the in-flight partial message; 10k-entry resume is under 150 ms; the format
-is documented and announced as stable for 1.x.
+Exit criteria (met 2026-11-12): random sequences of appends, branches, edits, and compactions reopen to the same
+projection; resume after `kill -9` loses at most the in-flight partial message; 10k-entry resume is under 150 ms;
+the format is documented and announced as stable for 1.x.
 
 ## Later phases
 

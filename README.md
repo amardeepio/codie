@@ -19,9 +19,10 @@ implementation language, the safety posture, and the provider scope.
 
 The command is `codie`.
 
-**Status: Phase 2 complete (`0.2.0`), pre-alpha.** The one-shot agent and the interactive app both work end to
-end: streaming transcript, editor dock, keybindings, themes, slash commands, steering, permission prompts, and
-plain mode. See [`docs/src/tui.md`](docs/src/tui.md) and [`ROADMAP.md`](ROADMAP.md).
+**Status: Phase 3 complete (`0.3.0`), pre-alpha.** The one-shot agent, the interactive app, and full-fidelity
+sessions all work end to end: streaming transcript, editor dock, keybindings, themes, slash commands, steering,
+permission prompts, plain mode, resume with a picker, fork/clone, and compaction. See
+[`docs/src/sessions.md`](docs/src/sessions.md) and [`ROADMAP.md`](ROADMAP.md).
 
 ## Why codie
 
@@ -59,7 +60,7 @@ flowchart LR
     M --> R["RPC<br/>Phase 5"]
 ```
 
-Crate graph (solid = shipping in 0.2.0, dashed = planned):
+Crate graph (solid = shipping in 0.3.0, dashed = planned):
 
 ```mermaid
 flowchart TD

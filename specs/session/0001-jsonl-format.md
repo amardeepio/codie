@@ -13,7 +13,8 @@ A session is an append-only JSONL file. The first line is a header; every later 
 a tree through `parent_id`, so appending never rewrites history. The model-visible transcript is a projection of
 the branch from the header to the current leaf.
 
-The format is version 1. Phase 3 freezes it and adds branch operations, compaction, and migration.
+The format is version 1, frozen in Phase 3 and stable for the 1.x series. Branch operations, compaction, and
+migration extend it without breaking existing files.
 
 # Requirements
 
