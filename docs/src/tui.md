@@ -26,7 +26,8 @@ Phase 2 adds the primary human experience. Running `codie` with a terminal attac
 | `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / redo |
 | `Ctrl+K` / `Ctrl+Y` | Kill to end of line / yank |
 | `Ctrl+P` / `Ctrl+N` | Prompt history |
-| `PgUp` / `PgDn`, `Esc` | Scroll transcript, return to the bottom |
+| `PgUp` / `PgDn`, `Shift+Up/Down`, `Alt+Up/Down`, mouse wheel | Scroll the transcript |
+| `Esc` | Return to the bottom and resume following |
 | `Tab` | Complete a slash command or an `@file` path |
 
 Keybindings can be overridden in `~/.config/codie/keybindings.toml`:

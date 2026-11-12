@@ -293,8 +293,8 @@ impl Default for Bindings {
         bind(ActionId::Yank, &["ctrl+y"]);
         bind(ActionId::HistoryPrevious, &["ctrl+p"]);
         bind(ActionId::HistoryNext, &["ctrl+n"]);
-        bind(ActionId::ScrollUp, &["pgup"]);
-        bind(ActionId::ScrollDown, &["pgdn"]);
+        bind(ActionId::ScrollUp, &["pgup", "shift+up", "alt+up"]);
+        bind(ActionId::ScrollDown, &["pgdn", "shift+down", "alt+down"]);
         bind(ActionId::Complete, &["tab"]);
         bind(ActionId::Help, &["f1"]);
         bind(ActionId::Hotkeys, &["f2"]);

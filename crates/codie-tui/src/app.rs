@@ -10,12 +10,15 @@ use codie_core::{
     Agent, AgentConfig, AgentEvent, ChatClient, Content, Message, ModelRef, RunStatus,
     ThinkingLevel, ToolResultMessage, Toolbox, Usage,
 };
-use codie_prompt::{PromptInput, build_system_message, load_project_context};
+use codie_prompt::{Customizations, PromptInput, build_system_message, load_project_context};
 use codie_session::{Session, SessionSummary, TreeEntry};
 use codie_tools::Registry;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::crossterm::event::{DisableBracketedPaste, EnableBracketedPaste, Event};
+use ratatui::crossterm::event::{
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
+    MouseEventKind,
+};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
@@ -196,6 +199,12 @@ pub struct TuiOptions {
     pub registry: Arc<Registry>,
     /// Optional keybindings file.
     pub keybindings: Option<PathBuf>,
+    /// Replacement system preamble, or `None` for the default.
+    pub preamble: Option<String>,
+    /// Extra system instructions appended after the preamble.
+    pub append: Option<String>,
+    /// Skills and templates available to slash commands.
+    pub customizations: Customizations,
 }
 
 /// Live status shown in the editor border.
@@ -425,6 +434,10 @@ pub struct App {
     pub bindings: Bindings,
     /// Optional watcher for a TOML theme file.
     theme_watcher: Option<crate::theme::ThemeWatcher>,
+    /// Skills and templates available to slash commands.
+    pub customizations: Customizations,
+    /// Prompt produced by a customization command, submitted by the event loop.
+    pub command_prompt: Option<String>,
 }
 
 impl App {
@@ -486,6 +499,8 @@ impl App {
             cancel: tokio_util::sync::CancellationToken::new(),
             bindings,
             theme_watcher,
+            customizations: Customizations::default(),
+            command_prompt: None,
         }
     }
 
@@ -1163,6 +1178,51 @@ impl App {
                     self.transcript.push_info("No session is being persisted.");
                 }
             }
+            Command::Skill(name, arguments) => {
+                if self.status == Status::Streaming {
+                    self.transcript
+                        .push_info("Finish or cancel the current run before invoking a skill.");
+                } else {
+                    let prompt = self
+                        .customizations
+                        .skill(&name)
+                        .map(|skill| skill.prompt(&arguments));
+                    match prompt {
+                        Some(prompt) => self.command_prompt = Some(prompt),
+                        None => self.transcript.push_error(format!(
+                            "Unknown skill `{name}`. Add it under .codie/skills/{name}/SKILL.md."
+                        )),
+                    }
+                }
+            }
+            Command::Template(name, arguments) => {
+                if self.status == Status::Streaming {
+                    self.transcript
+                        .push_info("Finish or cancel the current run before expanding a template.");
+                } else {
+                    let prompt = self
+                        .customizations
+                        .template(&name)
+                        .map(|template| template.expand(&arguments));
+                    match prompt {
+                        Some(prompt) => self.command_prompt = Some(prompt),
+                        None => self.transcript.push_error(format!(
+                            "Unknown template `{name}`. Add it under .codie/templates/{name}.md."
+                        )),
+                    }
+                }
+            }
+            Command::Reload => {
+                self.customizations.refresh();
+                for warning in self.customizations.warnings() {
+                    self.transcript.push_error(warning.clone());
+                }
+                self.transcript.push_info(format!(
+                    "Reloaded {} skill(s) and {} template(s).",
+                    self.customizations.skills().len(),
+                    self.customizations.templates().len()
+                ));
+            }
             Command::Unknown(name) => self
                 .transcript
                 .push_error(format!("Unknown command `/{name}`. Try /help.")),
@@ -1418,14 +1478,16 @@ async fn run_full(mut options: TuiOptions) -> Result<u8> {
         Arc::clone(&options.signal),
         Bindings::load(options.keybindings.as_deref())?,
     );
+    app.customizations = options.customizations.clone();
 
     if !matches!(history.first(), Some(Message::System(_))) {
         let declarations = toolbox.declarations();
         let input = PromptInput {
             cwd: options.cwd.clone(),
             tools: declarations.clone(),
-            preamble: None,
-            append: None,
+            preamble: options.preamble.clone(),
+            append: options.append.clone(),
+            skills: options.customizations.skills().to_vec(),
             project_context: load_project_context(&options.cwd),
         };
         let system = build_system_message(&input, declarations);
@@ -1467,7 +1529,7 @@ fn setup_terminal(mode: TuiRunMode) -> Result<Terminal<CrosstermBackend<std::io:
     if mode == TuiRunMode::Full {
         execute!(stdout, EnterAlternateScreen)?;
     }
-    execute!(stdout, EnableBracketedPaste)?;
+    execute!(stdout, EnableBracketedPaste, EnableMouseCapture)?;
     let terminal = Terminal::new(CrosstermBackend::new(stdout))?;
     Ok(terminal)
 }
@@ -1478,6 +1540,7 @@ fn restore_terminal() {
     let _ = execute!(
         stdout,
         DisableBracketedPaste,
+        DisableMouseCapture,
         LeaveAlternateScreen,
         ratatui::crossterm::cursor::Show
     );
@@ -1497,6 +1560,7 @@ fn install_panic_hook() {
 #[derive(Debug)]
 enum Input {
     Key(KeyEvent),
+    Mouse(MouseEventKind),
     Paste(String),
     Signal(i32),
 }
@@ -1510,6 +1574,11 @@ fn spawn_input() -> mpsc::UnboundedReceiver<Input> {
                 match ratatui::crossterm::event::read() {
                     Ok(Event::Key(key)) => {
                         if sender.send(Input::Key(key)).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(Event::Mouse(mouse)) => {
+                        if sender.send(Input::Mouse(mouse.kind)).is_err() {
                             break;
                         }
                     }
@@ -1600,6 +1669,11 @@ async fn event_loop(
                             Action::Submit(text) => {
                                 if app.handle_command(&text) {
                                     if app.should_quit { break; }
+                                    if let Some(prompt) = app.command_prompt.take() {
+                                        submit_prompt(
+                                            app, &agent, &options, &event_tx, &compact_tx, prompt,
+                                        );
+                                    }
                                 } else if app.status == Status::Streaming {
                                     agent.steer(Message::user(text.clone()));
                                     app.transcript.push_user(text);
@@ -1617,6 +1691,13 @@ async fn event_loop(
                             }
                         }
                     }
+                    Input::Mouse(MouseEventKind::ScrollUp) => {
+                        app.transcript.scroll_up(3);
+                    }
+                    Input::Mouse(MouseEventKind::ScrollDown) => {
+                        app.transcript.scroll_down(3);
+                    }
+                    Input::Mouse(_) => {}
                     Input::Paste(text) => app.editor.paste(&text),
                     Input::Signal(code) => {
                         signal_code = code;
@@ -1643,7 +1724,8 @@ async fn event_loop(
                     if retry {
                         start_resume(app, &agent, &options, &event_tx);
                     } else {
-                        start_run(app, &agent, &options, &event_tx, prompt);
+                        let message = expand_prompt(app, &options.cwd, &prompt);
+                        start_run(app, &agent, &options, &event_tx, message, prompt);
                     }
                 }
             }
@@ -1700,12 +1782,12 @@ fn submit_prompt(
     app.last_prompt = Some(prompt.clone());
     app.overflow_retried = false;
 
+    let prompt_message = expand_prompt(app, &options.cwd, &prompt);
     let window = u64::from(app.context_window);
     let history_has_messages = app
         .history
         .iter()
         .any(|message| !matches!(message, Message::System(_)));
-    let prompt_message = Message::user(prompt.clone());
     if app.session.is_some()
         && history_has_messages
         && crate::compaction::needs_compaction(&app.history, &prompt_message, window)
@@ -1719,7 +1801,20 @@ fn submit_prompt(
         return;
     }
 
-    start_run(app, agent, options, sender, prompt);
+    start_run(app, agent, options, sender, prompt_message, prompt);
+}
+
+/// Expands `@path` references and reports attachment problems in the transcript.
+fn expand_prompt(app: &mut App, cwd: &std::path::Path, prompt: &str) -> Message {
+    let expansion = codie_prompt::expand_attachments(prompt, cwd);
+    for error in expansion.errors {
+        app.transcript.push_error(error);
+    }
+    if !expansion.attached.is_empty() {
+        app.transcript
+            .push_info(format!("Attached {} file(s).", expansion.attached.len()));
+    }
+    Message::user_with_content(expansion.content)
 }
 
 fn start_run(
@@ -1727,9 +1822,10 @@ fn start_run(
     agent: &Arc<Agent>,
     options: &TuiOptions,
     sender: &mpsc::UnboundedSender<AgentEvent>,
+    message: Message,
     prompt: String,
 ) {
-    app.transcript.push_user(prompt.clone());
+    app.transcript.push_user(prompt);
     app.status = Status::Streaming;
     app.run_started = Some(std::time::Instant::now());
     app.footer.tokens_per_sec = None;
@@ -1749,7 +1845,7 @@ fn start_run(
     config.cancel = app.cancel.clone();
 
     let history = app.history.clone();
-    let stream = agent.run(Message::user(prompt), history, config);
+    let stream = agent.run(message, history, config);
     forward_events(stream, sender.clone());
 }
 
@@ -2088,6 +2184,28 @@ mod tests {
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    #[spec("TUI-021")]
+    fn scroll_keys_leave_follow_mode_and_esc_returns_to_bottom() {
+        let mut app = app();
+        app.transcript.push_user("one");
+        app.transcript.push_user("two");
+        app.transcript.clamp_scroll(100);
+
+        app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT));
+        assert!(!app.transcript.is_following());
+        assert_eq!(app.transcript.scroll(), 92);
+
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
+        assert_eq!(app.transcript.scroll(), 100);
+        assert!(app.transcript.is_following());
+
+        app.handle_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
+        assert!(!app.transcript.is_following());
+        app.handle_key(key(KeyCode::Esc));
+        assert!(app.transcript.is_following());
     }
 
     #[test]
@@ -2535,6 +2653,9 @@ mod tests {
             signal: Arc::new(std::sync::atomic::AtomicI32::new(0)),
             registry: Arc::new(Registry::new(Vec::new())),
             keybindings: None,
+            preamble: None,
+            append: None,
+            customizations: Customizations::default(),
         };
         let agent = Arc::new(Agent::new(
             Arc::clone(&options.client),

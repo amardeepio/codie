@@ -13,7 +13,9 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+base64.workspace = true
 codie-core.workspace = true
+toml.workspace = true
 
 [dev-dependencies]
 codie-testkit.workspace = true

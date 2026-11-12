@@ -32,6 +32,7 @@ fn sample_input() -> PromptInput {
         tools: vec![tool("read", "Read a file.\nMore detail.")],
         preamble: Some("Custom preamble.".to_string()),
         append: Some("Appended instruction.".to_string()),
+        skills: Vec::new(),
         project_context: vec![ContextFile {
             path: PathBuf::from("/work/AGENTS.md"),
             content: "Use tabs.\n".to_string(),

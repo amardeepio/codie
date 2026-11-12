@@ -33,6 +33,12 @@ pub enum Command {
     Thinking(Option<String>),
     /// Manual compaction (Phase 3).
     Compact(Option<String>),
+    /// Invoke a skill with arguments.
+    Skill(String, String),
+    /// Expand a prompt template with arguments.
+    Template(String, String),
+    /// Reload skills, templates, and file-backed themes.
+    Reload,
     /// An unknown command.
     Unknown(String),
 }
@@ -52,6 +58,19 @@ pub fn parse(input: &str) -> Option<Command> {
         .map_or((rest, ""), |(name, argument)| (name, argument.trim()));
     let argument = (!argument.is_empty()).then(|| argument.to_owned());
 
+    if let Some(name) = name.strip_prefix("skill:") {
+        return Some(Command::Skill(
+            name.to_owned(),
+            argument.unwrap_or_default(),
+        ));
+    }
+    if let Some(name) = name.strip_prefix("template:") {
+        return Some(Command::Template(
+            name.to_owned(),
+            argument.unwrap_or_default(),
+        ));
+    }
+
     Some(match name {
         "help" | "?" => Command::Help,
         "hotkeys" => Command::Hotkeys,
@@ -67,6 +86,7 @@ pub fn parse(input: &str) -> Option<Command> {
         "model" => Command::Model(argument),
         "thinking" => Command::Thinking(argument),
         "compact" => Command::Compact(argument),
+        "reload" => Command::Reload,
         other => Command::Unknown(other.to_owned()),
     })
 }
@@ -95,6 +115,7 @@ pub fn names() -> &'static [&'static str] {
         "/model",
         "/thinking",
         "/compact",
+        "/reload",
     ]
 }
 
@@ -131,6 +152,22 @@ mod tests {
     fn plain_text_is_not_a_command() {
         assert_eq!(parse("hello"), None);
         assert_eq!(parse(" /help"), Some(Command::Help));
+    }
+
+    #[test]
+    fn parses_skill_template_and_reload_commands() {
+        assert_eq!(
+            parse("/skill:review src/main.rs"),
+            Some(Command::Skill(
+                "review".to_owned(),
+                "src/main.rs".to_owned()
+            ))
+        );
+        assert_eq!(
+            parse("/template:fix Cargo.toml"),
+            Some(Command::Template("fix".to_owned(), "Cargo.toml".to_owned()))
+        );
+        assert_eq!(parse("/reload"), Some(Command::Reload));
     }
 
     #[test]

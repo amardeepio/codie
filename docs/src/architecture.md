@@ -6,7 +6,7 @@ implementations, and only the CLI reads environment variables or decides process
 
 ## Crate graph
 
-Solid edges ship in 0.3.0; dashed edges are planned.
+Solid edges ship in 0.4.0; dashed edges are planned.
 
 ```mermaid
 flowchart TD
@@ -14,9 +14,9 @@ flowchart TD
 
     CORE["codie-core<br/>messages · events · loop"]
     AI["codie-ai<br/>providers · SSE"]
-    TOOLS["codie-tools<br/>read · write · edit · bash<br/>grep · find · ls"]
+    TOOLS["codie-tools<br/>read · write · edit · bash<br/>grep · find · ls · web_fetch"]
     SESSION["codie-session<br/>JSONL store"]
-    PROMPT["codie-prompt<br/>system prompt"]
+    PROMPT["codie-prompt<br/>prompt · skills · trust"]
 
     TUI["codie-tui<br/>interactive"]
     PROTO["codie-protocol<br/>Phase 5"]
@@ -87,9 +87,13 @@ and `bash` mutate or execute and are gated by the permission policy.
 | `grep` | Regex content search | `path`, `glob`, `case_sensitive`, `max_results`; skips binaries |
 | `find` | Glob path search | Patterns without `/` match base names at any depth |
 | `ls` | One directory listing | `path`, `all`; sizes, symlink targets |
+| `web_fetch` | Fetch one HTTP(S) URL | Not read-only; blocks private addresses and caps bytes/time |
 
 `grep` and `find` share an `ignore`-based walker, so `.gitignore`, git excludes, and hidden entries behave the
 same way in both. Tool output is bounded by `max_results` and the shared truncation caps (`SPEC-TOOL-002`).
+
+`codie-prompt` also owns customization: `SYSTEM.md`/`APPEND_SYSTEM.md`, skills, templates, project trust, and
+`@path` expansion. Trust is checked before any project resource is read (`SPEC-TRUST-001`).
 
 ## State layering
 

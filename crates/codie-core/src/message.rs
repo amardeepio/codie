@@ -192,6 +192,15 @@ impl Message {
         })
     }
 
+    /// Creates a user message from pre-built content blocks.
+    #[must_use]
+    pub fn user_with_content(content: Vec<Content>) -> Self {
+        Self::User(UserMessage {
+            content,
+            timestamp: now_ms(),
+        })
+    }
+
     /// Creates an assistant message from content and a stop reason.
     #[must_use]
     pub fn assistant(

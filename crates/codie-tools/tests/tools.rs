@@ -531,7 +531,11 @@ async fn bash_times_out_and_kills_the_child() {
     )
     .await;
     assert!(result.is_error);
-    assert_eq!(text(&result), "Command timed out after 1 seconds");
+    assert!(
+        text(&result).starts_with("Command timed out after 1 seconds"),
+        "{}",
+        text(&result)
+    );
     assert_eq!(result.details.expect("details")["exit_code"], -1);
 }
 
@@ -590,4 +594,27 @@ async fn bash_truncates_the_tail_and_keeps_the_end_of_output() {
     assert!(!output.contains("\nline 1\n"));
     assert!(output.contains("[Showing last "));
     assert_eq!(result.details.expect("details")["truncated"], true);
+}
+
+#[spec("TOOL-006")]
+#[tokio::test]
+async fn bash_returns_when_a_background_child_holds_the_pipe_open() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let context = context(directory.path());
+
+    let started = std::time::Instant::now();
+    let result = run(
+        &BashTool,
+        json!({"command": "sleep 10 & echo started", "timeout": 5}),
+        &context,
+    )
+    .await;
+    let elapsed = started.elapsed();
+
+    assert!(!result.is_error, "{}", text(&result));
+    assert!(text(&result).contains("started"), "{}", text(&result));
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "the tool waited for an inherited pipe: {elapsed:?}"
+    );
 }

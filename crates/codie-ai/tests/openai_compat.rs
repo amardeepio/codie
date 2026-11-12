@@ -169,6 +169,28 @@ fn spec_prov_017_tool_result_wire_shape() {
 }
 
 #[test]
+#[spec("PROV-023")]
+fn spec_prov_023_user_images_use_data_urls() {
+    let model = common::deepseek_model();
+    let client = provider(model.clone(), Compat::deepseek());
+    let context = vec![Message::user_with_content(vec![
+        Content::text("look"),
+        Content::Image {
+            data: "aGVsbG8=".to_owned(),
+            mime_type: "image/png".to_owned(),
+        },
+    ])];
+
+    let body = client.request_body(&context, &common::options(&model, ThinkingLevel::Off));
+    assert_eq!(body["messages"][0]["content"][0]["type"], "text");
+    assert_eq!(body["messages"][0]["content"][1]["type"], "image_url");
+    assert_eq!(
+        body["messages"][0]["content"][1]["image_url"]["url"],
+        "data:image/png;base64,aGVsbG8="
+    );
+}
+
+#[test]
 #[spec("PROV-017")]
 fn spec_prov_017_image_tool_results_are_downgraded() {
     let model = common::deepseek_model();

@@ -455,3 +455,83 @@ async fn context_overflow_compacts_and_retries_once() {
     assert!(stderr.contains("Context overflow recovered"));
     assert!(queue.lock().expect("script queue").is_empty());
 }
+
+/// `@path` attachments reach the provider as file and image content (`PRMPT-010`).
+#[tokio::test]
+#[spec("PRMPT-010")]
+async fn spec_prmpt_010_attachments_reach_the_provider() {
+    let server = MockServer::start().await;
+    let bodies = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let captured = Arc::clone(&bodies);
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(move |request: &wiremock::Request| {
+            let body = serde_json::from_slice::<Value>(&request.body).expect("request JSON");
+            captured.lock().expect("captured bodies").push(body);
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(sse(&[
+                    r#"{"id":"resp","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"}}]}"#,
+                    &finish("stop"),
+                    usage(),
+                ]))
+        })
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let home = TempHome::new().expect("temp home");
+    let work = tempfile::tempdir().expect("temp repo");
+    std::fs::write(work.path().join("note.txt"), "attached payload\n").expect("note");
+    std::fs::write(work.path().join("pixel.png"), b"\x89PNG\r\n\x1a\nfake").expect("image");
+
+    let mut command = Command::cargo_bin("codie").expect("codie binary");
+    for (key, value) in home.envs() {
+        command.env(key, value);
+    }
+    let output = command
+        .env("DEEPSEEK_API_KEY", "test-key")
+        .env_remove("OPENROUTER_API_KEY")
+        .arg("-p")
+        .arg("--mode")
+        .arg("json")
+        .arg("--provider")
+        .arg("deepseek")
+        .arg("--base-url")
+        .arg(server.uri())
+        .arg("--cwd")
+        .arg(work.path())
+        .arg("Explain @note.txt and @pixel.png")
+        .output()
+        .expect("run codie");
+
+    assert!(
+        output.status.success(),
+        "codie failed: {}\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let bodies = bodies.lock().expect("captured bodies");
+    let user = bodies[0]["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .find(|message| message["role"] == "user")
+        .expect("user message");
+    let content = user["content"].as_array().expect("content array");
+    let text = content
+        .iter()
+        .filter_map(|block| block["text"].as_str())
+        .collect::<Vec<_>>()
+        .join("");
+    assert!(text.contains("attached payload"), "{text}");
+    assert!(text.contains("<file path=\"note.txt\">"), "{text}");
+    assert!(
+        content.iter().any(|block| block["type"] == "image_url"
+            && block["image_url"]["url"]
+                .as_str()
+                .is_some_and(|url| url.starts_with("data:image/png;base64,"))),
+        "image block missing: {content:?}"
+    );
+}

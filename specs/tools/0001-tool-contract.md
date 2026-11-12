@@ -30,7 +30,7 @@ Verification: `crates/codie-tools/tests/tools.rs::spec_tool_004_write_semantics`
 **TOOL-005 (MUST)** `edit` applies one or more exact-text replacements against the original file, rejects missing, duplicate, overlapping, and no-op edits, preserves CRLF outside changed ranges, and reports the first changed line.
 Verification: `crates/codie-tools/tests/tools.rs::spec_tool_005_edit_semantics`
 
-**TOOL-006 (MUST)** `bash` runs the command in its own process group, streams output with updates, kills the whole group on timeout or abort, truncates the tail with an explicit notice, and surfaces the exit code.
+**TOOL-006 (MUST)** `bash` runs the command in its own process group, streams output with updates, defaults to a 120 second timeout, kills the whole group on timeout or abort, truncates the tail with an explicit notice, and surfaces the exit code. When the shell exits but a background child keeps the output pipe open, the tool returns the buffered output after a short grace period instead of waiting forever.
 Verification: `crates/codie-tools/tests/tools.rs::spec_tool_006_bash_semantics`
 
 **TOOL-007 (MUST)** A tool error, denial, missing tool, or panic becomes an error `tool_result` message; the agent loop continues and the model may recover.

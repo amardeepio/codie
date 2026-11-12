@@ -196,7 +196,9 @@ fn transcript_lines(app: &App, width: u16) -> Vec<Line<'static>> {
             }
             Entry::Tool(block) => {
                 let (marker, color) = match block.status {
-                    ToolStatus::Running => ("…", palette.tool),
+                    ToolStatus::Running => {
+                        (SPINNER[app.tick as usize % SPINNER.len()], palette.tool)
+                    }
                     ToolStatus::Success => ("✓", palette.success),
                     ToolStatus::Error => ("✗", palette.error),
                 };
@@ -207,6 +209,14 @@ fn transcript_lines(app: &App, width: u16) -> Vec<Line<'static>> {
                     ),
                     Span::styled(block.summary(), Style::default().fg(palette.tool)),
                 ];
+                if block.status == ToolStatus::Running
+                    && let Some(elapsed) = block.elapsed_label()
+                {
+                    spans.push(Span::styled(
+                        format!("  {elapsed}"),
+                        Style::default().fg(palette.muted),
+                    ));
+                }
                 if block.status != ToolStatus::Running && !block.expanded {
                     spans.push(Span::styled(
                         "  (Ctrl+O to expand)",
@@ -246,11 +256,27 @@ fn transcript_lines(app: &App, width: u16) -> Vec<Line<'static>> {
 fn draw_editor(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
     let palette = app.theme.palette;
     let (title, border) = match app.status {
-        Status::Idle => (" prompt ".to_owned(), palette.border),
-        Status::Streaming => (
-            format!(" {} streaming ", SPINNER[app.tick as usize % SPINNER.len()]),
-            palette.accent,
+        Status::Idle => (
+            if app.transcript.is_following() {
+                " prompt ".to_owned()
+            } else {
+                " prompt · scrolled (Esc to bottom) ".to_owned()
+            },
+            palette.border,
         ),
+        Status::Streaming => {
+            let frame = SPINNER[app.tick as usize % SPINNER.len()];
+            let title = match app.transcript.running_tool() {
+                Some(tool) => {
+                    let elapsed = tool
+                        .elapsed_label()
+                        .map_or_else(String::new, |elapsed| format!(" {elapsed}"));
+                    format!(" {frame} {} {elapsed} ", tool.name)
+                }
+                None => format!(" {frame} streaming "),
+            };
+            (title, palette.accent)
+        }
         Status::Waiting => (" waiting ".to_owned(), palette.tool),
         Status::Error => (" error ".to_owned(), palette.error),
     };
@@ -363,6 +389,9 @@ fn draw_overlay(frame: &mut Frame<'_>, area: Rect, overlay: &Overlay, app: &App)
                 "/model [id]        change the model",
                 "/thinking [level]  change reasoning effort",
                 "/compact [note]    compact the context",
+                "/skill:<name>      invoke a skill",
+                "/template:<name>   expand a prompt template",
+                "/reload            reload skills and templates",
                 "/quit              exit",
             ]
             .join("\n"),
@@ -557,6 +586,38 @@ mod tests {
         assert!(text.contains("fix the bug"));
         assert!(text.contains("Done"));
         assert!(text.contains("test passes"));
+    }
+
+    #[test]
+    #[spec("TUI-021")]
+    fn scrolled_transcript_shows_a_return_hint() {
+        let mut app = app();
+        for index in 0..30 {
+            app.transcript.push_user(format!("message {index}"));
+        }
+        app.transcript.clamp_scroll(40);
+        app.transcript.scroll_up(100);
+        let text = buffer(&mut app);
+        assert!(text.contains("scrolled"), "{text}");
+        assert!(text.contains("Esc to bottom"), "{text}");
+    }
+
+    #[test]
+    #[spec("TUI-020")]
+    fn running_tool_replaces_the_streaming_title() {
+        let mut app = app();
+        app.status = crate::app::Status::Streaming;
+        app.transcript.tool_start(
+            "call_1".into(),
+            "bash".into(),
+            serde_json::json!({"command": "bun run dev"}),
+        );
+        let text = buffer(&mut app);
+        assert!(text.contains("bun run dev"), "{text}");
+        assert!(
+            text.contains("bash"),
+            "the running tool should title the editor"
+        );
     }
 
     #[test]

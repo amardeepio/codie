@@ -29,8 +29,29 @@ codie reads configuration from three layers. Later layers do not override earlie
 
 CLI flags override environment values. For example, `--thinking high` wins over `CODIE_THINKING=low`.
 
-Inspect the effective values with `codie config get`, or one key with `codie config get provider`.
+Inspect the effective values with `codie config get`, or one key with `codie config get provider`. Change a
+value with `codie config set provider openrouter`, print the file path with `codie config path`, and open it in
+`$VISUAL`/`$EDITOR` with `codie config edit`.
 `--base-url` overrides `CODIE_BASE_URL` for a single run.
+
+## Customization
+
+| Resource | Location | Purpose |
+|---|---|---|
+| Skills | `.codie/skills/<name>/SKILL.md`, `~/.config/codie/skills/` | Reusable instruction blocks invoked with `/skill:<name>` |
+| Templates | `.codie/templates/<name>.md`, `~/.config/codie/templates/` | Prompts with `$ARGUMENTS` and `$1`..`$9`, invoked with `/template:<name>` |
+| System prompt | `SYSTEM.md`, `APPEND_SYSTEM.md` from the working directory upward | Replace or extend the preamble |
+| Flags | `--system-prompt`, `--append-system-prompt` | Per-run overrides for the files above |
+
+Project resources under `.codie/` load only for trusted projects. Approve once with `codie --approve`, or answer
+the interactive trust prompt. Non-interactive runs never prompt and treat the project as untrusted. Trust is
+stored in `trust.toml` by canonical path.
+
+`@path` in a prompt attaches a file: text becomes a `<file>` block and images become image content for models
+that accept it. Use `/reload` in the interactive app to pick up new skills and templates.
+
+Network access is not enabled by default. `web_fetch` requires `--allow web_fetch` (or `--allow-all`) in
+headless mode and an approval in the interactive app.
 
 Interactive keybindings live in `keybindings.toml` under the config directory; see
 [Interactive terminal](tui.md#keys).

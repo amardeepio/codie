@@ -7,17 +7,19 @@ with a Rust core, a stricter safety posture, and a deliberately narrow provider 
 
 ## Status
 
-**Pre-alpha (`0.3.0`).** The workspace, the error model, the test harness, and the documentation and specification
+**Pre-alpha (`0.4.0`).** The workspace, the error model, the test harness, and the documentation and specification
 baseline are in place, and the agent runs end to end. Phase 1 added the headless core
-(`codie -p "..."`, `--mode json`), Phase 2 the interactive terminal app, and Phase 3 full-fidelity sessions:
-resume with a picker, fork, clone, compaction, and a frozen session format v1 that is stable for the 1.x series.
-See the [roadmap](roadmap.md), [sessions](sessions.md), and [`ROADMAP.md`](../../ROADMAP.md).
+(`codie -p "..."`, `--mode json`), Phase 2 the interactive terminal app, Phase 3 full-fidelity sessions, and
+Phase 4 customization and trust: search tools, skills, prompt templates, project trust, `SYSTEM.md`, attachments,
+image inputs, and `web_fetch`. See the [roadmap](roadmap.md), [configuration](configuration.md), and
+[`ROADMAP.md`](../../ROADMAP.md).
 
 ## What it will do
 
 - Run headless with `codie -p "..."` for scripts and CI, or interactively in a terminal UI.
 - Use OpenRouter or DeepSeek through one OpenAI-compatible adapter with per-provider compatibility flags.
-- Execute a small, well-specified tool set: `read`, `write`, `edit`, `bash`, `grep`, `find`, and `ls`.
+- Execute a small, well-specified tool set: `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, and
+  `web_fetch`.
 - Persist sessions as an append-only JSONL tree that supports resume, fork, and compaction.
 - Stream assistant output as events so the UI and the session store consume the same source of truth.
 - Support out-of-process extensions over JSON-RPC without loading foreign code into the core.

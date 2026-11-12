@@ -19,10 +19,11 @@ implementation language, the safety posture, and the provider scope.
 
 The command is `codie`.
 
-**Status: Phase 3 complete (`0.3.0`), pre-alpha.** The one-shot agent, the interactive app, and full-fidelity
-sessions all work end to end: streaming transcript, editor dock, keybindings, themes, slash commands, steering,
-permission prompts, plain mode, resume with a picker, fork/clone, and compaction. See
-[`docs/src/sessions.md`](docs/src/sessions.md) and [`ROADMAP.md`](ROADMAP.md).
+**Status: Phase 4 complete (`0.4.0`), pre-alpha.** The one-shot agent, the interactive app, full-fidelity
+sessions, and customization all work end to end: streaming transcript, editor dock, themes, slash commands,
+steering, permission prompts, plain mode, resume/fork/compact, search tools, skills, prompt templates, project
+trust, system instructions, `@file` and image inputs, and guarded `web_fetch`. See
+[`docs/src/configuration.md`](docs/src/configuration.md) and [`ROADMAP.md`](ROADMAP.md).
 
 ## Why codie
 
@@ -60,7 +61,7 @@ flowchart LR
     M --> R["RPC<br/>Phase 5"]
 ```
 
-Crate graph (solid = shipping in 0.3.0, dashed = planned):
+Crate graph (solid = shipping in 0.4.0, dashed = planned):
 
 ```mermaid
 flowchart TD
@@ -68,7 +69,7 @@ flowchart TD
 
     CORE["codie-core<br/>messages · events · loop"]
     AI["codie-ai<br/>providers · SSE"]
-    TOOLS["codie-tools<br/>read · write · edit · bash<br/>grep · find · ls"]
+    TOOLS["codie-tools<br/>read · write · edit · bash<br/>grep · find · ls · web_fetch"]
     SESSION["codie-session<br/>JSONL store"]
     PROMPT["codie-prompt<br/>system prompt"]
 

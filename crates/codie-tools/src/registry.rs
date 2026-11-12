@@ -6,7 +6,7 @@ use codie_core::{Tool, ToolDecl, Toolbox};
 
 use crate::{
     bash::BashTool, edit::EditTool, find::FindTool, grep::GrepTool, ls::LsTool, read::ReadTool,
-    validate::ValidatedTool, write::WriteTool,
+    validate::ValidatedTool, web_fetch::WebFetchTool, write::WriteTool,
 };
 
 /// A collection of tools addressed by their wire name.
@@ -40,6 +40,7 @@ impl Registry {
             Arc::new(GrepTool),
             Arc::new(FindTool),
             Arc::new(LsTool),
+            Arc::new(WebFetchTool::new()),
         ])
     }
 
@@ -233,7 +234,16 @@ mod tests {
             .collect();
         assert_eq!(
             names,
-            ["read", "write", "edit", "bash", "grep", "find", "ls"]
+            [
+                "read",
+                "write",
+                "edit",
+                "bash",
+                "grep",
+                "find",
+                "ls",
+                "web_fetch"
+            ]
         );
         assert!(registry.get("read").is_some());
         assert!(registry.get("missing").is_none());
@@ -267,7 +277,7 @@ mod tests {
     fn policy_toolbox_delegates_lookup_and_declarations() {
         let toolbox = PolicyToolbox::new(Arc::new(Registry::builtin()), Policy::headless(["bash"]));
         assert!(toolbox.get("write").is_some());
-        assert_eq!(toolbox.declarations().len(), 7);
+        assert_eq!(toolbox.declarations().len(), 8);
         assert!(toolbox.denial("write").is_some());
         assert!(toolbox.denial("bash").is_none());
         assert!(toolbox.denial("read").is_none());

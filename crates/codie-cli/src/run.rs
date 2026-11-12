@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 use std::io::{IsTerminal, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
 
@@ -16,11 +16,14 @@ use codie_core::{
     Agent, AgentConfig, AgentEvent, ChatClient, Message, ModelRef, RunStatus, StopReason,
     ThinkingLevel, Tool, Toolbox,
 };
-use codie_prompt::{PromptInput, build_system_message, load_project_context};
+use codie_prompt::{
+    Customizations, PromptInput, TrustStore, build_system_message, expand_attachments,
+    load_instructions, load_project_context,
+};
 use codie_session::Session;
 use codie_tools::{
     BashTool, EditTool, FindTool, GrepTool, LsTool, Policy, PolicyToolbox, ReadTool, Registry,
-    ToolName, WriteTool,
+    ToolName, WebFetchTool, WriteTool,
 };
 use codie_tui::{TuiOptions, TuiRunMode};
 use tokio_util::sync::CancellationToken;
@@ -113,6 +116,18 @@ pub(crate) struct RunArgs {
     #[arg(long)]
     pub(crate) allow_all: bool,
 
+    /// Trust this project and record it in `trust.toml`.
+    #[arg(long)]
+    pub(crate) approve: bool,
+
+    /// Replace the system preamble (overrides `SYSTEM.md`).
+    #[arg(long, value_name = "TEXT")]
+    pub(crate) system_prompt: Option<String>,
+
+    /// Append to the system preamble (after `APPEND_SYSTEM.md`).
+    #[arg(long, value_name = "TEXT")]
+    pub(crate) append_system_prompt: Option<String>,
+
     /// Maximum assistant requests in this run.
     #[arg(long)]
     pub(crate) max_turns: Option<usize>,
@@ -168,6 +183,43 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
         None => std::env::current_dir().context("cannot determine the working directory")?,
     };
     let cwd = cwd.canonicalize().unwrap_or(cwd);
+
+    // Project trust decides whether `.codie/` resources are visible. The prompt
+    // runs before any terminal setup, so it cannot corrupt the TUI state.
+    let mut trust = TrustStore::load(&config.config_dir);
+    if args.approve {
+        trust
+            .approve(&cwd)
+            .with_context(|| format!("cannot record trust for {}", cwd.display()))?;
+    }
+    let can_prompt = std::io::stdin().is_terminal()
+        && std::io::stdout().is_terminal()
+        && !args.print
+        && !matches!(args.mode, OutputMode::Json);
+    let project_root = if trust.is_trusted(&cwd) {
+        Some(cwd.clone())
+    } else if TrustStore::has_project_resources(&cwd) && can_prompt && prompt_trust(&cwd)? {
+        trust
+            .approve(&cwd)
+            .with_context(|| format!("cannot record trust for {}", cwd.display()))?;
+        Some(cwd.clone())
+    } else {
+        if TrustStore::has_project_resources(&cwd) {
+            eprintln!(
+                "warning: ignoring .codie resources in {} (run with --approve to trust this project)",
+                cwd.display()
+            );
+        }
+        None
+    };
+
+    let instructions = load_instructions(&cwd);
+    let preamble = instructions.preamble(args.system_prompt.as_deref());
+    let append = instructions.combined_append(args.append_system_prompt.as_deref());
+    let customizations = Customizations::load(&config.config_dir, project_root.as_deref());
+    for warning in customizations.warnings() {
+        eprintln!("warning: {warning}");
+    }
 
     let provider_id = args
         .provider
@@ -264,6 +316,9 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
             signal: Arc::new(AtomicI32::new(0)),
             registry: Arc::new(registry),
             keybindings: Some(config.config_dir.join("keybindings.toml")),
+            preamble: preamble.clone(),
+            append: append.clone(),
+            customizations: customizations.clone(),
         };
         return codie_tui::run(options).await;
     }
@@ -274,6 +329,11 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
     ));
 
     let text = read_prompt(&args)?;
+    let expansion = expand_attachments(&text, &cwd);
+    for error in &expansion.errors {
+        eprintln!("warning: {error}");
+    }
+    let prompt_message = Message::user_with_content(expansion.content);
 
     let mut session = open_session(&args, &cwd, &session_dir)?;
     let mut history = session
@@ -286,8 +346,9 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
         let input = PromptInput {
             cwd: cwd.clone(),
             tools: declarations.clone(),
-            preamble: None,
-            append: None,
+            preamble: preamble.clone(),
+            append: append.clone(),
+            skills: customizations.skills().to_vec(),
             project_context: load_project_context(&cwd),
         };
         let system = build_system_message(&input, declarations);
@@ -343,7 +404,6 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
     let input_limit = context_window
         .saturating_sub(codie_tui::compaction::DEFAULT_RESERVE_TOKENS)
         .clamp(4_000, 200_000);
-    let prompt_message = Message::user(text.clone());
     if let Some(current) = session.as_mut()
         && history
             .iter()
@@ -385,7 +445,7 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
             agent.resume(history.clone(), agent_config.clone())
         } else {
             agent.run(
-                Message::user(text.clone()),
+                prompt_message.clone(),
                 history.clone(),
                 agent_config.clone(),
             )
@@ -583,6 +643,30 @@ fn default_model(provider: &str) -> &'static str {
     }
 }
 
+/// Asks the user whether to trust the project's `.codie/` resources.
+///
+/// Only called when stdin and stdout are terminals and the run is interactive.
+fn prompt_trust(cwd: &Path) -> Result<bool> {
+    eprint!(
+        "Project {} contains .codie resources (skills, templates, or system instructions).\n\
+         Trust this project? [y/N] ",
+        cwd.display()
+    );
+    std::io::stderr().flush().ok();
+    let mut line = String::new();
+    if std::io::stdin()
+        .read_line(&mut line)
+        .context("cannot read the trust answer")?
+        == 0
+    {
+        return Ok(false);
+    }
+    Ok(matches!(
+        line.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
+}
+
 fn read_prompt(args: &RunArgs) -> Result<String> {
     if !args.message.is_empty() {
         return Ok(args.message.join(" "));
@@ -642,6 +726,7 @@ fn tool_for(name: ToolName) -> Arc<dyn Tool> {
         ToolName::Grep => Arc::new(GrepTool),
         ToolName::Find => Arc::new(FindTool),
         ToolName::Ls => Arc::new(LsTool),
+        ToolName::WebFetch => Arc::new(WebFetchTool::new()),
     }
 }
 

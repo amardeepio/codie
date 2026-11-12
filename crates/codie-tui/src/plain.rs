@@ -32,8 +32,9 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
         let input = PromptInput {
             cwd: options.cwd.clone(),
             tools: declarations.clone(),
-            preamble: None,
-            append: None,
+            preamble: options.preamble.clone(),
+            append: options.append.clone(),
+            skills: options.customizations.skills().to_vec(),
             project_context: load_project_context(&options.cwd),
         };
         let system = build_system_message(&input, declarations);
@@ -97,7 +98,7 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
                 Command::Quit => break,
                 Command::Help | Command::Hotkeys => {
                     println!(
-                        "/help /quit /new /session /tree /fork /clone /name /export /theme /model [id] /thinking [level] /compact"
+                        "/help /quit /new /session /tree /fork /clone /name /export /theme /model [id] /thinking [level] /compact /skill:<name> /template:<name> /reload"
                     )
                 }
                 Command::Theme(argument) => match argument {
@@ -243,6 +244,48 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
                         println!("no session");
                     }
                 }
+                Command::Skill(name, arguments) => match options.customizations.skill(&name) {
+                    Some(skill) => {
+                        let prompt = skill.prompt(&arguments);
+                        run_prompt(
+                            &agent,
+                            &mut history,
+                            &mut session,
+                            &options,
+                            &cancel,
+                            &mut permission_rx,
+                            prompt,
+                        )
+                        .await?;
+                    }
+                    None => println!("Unknown skill `{name}`."),
+                },
+                Command::Template(name, arguments) => {
+                    match options.customizations.template(&name) {
+                        Some(template) => {
+                            let prompt = template.expand(&arguments);
+                            run_prompt(
+                                &agent,
+                                &mut history,
+                                &mut session,
+                                &options,
+                                &cancel,
+                                &mut permission_rx,
+                                prompt,
+                            )
+                            .await?;
+                        }
+                        None => println!("Unknown template `{name}`."),
+                    }
+                }
+                Command::Reload => {
+                    options.customizations.refresh();
+                    println!(
+                        "Reloaded {} skill(s) and {} template(s).",
+                        options.customizations.skills().len(),
+                        options.customizations.templates().len()
+                    );
+                }
                 Command::Unknown(name) => println!("Unknown command `/{name}`."),
             }
             continue;
@@ -281,7 +324,15 @@ async fn run_prompt(
     config.cancel = cancel.clone();
 
     println!("\n› {prompt}");
-    let mut stream = agent.run(Message::user(prompt), history.clone(), config);
+    let expansion = codie_prompt::expand_attachments(&prompt, &options.cwd);
+    for error in &expansion.errors {
+        println!("warning: {error}");
+    }
+    let mut stream = agent.run(
+        Message::user_with_content(expansion.content),
+        history.clone(),
+        config,
+    );
     let mut printed = 0_usize;
     let mut in_text = false;
 

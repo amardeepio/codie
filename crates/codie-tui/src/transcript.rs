@@ -1,5 +1,7 @@
 //! Transcript entries and tool blocks (`TUI-005`, `TUI-006`).
 
+use std::time::{Duration, Instant};
+
 use serde_json::Value;
 
 /// State of one tool call.
@@ -28,6 +30,8 @@ pub struct ToolBlock {
     pub output: String,
     /// Whether the full output is visible.
     pub expanded: bool,
+    /// When the call started, for the live elapsed indicator.
+    pub started: Option<Instant>,
 }
 
 impl ToolBlock {
@@ -49,6 +53,31 @@ impl ToolBlock {
         } else {
             format!("{} {}", self.name, truncate(arguments, 60))
         }
+    }
+
+    /// Returns how long the call has been running.
+    #[must_use]
+    pub fn elapsed(&self) -> Option<Duration> {
+        self.started.map(|started| started.elapsed())
+    }
+
+    /// Returns a compact elapsed label such as `12s` or `1m 03s`.
+    #[must_use]
+    pub fn elapsed_label(&self) -> Option<String> {
+        let elapsed = self.elapsed()?;
+        Some(format_elapsed(elapsed))
+    }
+}
+
+/// Formats a duration as `Ns`, `Nm SSs`, or `Nh MMm`.
+fn format_elapsed(elapsed: Duration) -> String {
+    let seconds = elapsed.as_secs();
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else if seconds < 3600 {
+        format!("{}m {:02}s", seconds / 60, seconds % 60)
+    } else {
+        format!("{}h {:02}m", seconds / 3600, (seconds % 3600) / 60)
     }
 }
 
@@ -84,6 +113,7 @@ pub struct Transcript {
     entries: Vec<Entry>,
     scroll: u16,
     follow: bool,
+    max_scroll: u16,
 }
 
 impl Transcript {
@@ -94,6 +124,7 @@ impl Transcript {
             entries: Vec::new(),
             scroll: 0,
             follow: true,
+            max_scroll: 0,
         }
     }
 
@@ -191,8 +222,18 @@ impl Transcript {
             status: ToolStatus::Running,
             output: String::new(),
             expanded: false,
+            started: Some(Instant::now()),
         }));
         self.follow = true;
+    }
+
+    /// Returns the most recent tool that is still running.
+    #[must_use]
+    pub fn running_tool(&self) -> Option<&ToolBlock> {
+        self.entries.iter().rev().find_map(|entry| match entry {
+            Entry::Tool(block) if block.status == ToolStatus::Running => Some(block),
+            _ => None,
+        })
     }
 
     /// Finishes a tool block by id.
@@ -228,11 +269,11 @@ impl Transcript {
         self.follow = false;
     }
 
-    /// Scrolls down by `lines`.
+    /// Scrolls down by `lines`, resuming follow mode at the bottom.
     pub fn scroll_down(&mut self, lines: u16) {
-        self.scroll = self.scroll.saturating_add(lines);
-        // The renderer clamps the offset to the content height.
-        if self.scroll == 0 {
+        self.scroll = self.scroll.saturating_add(lines).min(self.max_scroll);
+        if self.scroll >= self.max_scroll {
+            self.scroll = self.max_scroll;
             self.follow = true;
         }
     }
@@ -243,10 +284,17 @@ impl Transcript {
         self.scroll = 0;
     }
 
-    /// Replaces the clamped scroll offset while following.
+    /// Records the content height and clamps the offset.
+    ///
+    /// Following means the view sticks to the newest output. Scrolling to the
+    /// bottom resumes follow mode.
     pub fn clamp_scroll(&mut self, maximum: u16) {
-        if self.follow || self.scroll > maximum {
+        self.max_scroll = maximum;
+        if self.follow {
             self.scroll = maximum;
+        } else if self.scroll >= maximum {
+            self.scroll = maximum;
+            self.follow = true;
         }
     }
 
@@ -255,6 +303,7 @@ impl Transcript {
         self.entries.clear();
         self.scroll = 0;
         self.follow = true;
+        self.max_scroll = 0;
     }
 
     /// Returns true when there is no content.
@@ -292,6 +341,23 @@ mod tests {
             }
             other => panic!("unexpected entry: {other:?}"),
         }
+    }
+
+    #[test]
+    #[spec("TUI-020")]
+    fn running_tool_reports_progress_until_it_finishes() {
+        let mut transcript = Transcript::new();
+        transcript.tool_start(
+            "call_1".into(),
+            "bash".into(),
+            json!({"command": "cargo test"}),
+        );
+        let running = transcript.running_tool().expect("running tool");
+        assert_eq!(running.name, "bash");
+        assert!(running.elapsed_label().is_some());
+
+        transcript.tool_end("call_1", "ok".into(), false);
+        assert!(transcript.running_tool().is_none());
     }
 
     #[test]
