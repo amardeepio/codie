@@ -286,9 +286,24 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
                 Command::Update => match codie_ai::update::check(None).await {
                     Ok(status) if status.newer() => {
                         println!(
-                            "Update available: codie {} → {}. Reinstall with: curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh | sh",
+                            "Update available: codie {} → {}.",
                             status.current, status.latest
                         );
+                        if status.installable == Some(false) {
+                            println!(
+                                "No prebuilt binary is published for this platform yet; reinstall with: {}",
+                                codie_ai::update::INSTALLER_COMMAND
+                            );
+                        } else {
+                            println!("Installing…");
+                            match codie_ai::update::install(&status.latest).await {
+                                Ok(()) => println!(
+                                    "Installed codie {}. Restart codie to use the new version.",
+                                    status.latest
+                                ),
+                                Err(error) => println!("Update failed: {error}"),
+                            }
+                        }
                     }
                     Ok(status) => println!(
                         "codie {} — up to date (latest {}).",

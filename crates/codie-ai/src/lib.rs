@@ -42,8 +42,8 @@ pub use openai::{
 pub use redact::{is_secret_header, redact_header, redact_text, redacted_headers};
 pub use sse::{SseEvent, SseParser};
 pub use update::{
-    CHECK_TIMEOUT, RELEASES_URL, TAGS_URL, UpdateStatus, check, compare_versions,
-    latest_from_payload,
+    CHECK_TIMEOUT, INSTALLER_COMMAND, RELEASES_URL, TAGS_URL, UpdateStatus, asset_available, check,
+    compare_versions, latest_from_payload,
 };
 
 /// A provider identifier such as `deepseek` or `openrouter`.

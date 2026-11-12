@@ -114,9 +114,9 @@ curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh | 
 ```
 
 The installer places `codie` in `~/.local/bin`, verifies checksums when a prebuilt release exists, and prints
-the `PATH` line to add if that directory is not already on your path. Until prebuilt artifacts are published,
-it builds from source and installs Rust 1.88 through rustup when necessary. Pass `--no-rust-install` to disable
-that.
+the `PATH` line to add if that directory is not already on your path. Tagged releases publish prebuilt archives
+for macOS and Linux; when a tag has no artifact, it builds from source and installs Rust 1.88 through rustup
+when necessary. Pass `--no-rust-install` to disable that.
 
 Pin a version or pick another directory:
 

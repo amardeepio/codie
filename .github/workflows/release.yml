@@ -1,0 +1,178 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to publish (for example v0.6.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Fail before building when the tag and the workspace version disagree, since
+  # the updater builds asset URLs from the compiled version.
+  validate:
+    name: validate tag
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Check tag and version
+        id: version
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -eu
+          case "$TAG" in
+            v[0-9]*) ;;
+            *)
+              echo "release tag must look like v0.6.0, got '$TAG'" >&2
+              exit 1
+              ;;
+          esac
+          cargo_version=$(awk -F'"' '/^version = /{print $2; exit}' Cargo.toml)
+          tag_version=${TAG#v}
+          if [ "$cargo_version" != "$tag_version" ]; then
+            echo "Cargo.toml version '$cargo_version' does not match tag '$TAG'" >&2
+            exit 1
+          fi
+          echo "version=$tag_version" >> "$GITHUB_OUTPUT"
+
+  macos:
+    name: macOS ${{ matrix.target }}
+    needs: validate
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-15
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --locked -p codie-cli --bin codie --target ${{ matrix.target }}
+      - name: Package
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -eu
+          asset="codie-v${VERSION}-${TARGET}.tar.gz"
+          mkdir -p dist
+          tar -czf "dist/$asset" -C "target/${TARGET}/release" codie
+          ( cd dist && shasum -a 256 "$asset" | tee "$asset.sha256" )
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codie-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  linux:
+    name: Linux ${{ matrix.target }}
+    needs: validate
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # glibc 2.31 matches the floor documented in docs/src/platforms.md.
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-24.04
+            container: ubuntu:20.04
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+            container: arm64v8/ubuntu:20.04
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git build-essential
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --locked -p codie-cli --bin codie --target ${{ matrix.target }}
+      - name: Package
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -eu
+          asset="codie-v${VERSION}-${TARGET}.tar.gz"
+          mkdir -p dist
+          tar -czf "dist/$asset" -C "target/${TARGET}/release" codie
+          ( cd dist && sha256sum "$asset" | tee "$asset.sha256" )
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codie-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: publish release
+    needs: [validate, macos, linux]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Build checksum manifest
+        run: |
+          set -eu
+          cd dist
+          archives=$(ls ./*.tar.gz | wc -l)
+          if [ "$archives" -ne 4 ]; then
+            echo "expected 4 release archives, found $archives" >&2
+            ls -la >&2
+            exit 1
+          fi
+          sha256sum ./*.tar.gz | sed 's#\./##' | tee sha256.sum
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --repo "$REPO" --clobber
+          else
+            gh release create "$TAG" dist/* --repo "$REPO" \
+              --title "codie ${TAG#v}" --generate-notes
+          fi

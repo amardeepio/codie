@@ -52,9 +52,11 @@ modules. Windows work must not require rewriting the session, provider, or agent
 
 ## Distribution
 
-Release artifacts are produced by `cargo-dist`: macOS arm64 and x64 archives (or universal2), a Homebrew
-formula, checksums, and an SBOM. Artifacts are signed, and the release checklist is documented in the
-repository. Linux archives are best-effort; Windows archives are post-1.0.
+Tagged releases are built by `.github/workflows/release.yml`, which publishes `codie-v<version>-<target>.tar.gz`
+archives for macOS arm64/x64 and Linux arm64/x64, a per-asset `.sha256`, and a combined `sha256.sum`. Linux
+archives are built in an Ubuntu 20.04 container so they run on glibc 2.31 or newer. `install.sh` and `codie
+update` / `/update` consume those assets. Developer ID signing, notarization, a Homebrew formula, and an SBOM
+are still planned; Windows archives are post-1.0.
 
 See [`PLAN.MD`](../../PLAN.MD) §12.5 and §12.6 for the normative platform scope and
 [`docs/adr/0003-macos-first-v1.md`](../adr/0003-macos-first-v1.md) for the decision record.

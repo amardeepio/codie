@@ -11,11 +11,16 @@ that major series, with migrations applied on read.
 
 ### Added
 
-- Nothing yet.
+- Release workflow (`.github/workflows/release.yml`) that publishes checksum-verified archives for macOS
+  arm64/x64 and Linux arm64/x64 on every `v*` tag. `install.sh` and `/update` now install a prebuilt binary
+  instead of compiling from source. Linux archives are built against glibc 2.31 to match the documented floor.
+- `codie update` now installs a newer release and reports the installed version; `--check` still only reports.
 
 ### Changed
 
-- Nothing yet.
+- Update checks probe for a prebuilt archive for the current platform before advertising a release. A tag
+  without artifacts is reported with the installer command instead of an update that `/update` cannot install.
+- The TUI `/update` banner, plain mode, and `codie update` print the installer command when no artifact exists.
 
 ### Fixed
 

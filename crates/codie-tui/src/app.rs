@@ -1692,7 +1692,7 @@ fn spawn_update(sender: &mpsc::UnboundedSender<UpdateEvent>, manual: bool) {
 
         if manual
             && let Ok(status) = &result
-            && status.newer()
+            && status.installable_release()
         {
             let version = status.latest.clone();
             let _ = sender.send(UpdateEvent::Installing(version.clone()));
@@ -1706,6 +1706,23 @@ fn spawn_update(sender: &mpsc::UnboundedSender<UpdateEvent>, manual: bool) {
 
         let _ = sender.send(UpdateEvent::Checked { manual, result });
     });
+}
+
+/// Describes a newer release and how to install it.
+fn update_available_message(status: &codie_ai::update::UpdateStatus) -> String {
+    if status.installable == Some(false) {
+        format!(
+            "Update available: codie {} → {}.\n\nNo prebuilt binary is published for this platform yet; reinstall with:\n{}",
+            status.current,
+            status.latest,
+            codie_ai::update::INSTALLER_COMMAND
+        )
+    } else {
+        format!(
+            "Update available: codie {} → {}. Run /update to install it.",
+            status.current, status.latest
+        )
+    }
 }
 
 fn spawn_input() -> mpsc::UnboundedReceiver<Input> {
@@ -1876,10 +1893,16 @@ async fn event_loop(
                 match update {
                     UpdateEvent::Checked { manual, result } => match result {
                         Ok(status) if status.newer() => {
-                            app.transcript.push_info(format!(
-                                "Update available: codie {} → {}. Run /update to install it.",
-                                status.current, status.latest
-                            ));
+                            let message = update_available_message(&status);
+                            if manual {
+                                app.overlay = Some(Overlay::Notice {
+                                    title: " update ".to_owned(),
+                                    body: message,
+                                    ok: true,
+                                });
+                            } else {
+                                app.transcript.push_info(message);
+                            }
                         }
                         Ok(status) if manual => {
                             app.overlay = Some(Overlay::Notice {

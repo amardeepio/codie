@@ -115,9 +115,9 @@ Retry, and if the failure persists report it at <https://github.com/amardeepio/c
 
 ### Source build is slow
 
-No prebuilt artifact exists for the requested version yet, so the script is compiling from source with Rust
-1.88. This is expected at `0.6.0` and takes a few minutes. Once release artifacts ship for your tag, the
-download path is used automatically.
+Tagged releases publish prebuilt archives for macOS (arm64/x64) and Linux (arm64/x64). If the requested tag has
+no artifact, the script compiles from source with Rust 1.88, which takes a few minutes. Older tags (including
+`0.5.0` and `0.6.0`) predate the release workflow and always build from source.
 
 ### Building from a checkout
 

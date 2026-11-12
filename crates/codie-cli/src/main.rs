@@ -60,7 +60,7 @@ enum Commands {
     Config(config_cmd::ConfigArgs),
     /// Inspect and export sessions.
     Sessions(sessions_cmd::SessionsArgs),
-    /// Check for a newer release. Does not self-update.
+    /// Install a newer release, or check for one with --check.
     Update(update_cmd::UpdateArgs),
 }
 
