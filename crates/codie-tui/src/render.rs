@@ -256,7 +256,14 @@ fn transcript_lines(app: &App, width: u16) -> Vec<Line<'static>> {
 fn draw_editor(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
     let palette = app.theme.palette;
     let (title, border) = match app.status {
-        Status::Idle => (" prompt ".to_owned(), palette.border),
+        Status::Idle => (
+            if app.transcript.is_following() {
+                " prompt ".to_owned()
+            } else {
+                " prompt · scrolled (Esc to bottom) ".to_owned()
+            },
+            palette.border,
+        ),
         Status::Streaming => {
             let frame = SPINNER[app.tick as usize % SPINNER.len()];
             let title = match app.transcript.running_tool() {
@@ -579,6 +586,20 @@ mod tests {
         assert!(text.contains("fix the bug"));
         assert!(text.contains("Done"));
         assert!(text.contains("test passes"));
+    }
+
+    #[test]
+    #[spec("TUI-021")]
+    fn scrolled_transcript_shows_a_return_hint() {
+        let mut app = app();
+        for index in 0..30 {
+            app.transcript.push_user(format!("message {index}"));
+        }
+        app.transcript.clamp_scroll(40);
+        app.transcript.scroll_up(100);
+        let text = buffer(&mut app);
+        assert!(text.contains("scrolled"), "{text}");
+        assert!(text.contains("Esc to bottom"), "{text}");
     }
 
     #[test]

@@ -15,7 +15,10 @@ use codie_session::{Session, SessionSummary, TreeEntry};
 use codie_tools::Registry;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::crossterm::event::{DisableBracketedPaste, EnableBracketedPaste, Event};
+use ratatui::crossterm::event::{
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
+    MouseEventKind,
+};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
@@ -1526,7 +1529,7 @@ fn setup_terminal(mode: TuiRunMode) -> Result<Terminal<CrosstermBackend<std::io:
     if mode == TuiRunMode::Full {
         execute!(stdout, EnterAlternateScreen)?;
     }
-    execute!(stdout, EnableBracketedPaste)?;
+    execute!(stdout, EnableBracketedPaste, EnableMouseCapture)?;
     let terminal = Terminal::new(CrosstermBackend::new(stdout))?;
     Ok(terminal)
 }
@@ -1537,6 +1540,7 @@ fn restore_terminal() {
     let _ = execute!(
         stdout,
         DisableBracketedPaste,
+        DisableMouseCapture,
         LeaveAlternateScreen,
         ratatui::crossterm::cursor::Show
     );
@@ -1556,6 +1560,7 @@ fn install_panic_hook() {
 #[derive(Debug)]
 enum Input {
     Key(KeyEvent),
+    Mouse(MouseEventKind),
     Paste(String),
     Signal(i32),
 }
@@ -1569,6 +1574,11 @@ fn spawn_input() -> mpsc::UnboundedReceiver<Input> {
                 match ratatui::crossterm::event::read() {
                     Ok(Event::Key(key)) => {
                         if sender.send(Input::Key(key)).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(Event::Mouse(mouse)) => {
+                        if sender.send(Input::Mouse(mouse.kind)).is_err() {
                             break;
                         }
                     }
@@ -1681,6 +1691,13 @@ async fn event_loop(
                             }
                         }
                     }
+                    Input::Mouse(MouseEventKind::ScrollUp) => {
+                        app.transcript.scroll_up(3);
+                    }
+                    Input::Mouse(MouseEventKind::ScrollDown) => {
+                        app.transcript.scroll_down(3);
+                    }
+                    Input::Mouse(_) => {}
                     Input::Paste(text) => app.editor.paste(&text),
                     Input::Signal(code) => {
                         signal_code = code;
@@ -2167,6 +2184,28 @@ mod tests {
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    #[spec("TUI-021")]
+    fn scroll_keys_leave_follow_mode_and_esc_returns_to_bottom() {
+        let mut app = app();
+        app.transcript.push_user("one");
+        app.transcript.push_user("two");
+        app.transcript.clamp_scroll(100);
+
+        app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT));
+        assert!(!app.transcript.is_following());
+        assert_eq!(app.transcript.scroll(), 92);
+
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
+        assert_eq!(app.transcript.scroll(), 100);
+        assert!(app.transcript.is_following());
+
+        app.handle_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
+        assert!(!app.transcript.is_following());
+        app.handle_key(key(KeyCode::Esc));
+        assert!(app.transcript.is_following());
     }
 
     #[test]

@@ -113,6 +113,7 @@ pub struct Transcript {
     entries: Vec<Entry>,
     scroll: u16,
     follow: bool,
+    max_scroll: u16,
 }
 
 impl Transcript {
@@ -123,6 +124,7 @@ impl Transcript {
             entries: Vec::new(),
             scroll: 0,
             follow: true,
+            max_scroll: 0,
         }
     }
 
@@ -267,11 +269,11 @@ impl Transcript {
         self.follow = false;
     }
 
-    /// Scrolls down by `lines`.
+    /// Scrolls down by `lines`, resuming follow mode at the bottom.
     pub fn scroll_down(&mut self, lines: u16) {
-        self.scroll = self.scroll.saturating_add(lines);
-        // The renderer clamps the offset to the content height.
-        if self.scroll == 0 {
+        self.scroll = self.scroll.saturating_add(lines).min(self.max_scroll);
+        if self.scroll >= self.max_scroll {
+            self.scroll = self.max_scroll;
             self.follow = true;
         }
     }
@@ -282,10 +284,17 @@ impl Transcript {
         self.scroll = 0;
     }
 
-    /// Replaces the clamped scroll offset while following.
+    /// Records the content height and clamps the offset.
+    ///
+    /// Following means the view sticks to the newest output. Scrolling to the
+    /// bottom resumes follow mode.
     pub fn clamp_scroll(&mut self, maximum: u16) {
-        if self.follow || self.scroll > maximum {
+        self.max_scroll = maximum;
+        if self.follow {
             self.scroll = maximum;
+        } else if self.scroll >= maximum {
+            self.scroll = maximum;
+            self.follow = true;
         }
     }
 
@@ -294,6 +303,7 @@ impl Transcript {
         self.entries.clear();
         self.scroll = 0;
         self.follow = true;
+        self.max_scroll = 0;
     }
 
     /// Returns true when there is no content.
