@@ -52,7 +52,7 @@ flowchart LR
     P["Provider adapter<br/>OpenAI-compatible"] -->|"SSE deltas"| S["Assistant event stream"]
     S --> L["Agent loop"]
     L <-->|"append / projection"| DB["Session store<br/>append-only JSONL"]
-    L --> T["Tool execution<br/>read · write · edit · bash"]
+    L --> T["Tool execution<br/>read · write · edit · bash<br/>grep · find · ls"]
     L --> M["Interfaces"]
     M --> I["Interactive TUI"]
     M --> P1["Print"]
@@ -68,7 +68,7 @@ flowchart TD
 
     CORE["codie-core<br/>messages · events · loop"]
     AI["codie-ai<br/>providers · SSE"]
-    TOOLS["codie-tools<br/>read · write · edit · bash"]
+    TOOLS["codie-tools<br/>read · write · edit · bash<br/>grep · find · ls"]
     SESSION["codie-session<br/>JSONL store"]
     PROMPT["codie-prompt<br/>system prompt"]
 

@@ -1,8 +1,9 @@
 //! Built-in tools for codie.
 //!
-//! Phase 1 provides the stable tool names and the `read`, `write`, `edit`, and
-//! `bash` implementations, plus path resolution, output truncation, a tool
-//! registry, and a policy wrapper. Phase 2 adds `grep`, `find`, and `ls`.
+//! The built-in surface is `read`, `write`, `edit`, `bash`, `grep`, `find`, and
+//! `ls`, plus path resolution, output truncation, a tool registry, and a policy
+//! wrapper. `read`, `grep`, `find`, and `ls` are read-only and never denied by
+//! the default permission policy.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -12,15 +13,22 @@ use std::{fmt, str::FromStr};
 pub mod bash;
 pub mod edit;
 mod file_mutation;
+pub mod find;
+pub mod grep;
+pub mod ls;
 pub mod path;
 pub mod read;
 pub mod registry;
+mod search;
 pub mod truncate;
 pub mod validate;
 pub mod write;
 
 pub use bash::{BashTool, MAX_TIMEOUT_SECONDS};
 pub use edit::EditTool;
+pub use find::FindTool;
+pub use grep::GrepTool;
+pub use ls::LsTool;
 pub use path::resolve_path;
 pub use read::ReadTool;
 pub use registry::{Policy, PolicyToolbox, Registry, is_read_only};

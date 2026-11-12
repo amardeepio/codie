@@ -118,6 +118,7 @@ snake_case so failures are readable without the macro.
 | [`SPEC-PROV-003`](provider/0003-openrouter.md) — OpenRouter profile | none (profile) | accepted | 1 |
 | [`SPEC-PROV-004`](provider/0004-auth.md) — Authentication | `PROV-030`..`PROV-034` | accepted | 1 |
 | [`SPEC-TOOL-001`](tools/0001-tool-contract.md) — Tool contract | `TOOL-001`..`TOOL-008` | accepted | 1 |
+| [`SPEC-TOOL-002`](tools/0002-search-tools.md) — Read-only search tools | `TOOL-010`..`TOOL-014` | implemented | 4 |
 | [`SPEC-SESS-001`](session/0001-jsonl-format.md) — Session JSONL v1 | `SESS-001`..`SESS-009` | accepted | 1 |
 | [`SPEC-SESS-002`](session/0002-tree-operations.md) — Session tree operations | `SESS-010`..`SESS-025` | implemented | 3 |
 | [`SPEC-CTX-001`](context/0001-compaction.md) — Context compaction | `CTX-001`..`CTX-007` | implemented | 3 |

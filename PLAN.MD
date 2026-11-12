@@ -1171,6 +1171,7 @@ Exit criteria:
 
 Scope:
 
+- Read-only search tools (`grep`, `find`, `ls`) with `.gitignore` semantics (`SPEC-TOOL-002`).
 - Skills (discovery, frontmatter, `/skill:name`, model-invocation toggle).
 - Prompt templates with argument substitution.
 - Project trust (`--approve`, `trust.toml`, prompt), `.codie/` resources.

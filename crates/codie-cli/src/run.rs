@@ -18,7 +18,10 @@ use codie_core::{
 };
 use codie_prompt::{PromptInput, build_system_message, load_project_context};
 use codie_session::Session;
-use codie_tools::{BashTool, EditTool, Policy, PolicyToolbox, ReadTool, Registry, WriteTool};
+use codie_tools::{
+    BashTool, EditTool, FindTool, GrepTool, LsTool, Policy, PolicyToolbox, ReadTool, Registry,
+    ToolName, WriteTool,
+};
 use codie_tui::{TuiOptions, TuiRunMode};
 use tokio_util::sync::CancellationToken;
 
@@ -612,29 +615,34 @@ fn select_tools(spec: Option<&str>, no_tools: bool) -> Result<Registry> {
         .collect::<HashSet<_>>();
 
     let mut tools: Vec<Arc<dyn Tool>> = Vec::new();
-    for name in ["read", "write", "edit", "bash"] {
-        if !names.contains(name) {
-            continue;
+    for tool_name in ToolName::all() {
+        if names.contains(tool_name.as_str()) {
+            tools.push(tool_for(tool_name));
         }
-        let tool = match name {
-            "read" => Arc::new(ReadTool) as Arc<dyn Tool>,
-            "write" => Arc::new(WriteTool),
-            "edit" => Arc::new(EditTool),
-            "bash" => Arc::new(BashTool),
-            _ => unreachable!(),
-        };
-        tools.push(tool);
     }
 
     let unknown = names
         .iter()
-        .filter(|name| !matches!(**name, "read" | "write" | "edit" | "bash"))
+        .filter(|name| name.parse::<ToolName>().is_err())
         .copied()
         .collect::<Vec<_>>();
     if !unknown.is_empty() {
         bail!("unknown tool(s): {}", unknown.join(", "));
     }
     Ok(Registry::new(tools))
+}
+
+/// Returns the implementation for one built-in tool name.
+fn tool_for(name: ToolName) -> Arc<dyn Tool> {
+    match name {
+        ToolName::Read => Arc::new(ReadTool),
+        ToolName::Write => Arc::new(WriteTool),
+        ToolName::Edit => Arc::new(EditTool),
+        ToolName::Bash => Arc::new(BashTool),
+        ToolName::Grep => Arc::new(GrepTool),
+        ToolName::Find => Arc::new(FindTool),
+        ToolName::Ls => Arc::new(LsTool),
+    }
 }
 
 fn allowed_tools(config: &Config, cli: Option<&str>, allow_all: bool) -> Vec<String> {
@@ -649,9 +657,9 @@ fn allowed_tools(config: &Config, cli: Option<&str>, allow_all: bool) -> Vec<Str
     }
     if allow_all {
         allowed.extend(
-            ["read", "write", "edit", "bash"]
+            ToolName::all()
                 .into_iter()
-                .map(str::to_owned),
+                .map(|tool| tool.as_str().to_owned()),
         );
     }
     allowed

@@ -15,7 +15,10 @@ workspace = true
 [dependencies]
 async-trait.workspace = true
 codie-core.workspace = true
+globset.workspace = true
+ignore.workspace = true
 jsonschema.workspace = true
+regex.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true

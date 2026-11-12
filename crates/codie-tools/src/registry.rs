@@ -5,7 +5,8 @@ use std::{collections::HashSet, fmt, sync::Arc};
 use codie_core::{Tool, ToolDecl, Toolbox};
 
 use crate::{
-    bash::BashTool, edit::EditTool, read::ReadTool, validate::ValidatedTool, write::WriteTool,
+    bash::BashTool, edit::EditTool, find::FindTool, grep::GrepTool, ls::LsTool, read::ReadTool,
+    validate::ValidatedTool, write::WriteTool,
 };
 
 /// A collection of tools addressed by their wire name.
@@ -28,7 +29,7 @@ impl Registry {
         Self { tools }
     }
 
-    /// Creates a registry containing `read`, `write`, `edit`, and `bash`.
+    /// Creates a registry containing every built-in tool.
     #[must_use]
     pub fn builtin() -> Self {
         Self::new(vec![
@@ -36,6 +37,9 @@ impl Registry {
             Arc::new(WriteTool),
             Arc::new(EditTool),
             Arc::new(BashTool),
+            Arc::new(GrepTool),
+            Arc::new(FindTool),
+            Arc::new(LsTool),
         ])
     }
 
@@ -218,6 +222,7 @@ mod tests {
     use super::*;
     use codie_testkit::spec;
 
+    #[spec("TOOL-001")]
     #[test]
     fn registry_declares_builtins_in_order() {
         let registry = Registry::builtin();
@@ -226,7 +231,10 @@ mod tests {
             .into_iter()
             .map(|declaration| declaration.name)
             .collect();
-        assert_eq!(names, ["read", "write", "edit", "bash"]);
+        assert_eq!(
+            names,
+            ["read", "write", "edit", "bash", "grep", "find", "ls"]
+        );
         assert!(registry.get("read").is_some());
         assert!(registry.get("missing").is_none());
     }
@@ -259,7 +267,7 @@ mod tests {
     fn policy_toolbox_delegates_lookup_and_declarations() {
         let toolbox = PolicyToolbox::new(Arc::new(Registry::builtin()), Policy::headless(["bash"]));
         assert!(toolbox.get("write").is_some());
-        assert_eq!(toolbox.declarations().len(), 4);
+        assert_eq!(toolbox.declarations().len(), 7);
         assert!(toolbox.denial("write").is_some());
         assert!(toolbox.denial("bash").is_none());
         assert!(toolbox.denial("read").is_none());

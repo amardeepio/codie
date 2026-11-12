@@ -97,7 +97,8 @@ the format is documented and announced as stable for 1.x.
 ## Later phases
 
 - **Phase 3:** session tree operations, fork and clone, compaction, token estimation, picker, format freeze.
-- **Phase 4:** skills, prompt templates, project trust, `SYSTEM.md`, config reload, `@file` and image inputs.
+- **Phase 4:** read-only search tools (`grep`, `find`, `ls`), skills, prompt templates, project trust, `SYSTEM.md`,
+  config reload, `@file` and image inputs.
 - **Phase 5:** RPC mode, published JSON schemas, HTML export, update checks, performance pass.
 - **Phase 6:** out-of-process extension protocol, hooks, custom tools and commands, example extensions.
 - **Phase 7:** macOS terminal and packaging matrix, signing, notarization, fuzzing, SBOM, 1.0 release.
