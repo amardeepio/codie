@@ -103,15 +103,42 @@ and session id. Token totals abbreviate thousands and millions: `999`, `1k`, `1.
 
 ## Themes
 
-`--theme system`, `--theme dark`, `--theme light`, or a TOML file with semantic tokens:
+`--theme system`, `--theme dark`, `--theme light`, or a TOML file with semantic tokens. The built-in
+palettes follow OpenCode's default theme: a near-black canvas, warm peach focus, purple headings, green code,
+and distinct colors for emphasis, quotes, and lists.
 
 ```toml
-background = "#121216"
-foreground = "#e2e2e8"
-accent = "#7aa2f7"
-tool = "#bb9af7"
-error = "#f7768e"
+background = "#0a0a0a"
+surface = "#141414"
+foreground = "#eeeeee"
+muted = "#808080"
+primary = "#fab283"
+secondary = "#5c9cf5"
+accent = "#9d7cd8"
+heading = "#9d7cd8"
+link = "#fab283"
+code = "#7fd88f"
+strong = "#f5a742"
+emphasis = "#e5c07b"
+quote = "#e5c07b"
+list = "#fab283"
+list_enum = "#56b6c2"
+rule = "#808080"
+tool = "#5c9cf5"
+error = "#e06c75"
+success = "#7fd88f"
+warning = "#f5a742"
+info = "#56b6c2"
+diff_add = "#4fd6be"
+diff_del = "#c53b53"
+border = "#484848"
+border_active = "#606060"
+border_subtle = "#3c3c3c"
 ```
+
+Newer tokens are optional. `primary` and `heading` fall back to `accent` when it is set; `link` and `list`
+fall back to `primary`; `code` falls back to `success`; `strong`, `emphasis`, and `quote` fall back to
+`warning`; `list_enum` falls back to `info`; and `rule` falls back to `muted`.
 
 Custom themes must meet a 4.5:1 body contrast ratio. A theme file reloads within a second of being edited.
 `system` follows `COLORFGBG`, with `CODIE_THEME` as an override.

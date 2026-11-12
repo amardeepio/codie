@@ -14,11 +14,19 @@ use serde::Deserialize;
 pub struct Palette {
     /// Application background.
     pub background: Color,
+    /// Raised surfaces such as user messages.
+    pub surface: Color,
+    /// Stronger surfaces such as inline code.
+    pub surface_alt: Color,
     /// Primary body text.
     pub foreground: Color,
     /// Secondary text and metadata.
     pub muted: Color,
-    /// Accent for headings, prompts, and focus.
+    /// Primary interactive color: prompts, focus, and selection.
+    pub primary: Color,
+    /// Secondary interactive color: models and tool summaries.
+    pub secondary: Color,
+    /// Accent for headings and code keywords.
     pub accent: Color,
     /// User message text.
     pub user: Color,
@@ -30,12 +38,38 @@ pub struct Palette {
     pub error: Color,
     /// Success and added lines.
     pub success: Color,
+    /// Warnings and strong emphasis.
+    pub warning: Color,
+    /// Informational text and ordered-list markers.
+    pub info: Color,
     /// Added diff lines.
     pub diff_add: Color,
     /// Removed diff lines.
     pub diff_del: Color,
     /// Borders and separators.
     pub border: Color,
+    /// Focused borders and active separators.
+    pub border_active: Color,
+    /// Low-contrast borders.
+    pub border_subtle: Color,
+    /// Markdown headings.
+    pub heading: Color,
+    /// Markdown links.
+    pub link: Color,
+    /// Inline code and code strings.
+    pub code: Color,
+    /// Markdown strong text.
+    pub strong: Color,
+    /// Markdown emphasis and syntax types.
+    pub emphasis: Color,
+    /// Block quotes.
+    pub quote: Color,
+    /// Unordered-list markers.
+    pub list: Color,
+    /// Ordered-list numbers.
+    pub list_enum: Color,
+    /// Horizontal rules.
+    pub rule: Color,
 }
 
 impl Palette {
@@ -43,18 +77,35 @@ impl Palette {
     #[must_use]
     pub const fn dark() -> Self {
         Self {
-            background: Color::Rgb(18, 18, 22),
-            foreground: Color::Rgb(226, 226, 232),
-            muted: Color::Rgb(138, 138, 152),
-            accent: Color::Rgb(122, 162, 247),
-            user: Color::Rgb(158, 206, 106),
-            assistant: Color::Rgb(226, 226, 232),
-            tool: Color::Rgb(187, 154, 247),
-            error: Color::Rgb(247, 118, 142),
-            success: Color::Rgb(158, 206, 106),
-            diff_add: Color::Rgb(158, 206, 106),
-            diff_del: Color::Rgb(247, 118, 142),
-            border: Color::Rgb(65, 72, 104),
+            background: Color::Rgb(10, 10, 10),
+            surface: Color::Rgb(20, 20, 20),
+            surface_alt: Color::Rgb(30, 30, 30),
+            foreground: Color::Rgb(238, 238, 238),
+            muted: Color::Rgb(128, 128, 128),
+            primary: Color::Rgb(250, 178, 131),
+            secondary: Color::Rgb(92, 156, 245),
+            accent: Color::Rgb(157, 124, 216),
+            user: Color::Rgb(238, 238, 238),
+            assistant: Color::Rgb(238, 238, 238),
+            tool: Color::Rgb(92, 156, 245),
+            error: Color::Rgb(224, 108, 117),
+            success: Color::Rgb(127, 216, 143),
+            warning: Color::Rgb(245, 167, 66),
+            info: Color::Rgb(86, 182, 194),
+            diff_add: Color::Rgb(79, 214, 190),
+            diff_del: Color::Rgb(197, 59, 83),
+            border: Color::Rgb(72, 72, 72),
+            border_active: Color::Rgb(96, 96, 96),
+            border_subtle: Color::Rgb(60, 60, 60),
+            heading: Color::Rgb(157, 124, 216),
+            link: Color::Rgb(250, 178, 131),
+            code: Color::Rgb(127, 216, 143),
+            strong: Color::Rgb(245, 167, 66),
+            emphasis: Color::Rgb(229, 192, 123),
+            quote: Color::Rgb(229, 192, 123),
+            list: Color::Rgb(250, 178, 131),
+            list_enum: Color::Rgb(86, 182, 194),
+            rule: Color::Rgb(128, 128, 128),
         }
     }
 
@@ -62,18 +113,35 @@ impl Palette {
     #[must_use]
     pub const fn light() -> Self {
         Self {
-            background: Color::Rgb(250, 250, 252),
-            foreground: Color::Rgb(36, 40, 59),
-            muted: Color::Rgb(96, 103, 128),
-            accent: Color::Rgb(52, 84, 209),
-            user: Color::Rgb(46, 125, 50),
-            assistant: Color::Rgb(36, 40, 59),
-            tool: Color::Rgb(124, 58, 237),
-            error: Color::Rgb(185, 28, 28),
-            success: Color::Rgb(46, 125, 50),
-            diff_add: Color::Rgb(46, 125, 50),
-            diff_del: Color::Rgb(185, 28, 28),
-            border: Color::Rgb(160, 168, 190),
+            background: Color::Rgb(255, 255, 255),
+            surface: Color::Rgb(250, 250, 250),
+            surface_alt: Color::Rgb(245, 245, 245),
+            foreground: Color::Rgb(26, 26, 26),
+            muted: Color::Rgb(107, 107, 107),
+            primary: Color::Rgb(41, 104, 195),
+            secondary: Color::Rgb(123, 91, 182),
+            accent: Color::Rgb(138, 90, 0),
+            user: Color::Rgb(26, 26, 26),
+            assistant: Color::Rgb(26, 26, 26),
+            tool: Color::Rgb(123, 91, 182),
+            error: Color::Rgb(209, 56, 61),
+            success: Color::Rgb(47, 125, 69),
+            warning: Color::Rgb(168, 95, 0),
+            info: Color::Rgb(31, 111, 122),
+            diff_add: Color::Rgb(30, 114, 92),
+            diff_del: Color::Rgb(197, 59, 83),
+            border: Color::Rgb(184, 184, 184),
+            border_active: Color::Rgb(160, 160, 160),
+            border_subtle: Color::Rgb(212, 212, 212),
+            heading: Color::Rgb(138, 90, 0),
+            link: Color::Rgb(41, 104, 195),
+            code: Color::Rgb(47, 125, 69),
+            strong: Color::Rgb(168, 95, 0),
+            emphasis: Color::Rgb(138, 100, 16),
+            quote: Color::Rgb(138, 100, 16),
+            list: Color::Rgb(41, 104, 195),
+            list_enum: Color::Rgb(31, 111, 122),
+            rule: Color::Rgb(107, 107, 107),
         }
     }
 }
@@ -198,10 +266,27 @@ struct ThemeFile {
     tool: Option<String>,
     error: Option<String>,
     success: Option<String>,
+    warning: Option<String>,
+    info: Option<String>,
     diff_add: Option<String>,
     diff_del: Option<String>,
     border: Option<String>,
+    border_active: Option<String>,
+    border_subtle: Option<String>,
     background: Option<String>,
+    surface: Option<String>,
+    surface_alt: Option<String>,
+    primary: Option<String>,
+    secondary: Option<String>,
+    heading: Option<String>,
+    link: Option<String>,
+    code: Option<String>,
+    strong: Option<String>,
+    emphasis: Option<String>,
+    quote: Option<String>,
+    list: Option<String>,
+    list_enum: Option<String>,
+    rule: Option<String>,
 }
 
 fn load_file(path: &Path) -> Result<Theme> {
@@ -211,19 +296,68 @@ fn load_file(path: &Path) -> Result<Theme> {
         toml::from_str(&contents).with_context(|| format!("invalid theme {}", path.display()))?;
     let base = Palette::dark();
 
+    let accent = parse_or(file.accent.as_deref(), base.accent, "accent")?;
+    let primary = parse_or(
+        file.primary.as_deref(),
+        if file.accent.is_some() {
+            accent
+        } else {
+            base.primary
+        },
+        "primary",
+    )?;
+    let heading = parse_or(
+        file.heading.as_deref(),
+        if file.accent.is_some() {
+            accent
+        } else {
+            base.heading
+        },
+        "heading",
+    )?;
+    let success = parse_or(file.success.as_deref(), base.success, "success")?;
+    let warning = parse_or(file.warning.as_deref(), base.warning, "warning")?;
+    let info = parse_or(file.info.as_deref(), base.info, "info")?;
+    let muted = parse_or(file.muted.as_deref(), base.muted, "muted")?;
+
     let palette = Palette {
         background: parse_or(file.background.as_deref(), base.background, "background")?,
+        surface: parse_or(file.surface.as_deref(), base.surface, "surface")?,
+        surface_alt: parse_or(file.surface_alt.as_deref(), base.surface_alt, "surface_alt")?,
         foreground: parse_or(file.foreground.as_deref(), base.foreground, "foreground")?,
-        muted: parse_or(file.muted.as_deref(), base.muted, "muted")?,
-        accent: parse_or(file.accent.as_deref(), base.accent, "accent")?,
+        muted,
+        primary,
+        secondary: parse_or(file.secondary.as_deref(), base.secondary, "secondary")?,
+        accent,
         user: parse_or(file.user.as_deref(), base.user, "user")?,
         assistant: parse_or(file.assistant.as_deref(), base.assistant, "assistant")?,
         tool: parse_or(file.tool.as_deref(), base.tool, "tool")?,
         error: parse_or(file.error.as_deref(), base.error, "error")?,
-        success: parse_or(file.success.as_deref(), base.success, "success")?,
+        success,
+        warning,
+        info,
         diff_add: parse_or(file.diff_add.as_deref(), base.diff_add, "diff_add")?,
         diff_del: parse_or(file.diff_del.as_deref(), base.diff_del, "diff_del")?,
         border: parse_or(file.border.as_deref(), base.border, "border")?,
+        border_active: parse_or(
+            file.border_active.as_deref(),
+            base.border_active,
+            "border_active",
+        )?,
+        border_subtle: parse_or(
+            file.border_subtle.as_deref(),
+            base.border_subtle,
+            "border_subtle",
+        )?,
+        heading,
+        link: parse_or(file.link.as_deref(), primary, "link")?,
+        code: parse_or(file.code.as_deref(), success, "code")?,
+        strong: parse_or(file.strong.as_deref(), warning, "strong")?,
+        emphasis: parse_or(file.emphasis.as_deref(), warning, "emphasis")?,
+        quote: parse_or(file.quote.as_deref(), warning, "quote")?,
+        list: parse_or(file.list.as_deref(), primary, "list")?,
+        list_enum: parse_or(file.list_enum.as_deref(), info, "list_enum")?,
+        rule: parse_or(file.rule.as_deref(), muted, "rule")?,
     };
 
     if contrast_ratio(palette.foreground, palette.background) < 4.5 {
@@ -312,6 +446,69 @@ mod tests {
                 theme.body_contrast()
             );
         }
+    }
+
+    #[test]
+    fn builtin_text_colors_meet_contrast() {
+        for theme in [
+            Theme::load(Some("dark")).unwrap(),
+            Theme::load(Some("light")).unwrap(),
+        ] {
+            let palette = theme.palette;
+            for color in [
+                palette.foreground,
+                palette.muted,
+                palette.primary,
+                palette.secondary,
+                palette.accent,
+                palette.error,
+                palette.success,
+                palette.warning,
+                palette.info,
+                palette.heading,
+                palette.link,
+                palette.code,
+                palette.strong,
+                palette.emphasis,
+                palette.quote,
+                palette.list,
+                palette.list_enum,
+                palette.rule,
+            ] {
+                let ratio = contrast_ratio(color, palette.background);
+                assert!(
+                    ratio >= 4.5,
+                    "{} color {color:?} contrast {ratio:.2}",
+                    theme.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn custom_theme_parses_semantic_tokens() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("theme.toml");
+        std::fs::write(
+            &path,
+            "primary = \"#ff0000\"\nheading = \"#00ff00\"\nsurface = \"#010203\"\nstrong = \"#040506\"\n",
+        )
+        .unwrap();
+        let theme = Theme::load(Some(path.to_str().unwrap())).unwrap();
+        assert_eq!(theme.palette.primary, Color::Rgb(255, 0, 0));
+        assert_eq!(theme.palette.heading, Color::Rgb(0, 255, 0));
+        assert_eq!(theme.palette.surface, Color::Rgb(1, 2, 3));
+        assert_eq!(theme.palette.strong, Color::Rgb(4, 5, 6));
+    }
+
+    #[test]
+    fn custom_accent_drives_primary_and_heading() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("theme.toml");
+        std::fs::write(&path, "accent = \"#ff0000\"\n").unwrap();
+        let theme = Theme::load(Some(path.to_str().unwrap())).unwrap();
+        assert_eq!(theme.palette.primary, Color::Rgb(255, 0, 0));
+        assert_eq!(theme.palette.heading, Color::Rgb(255, 0, 0));
     }
 
     #[test]
