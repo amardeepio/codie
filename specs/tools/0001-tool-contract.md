@@ -15,7 +15,7 @@ loop failures. Phase 1 ships `read`, `write`, `edit`, and `bash`.
 
 # Requirements
 
-**TOOL-001 (MUST)** The registry declares `read`, `write`, `edit`, and `bash` in that order, each with an object schema; unknown names resolve to no tool.
+**TOOL-001 (MUST)** The registry declares `read`, `write`, `edit`, `bash`, `grep`, `find`, and `ls` in that order, each with an object schema; unknown names resolve to no tool.
 Verification: `crates/codie-tools/tests/schema_validation.rs::spec_tool_001_registry_declares_schemas`
 
 **TOOL-002 (MUST)** Arguments are validated against the tool's JSON Schema before execution. Invalid arguments produce an error result and the tool is not invoked.
@@ -53,4 +53,4 @@ Output is bounded so a runaway command cannot exhaust memory. `bash` emits progr
 
 # Out of scope
 
-`grep`, `find`, and `ls` are Phase 2. Extension tools are Phase 6.
+The read-only search tools are defined by `SPEC-TOOL-002`. Extension tools are Phase 6.

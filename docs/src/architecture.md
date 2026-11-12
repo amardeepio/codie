@@ -14,7 +14,7 @@ flowchart TD
 
     CORE["codie-core<br/>messages · events · loop"]
     AI["codie-ai<br/>providers · SSE"]
-    TOOLS["codie-tools<br/>read · write · edit · bash"]
+    TOOLS["codie-tools<br/>read · write · edit · bash<br/>grep · find · ls"]
     SESSION["codie-session<br/>JSONL store"]
     PROMPT["codie-prompt<br/>system prompt"]
 
@@ -72,6 +72,24 @@ Current repository crates are `codie-core`, `codie-ai`, `codie-tools`, `codie-se
 - Blocking work stays off the reactor; filesystem operations use `tokio::fs` and shell commands use
   `tokio::process`.
 - Process-group termination on abort/timeout is Phase 7 hardening; Phase 1 kills the direct child.
+
+## Built-in tools
+
+`codie-tools` exposes seven wire-stable tools. `read`, `grep`, `find`, and `ls` are read-only; `write`, `edit`,
+and `bash` mutate or execute and are gated by the permission policy.
+
+| Tool | Purpose | Notes |
+|---|---|---|
+| `read` | Read a UTF-8 file | `offset`/`limit`; 2,000-line and 50 KiB caps |
+| `write` | Create or overwrite a file | Creates parent directories; per-path lock |
+| `edit` | Exact-text replacements | Rejects missing, duplicate, overlapping, and no-op edits |
+| `bash` | Run a shell command | Optional timeout; output tail truncation |
+| `grep` | Regex content search | `path`, `glob`, `case_sensitive`, `max_results`; skips binaries |
+| `find` | Glob path search | Patterns without `/` match base names at any depth |
+| `ls` | One directory listing | `path`, `all`; sizes, symlink targets |
+
+`grep` and `find` share an `ignore`-based walker, so `.gitignore`, git excludes, and hidden entries behave the
+same way in both. Tool output is bounded by `max_results` and the shared truncation caps (`SPEC-TOOL-002`).
 
 ## State layering
 

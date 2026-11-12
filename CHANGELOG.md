@@ -11,11 +11,15 @@ that major series, with migrations applied on read.
 
 ### Added
 
-- Nothing yet.
+- Read-only search tools: `grep` (regex content search with `case_sensitive`, `glob`, and `max_results`),
+  `find` (glob path search), and `ls` (non-recursive directory listing with sizes and symlink targets). All three
+  respect `.gitignore`, skip hidden entries, cap output, and are permitted by the default headless policy.
+- `SPEC-TOOL-002` defines the search tools; `TOOL-001` now enumerates all seven built-ins.
 
 ### Changed
 
-- Nothing yet.
+- `--tools` and `--allow-all` accept the full built-in set, and tool selection derives from `ToolName` so the CLI
+  cannot drift from the registry.
 
 ### Fixed
 
