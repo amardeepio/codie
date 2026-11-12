@@ -16,7 +16,7 @@ Pin a release or choose another directory:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh \
-  | sh -s -- --version 0.4.0
+  | sh -s -- --version 0.5.0
 
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh \
   | sh -s -- --bin-dir "$HOME/bin"
@@ -116,7 +116,7 @@ Retry, and if the failure persists report it at <https://github.com/amardeepio/c
 ### Source build is slow
 
 No prebuilt artifact exists for the requested version yet, so the script is compiling from source with Rust
-1.88. This is expected at `0.4.0` and takes a few minutes. Once release artifacts ship for your tag, the
+1.88. This is expected at `0.5.0` and takes a few minutes. Once release artifacts ship for your tag, the
 download path is used automatically.
 
 ### Building from a checkout

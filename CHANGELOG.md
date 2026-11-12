@@ -11,6 +11,28 @@ that major series, with migrations applied on read.
 
 ### Added
 
+- Nothing yet.
+
+### Changed
+
+- Nothing yet.
+
+### Fixed
+
+- Nothing yet.
+
+### Removed
+
+- Nothing yet.
+
+### Security
+
+- Nothing yet.
+
+## [0.5.0] - 2026-11-12
+
+### Added
+
 - RPC mode (`--mode rpc`): line-delimited JSON commands and events for editor integrations, with prompt, steer,
   follow-up, abort, session inspection, model/thinking changes, compaction, HTML export, and orderly shutdown.
 - `codie-protocol` crate with published, generated JSON schemas for RPC commands and server records
