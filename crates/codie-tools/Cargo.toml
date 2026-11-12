@@ -19,6 +19,7 @@ globset.workspace = true
 ignore.workspace = true
 jsonschema.workspace = true
 regex.workspace = true
+reqwest.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
@@ -26,3 +27,4 @@ tokio-util.workspace = true
 [dev-dependencies]
 codie-testkit.workspace = true
 tempfile.workspace = true
+wiremock.workspace = true

@@ -11,15 +11,11 @@ that major series, with migrations applied on read.
 
 ### Added
 
-- Read-only search tools: `grep` (regex content search with `case_sensitive`, `glob`, and `max_results`),
-  `find` (glob path search), and `ls` (non-recursive directory listing with sizes and symlink targets). All three
-  respect `.gitignore`, skip hidden entries, cap output, and are permitted by the default headless policy.
-- `SPEC-TOOL-002` defines the search tools; `TOOL-001` now enumerates all seven built-ins.
+- Nothing yet.
 
 ### Changed
 
-- `--tools` and `--allow-all` accept the full built-in set, and tool selection derives from `ToolName` so the CLI
-  cannot drift from the registry.
+- Nothing yet.
 
 ### Fixed
 
@@ -32,6 +28,53 @@ that major series, with migrations applied on read.
 ### Security
 
 - Nothing yet.
+
+## [0.4.0] - 2026-11-12
+
+Phase 4: customization and trust. Skills, prompt templates, project trust, system instruction files, `@file`
+attachments, image inputs, and a guarded `web_fetch` tool.
+
+### Added
+
+- Read-only search tools: `grep` (regex content search with `case_sensitive`, `glob`, and `max_results`),
+  `find` (glob path search), and `ls` (non-recursive directory listing with sizes and symlink targets). All three
+  respect `.gitignore`, skip hidden entries, cap output, and are permitted by the default headless policy.
+- Skills: `.codie/skills/<name>/SKILL.md` and `~/.config/codie/skills/`, frontmatter (`name`, `description`,
+  `model-invocable`), `/skill:<name> [args]`, and a `<skills>` prompt section for model-invocable skills.
+- Prompt templates: `.codie/templates/<name>.md` and `~/.config/codie/templates/`, `$ARGUMENTS` and `$1`..`$9`
+  substitution, and `/template:<name> [args]`.
+- Project trust: `.codie/` resources load only for trusted projects; `--approve` records the canonical path in
+  `trust.toml`; interactive runs prompt once; non-interactive runs default to untrusted.
+- `SYSTEM.md` and `APPEND_SYSTEM.md` discovery from the working directory to the filesystem root, plus
+  `--system-prompt` and `--append-system-prompt`.
+- `@path` attachments: text files become `<file>` blocks and images become base64 image content. Missing and
+  oversized files produce a visible warning.
+- `web_fetch`: guarded HTTP(S) fetching with HTML-to-text conversion, redirect limits, byte and time caps, and
+  refusals for loopback, private, and link-local addresses. Network egress requires `--allow web_fetch`, an
+  interactive approval, or full-access mode.
+- `/reload` refreshes skills and templates; `codie config set`, `codie config path`, and `codie config edit` join
+  `codie config get`.
+
+### Changed
+
+- The built-in tool set is now eight tools; `--allow-all` and `--tools` cover `web_fetch`.
+- Image blocks in user messages are sent as `image_url` data URLs (`PROV-023`); tool-result images remain text
+  notes.
+- Workspace version is `0.4.0`.
+
+### Fixed
+
+- Nothing yet.
+
+### Removed
+
+- Nothing yet.
+
+### Security
+
+- Project-controlled skills, templates, and system instructions are untrusted by default; a malformed or missing
+  `trust.toml` fails closed, and trust entries are canonicalized before comparison.
+- `web_fetch` blocks local and private destinations, re-validates every redirect, and caps response size and time.
 
 ## [0.3.0] - 2026-11-12
 

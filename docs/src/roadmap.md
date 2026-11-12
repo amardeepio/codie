@@ -12,7 +12,7 @@ not commitments; the exit criteria are the real gate.
 | 1 | Headless core: providers, loop, tools, sessions, print/JSON | 3 wk | 4 wk | `0.1.0` — `codie -p` works | Complete |
 | 2 | Interactive TUI: streaming render, editor, themes, steering | 3 wk | 7 wk | `0.2.0` — interactive agent | Complete |
 | 3 | Sessions at full fidelity: resume, fork, compaction, picker | 2 wk | 9 wk | `0.3.0` — resume/fork/compact | Complete |
-| 4 | Customization and trust: skills, templates, `SYSTEM.md`, images | 2 wk | 11 wk | `0.4.0` — skills/templates/trust | Planned |
+| 4 | Customization and trust: skills, templates, `SYSTEM.md`, images | 2 wk | 11 wk | `0.4.0` — skills/templates/trust | Complete |
 | 5 | Protocols and polish: RPC, schemas, export, performance | 2 wk | 13 wk | `0.5.0` — RPC/export | Planned |
 | 6 | Extensions: JSON-RPC protocol, hooks, manifests, examples | 3 wk | 16 wk | `0.6.0` — extension protocol | Planned |
 | 7 | Release hardening: macOS matrix, signing, notarization, fuzzing | 2 wk | 18 wk | `1.0.0` | Planned |
@@ -57,6 +57,16 @@ not commitments; the exit criteria are the real gate.
 - Random append/branch/compaction sequences reopen to the same projection; resume after `kill -9` loses at most
   the in-flight partial message; 10k-entry resume stays within 150 ms.
 - Session format v1 is documented and announced as stable for the 1.x series; released as `0.3.0`.
+
+## Phase 4 exit criteria (met 2026-11-12)
+
+- Skills, templates, `SYSTEM.md`/`APPEND_SYSTEM.md`, and `@file` attachments are implemented with discovery,
+  override, and expansion fixtures.
+- Project trust is fail-closed: untrusted `.codie/` resources contribute nothing, `--approve` persists the
+  canonical path, and malformed trust files grant no access.
+- `web_fetch` rejects local and private destinations, re-validates redirects, and caps bytes and time.
+- User-message images are sent as `image_url` data URLs (`PROV-023`), covered by a fake-provider request-body test; tool-result images stay text notes.
+- Released as `0.4.0`.
 
 Later phase criteria are listed in [`PLAN.MD`](../../PLAN.MD) §8. This page mirrors `ROADMAP.md` and is updated at
 each phase boundary. Scope changes require an RFC; phase changes require maintainer approval recorded in

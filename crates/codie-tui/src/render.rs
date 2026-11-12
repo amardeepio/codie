@@ -363,6 +363,9 @@ fn draw_overlay(frame: &mut Frame<'_>, area: Rect, overlay: &Overlay, app: &App)
                 "/model [id]        change the model",
                 "/thinking [level]  change reasoning effort",
                 "/compact [note]    compact the context",
+                "/skill:<name>      invoke a skill",
+                "/template:<name>   expand a prompt template",
+                "/reload            reload skills and templates",
                 "/quit              exit",
             ]
             .join("\n"),

@@ -8,13 +8,18 @@ project-local resources are untrusted until approved.
 
 The confirmed default (D-6) is:
 
-- **Interactive:** read-only tools (`read`, `grep`, `find`, `ls`) are allowed; `write`, `edit`, and `bash` ask.
-- **Headless, print, and JSON modes:** read-only tools are allowed; mutating tools are denied unless `--allow`
-  or configuration explicitly permits them.
+- **Interactive:** read-only tools (`read`, `grep`, `find`, `ls`) are allowed; `write`, `edit`, `bash`, and
+  `web_fetch` ask.
+- **Headless, print, and JSON modes:** read-only tools are allowed; mutating and network tools are denied unless
+  `--allow` or configuration explicitly permits them. `web_fetch` is network egress and requires
+  `--allow web_fetch` or `--allow-all`.
 - **Policy decisions** are made per tool call, match on tool name plus normalized arguments (command prefix,
   path glob), and are logged with the reason.
-- **Project trust:** `.codie/` resources load only after an explicit trust decision. Untrusted resources are
-  ignored with a visible warning.
+- **Project trust:** `.codie/` resources load only after an explicit trust decision. Non-interactive runs default
+  to untrusted; `--approve` records the canonical project path in `trust.toml`. A missing or malformed trust file
+  grants nothing.
+- **Network:** `web_fetch` refuses non-HTTP(S) schemes, loopback, private, link-local, and unspecified addresses,
+  re-validates every redirect, and caps response size and time. It sends no credentials or cookies.
 
 The policy engine is the control point. Paths are not sandboxed by default; users who need filesystem
 isolation should run codie in a container or VM, and the documentation provides patterns for that.

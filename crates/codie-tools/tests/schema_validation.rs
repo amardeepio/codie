@@ -69,7 +69,7 @@ fn call(name: &str, arguments: serde_json::Value) -> ToolCall {
 async fn spec_tool_001_registry_declares_schemas() {
     let registry = Registry::builtin();
     let declarations = registry.declarations();
-    assert_eq!(declarations.len(), 7);
+    assert_eq!(declarations.len(), 8);
     for declaration in declarations {
         assert_eq!(declaration.parameters["type"], "object");
         assert!(

@@ -10,12 +10,28 @@
 //! order `AGENTS.override.md`, `AGENTS.md`, `CLAUDE.md` (PRMPT-003). The
 //! topmost ancestor is emitted first and the working directory last, so the
 //! nearest project instructions appear closest to the conversation.
+//!
+//! Phase 4 adds `SYSTEM.md`/`APPEND_SYSTEM.md` discovery, skills, templates,
+//! project trust, and `@path` attachments.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
 use std::fs;
 use std::path::{Path, PathBuf};
+
+pub mod attachments;
+pub mod customization;
+mod frontmatter;
+pub mod instructions;
+pub mod trust;
+
+pub use attachments::{Expansion, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, expand_attachments};
+pub use customization::{
+    Customizations, MAX_RESOURCE_BYTES, MAX_SKILLS, MAX_TEMPLATES, Skill, Template,
+};
+pub use instructions::{Instructions, combine_appends, load_instructions};
+pub use trust::TrustStore;
 
 use codie_core::{Message, ToolDecl};
 
@@ -56,6 +72,8 @@ pub struct PromptInput {
     pub preamble: Option<String>,
     /// Extra instructions appended to the preamble.
     pub append: Option<String>,
+    /// Skills advertised in the `<skills>` section.
+    pub skills: Vec<Skill>,
     /// Project instruction files, topmost ancestor first.
     pub project_context: Vec<ContextFile>,
 }
@@ -69,6 +87,7 @@ impl PromptInput {
             tools: Vec::new(),
             preamble: None,
             append: None,
+            skills: Vec::new(),
             project_context: Vec::new(),
         }
     }
@@ -122,15 +141,19 @@ pub fn load_project_context(cwd: &Path) -> Vec<ContextFile> {
 
 /// Builds the system prompt for `input`.
 ///
-/// Sections are emitted in this order: preamble, tools, rules, project context
-/// (omitted when no files were supplied), and cwd. Sections are separated by a
-/// blank line and the result has no trailing newline.
+/// Sections are emitted in this order: preamble, tools, rules, skills (omitted
+/// when none are model-invocable), project context (omitted when no files were
+/// supplied), and cwd. Sections are separated by a blank line and the result
+/// has no trailing newline.
 #[must_use]
 pub fn build_system_prompt(input: &PromptInput) -> String {
     let mut sections: Vec<String> = Vec::new();
     sections.push(preamble_section(input));
     sections.push(tools_section(&input.tools));
     sections.push(RULES.to_string());
+    if input.skills.iter().any(|skill| skill.model_invocable) {
+        sections.push(skills_section(&input.skills));
+    }
     if !input.project_context.is_empty() {
         sections.push(project_context_section(&input.project_context));
     }
@@ -183,6 +206,21 @@ fn tools_section(tools: &[ToolDecl]) -> String {
         }
     }
     section.push_str("\n</tools>");
+    section
+}
+
+/// Renders the `<skills>` section with model-invocable skills only.
+fn skills_section(skills: &[Skill]) -> String {
+    let mut section = String::from("<skills>");
+    for skill in skills.iter().filter(|skill| skill.model_invocable) {
+        section.push('\n');
+        if skill.description.is_empty() {
+            section.push_str(&format!("- {}", skill.name));
+        } else {
+            section.push_str(&format!("- {}: {}", skill.name, skill.description));
+        }
+    }
+    section.push_str("\n</skills>");
     section
 }
 

@@ -22,6 +22,7 @@ pub mod registry;
 mod search;
 pub mod truncate;
 pub mod validate;
+pub mod web_fetch;
 pub mod write;
 
 pub use bash::{BashTool, MAX_TIMEOUT_SECONDS};
@@ -38,6 +39,7 @@ pub use truncate::{
     truncate_tail, truncate_tail_with_limits,
 };
 pub use validate::ValidatedTool;
+pub use web_fetch::WebFetchTool;
 pub use write::WriteTool;
 
 /// Names of the built-in tools.
@@ -60,6 +62,8 @@ pub enum ToolName {
     Find,
     /// List a directory.
     Ls,
+    /// Fetch an http(s) URL.
+    WebFetch,
 }
 
 impl ToolName {
@@ -74,12 +78,13 @@ impl ToolName {
             Self::Grep => "grep",
             Self::Find => "find",
             Self::Ls => "ls",
+            Self::WebFetch => "web_fetch",
         }
     }
 
     /// Returns every built-in tool name in declaration order.
     #[must_use]
-    pub const fn all() -> [Self; 7] {
+    pub const fn all() -> [Self; 8] {
         [
             Self::Read,
             Self::Write,
@@ -88,6 +93,7 @@ impl ToolName {
             Self::Grep,
             Self::Find,
             Self::Ls,
+            Self::WebFetch,
         ]
     }
 }
@@ -146,7 +152,8 @@ mod tests {
         assert_eq!(ToolName::Grep.as_str(), "grep");
         assert_eq!(ToolName::Find.as_str(), "find");
         assert_eq!(ToolName::Ls.as_str(), "ls");
-        assert_eq!(ToolName::all().len(), 7);
+        assert_eq!(ToolName::WebFetch.as_str(), "web_fetch");
+        assert_eq!(ToolName::all().len(), 8);
     }
 
     #[test]

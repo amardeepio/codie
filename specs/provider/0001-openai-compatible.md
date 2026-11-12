@@ -4,7 +4,7 @@ title: OpenAI-compatible provider adapter
 status: accepted
 version: 1.0.0
 owners: ["@codie-maintainers"]
-requirements: ["PROV-001", "PROV-002", "PROV-003", "PROV-004", "PROV-005", "PROV-010", "PROV-011", "PROV-012", "PROV-013", "PROV-014", "PROV-015", "PROV-016", "PROV-017", "PROV-018", "PROV-019", "PROV-020", "PROV-021", "PROV-022"]
+requirements: ["PROV-001", "PROV-002", "PROV-003", "PROV-004", "PROV-005", "PROV-010", "PROV-011", "PROV-012", "PROV-013", "PROV-014", "PROV-015", "PROV-016", "PROV-017", "PROV-018", "PROV-019", "PROV-020", "PROV-021", "PROV-022", "PROV-023"]
 ---
 
 # Context
@@ -88,7 +88,7 @@ Verification: `crates/codie-ai/tests/usage.rs::spec_prov_015_usage_mapping`
 **PROV-016 (MUST)** Assistant reasoning is replayed verbatim as `reasoning_content` when the model requires it (DeepSeek) and dropped otherwise. When reasoning was not preserved and `compat` requires replay, the adapter sends `reasoning_content: ""`. Thinking blocks are never summarized into visible text.
 Verification: `crates/codie-ai/tests/reasoning.rs::spec_prov_016_reasoning_replay`
 
-**PROV-017 (MUST)** Tool results are sent as `{"role":"tool","tool_call_id":"...","content":"..."}` with the matching ID verbatim. Image-bearing tool results are downgraded to a text note in v1 because image input is a Phase 5 capability.
+**PROV-017 (MUST)** Tool results are sent as `{"role":"tool","tool_call_id":"...","content":"..."}` with the matching ID verbatim. Image-bearing tool results are downgraded to a text note because tool results are text on this wire.
 Verification: `crates/codie-ai/tests/openai_compat.rs::spec_prov_017_tool_result_wire_shape`
 
 **PROV-018 (MUST)** OpenRouter attribution headers are configurable and default to `HTTP-Referer: https://github.com/amardeepio/codie` and `X-Title: codie`. DeepSeek requests do not send them.
@@ -105,6 +105,9 @@ Verification: `crates/codie-ai/tests/catalog.rs::spec_prov_021_catalog_refresh_i
 
 **PROV-022 (MUST)** OpenRouter is used only through its OpenAI-compatible endpoint in v1. Anthropic-native passthrough, provider-specific SDKs, and direct vendor adapters are out of scope and MUST NOT be selected by the router.
 Verification: `crates/codie-ai/tests/openrouter.rs::spec_prov_022_openai_compatible_only`
+
+**PROV-023 (MUST)** Image blocks in a user message are sent as `{"type":"image_url","image_url":{"url":"data:<mime>;base64,<data>"}}` alongside text parts. A text-only user message stays a plain string.
+Verification: `crates/codie-ai/tests/openai_compat.rs::spec_prov_023_user_images_use_data_urls`
 
 # Request and response shapes
 
@@ -203,7 +206,7 @@ in diagnostics. `--api-key` is ephemeral and never written to disk.
 
 - Anthropic-native and Google-native adapters, Bedrock, and Azure (`PROV-022`, `PLAN.MD` §1.2).
 - OAuth or subscription login; API keys only.
-- Image input at launch; images are Phase 5 and are downgraded in v1 per `PROV-017`.
+- Tool-result images are downgraded per `PROV-017`; user-message images are supported per `PROV-023`.
 
 # Reference implementation
 

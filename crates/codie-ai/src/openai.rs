@@ -1358,9 +1358,11 @@ fn wire_user_content(blocks: &[Content]) -> Value {
             .iter()
             .filter_map(|block| match block {
                 Content::Text { text, .. } => Some(json!({ "type": "text", "text": text })),
-                Content::Image { mime_type, .. } => Some(json!({
-                    "type": "text",
-                    "text": format!("[image omitted: {mime_type}]"),
+                Content::Image { data, mime_type } => Some(json!({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": format!("data:{mime_type};base64,{data}"),
+                    },
                 })),
                 _ => None,
             })
