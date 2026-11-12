@@ -15,7 +15,7 @@ use crate::message::{AssistantMessage, Message, ToolResultMessage, now_ms};
 use crate::tool::{ExecutionMode, Tool, ToolContext, ToolResult, Toolbox};
 
 /// Model identity needed by the loop and by assistant messages.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ModelRef {
     /// Wire API identifier.
     pub api: String,

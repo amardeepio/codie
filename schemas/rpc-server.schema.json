@@ -1,0 +1,214 @@
+{
+  "$defs": {
+    "ReadyType": {
+      "description": "The only value of [`RpcReady::record_type`].",
+      "oneOf": [
+        {
+          "const": "rpc_ready",
+          "description": "`rpc_ready`",
+          "type": "string"
+        }
+      ]
+    },
+    "ResponseType": {
+      "description": "The only value of [`RpcResponse::record_type`].",
+      "oneOf": [
+        {
+          "const": "response",
+          "description": "`response`",
+          "type": "string"
+        }
+      ]
+    },
+    "RpcError": {
+      "description": "Error payload carried by a failed [`RpcResponse`].",
+      "properties": {
+        "code": {
+          "description": "Stable machine-readable code.",
+          "type": "string"
+        },
+        "message": {
+          "description": "Human-readable explanation.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
+    "RpcReady": {
+      "description": "First record emitted by the server, before any session header.",
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/ReadyType",
+          "description": "Discriminator; always `rpc_ready`."
+        },
+        "version": {
+          "description": "Protocol version.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "type",
+        "version"
+      ],
+      "type": "object"
+    },
+    "RpcResponse": {
+      "description": "Response to one command.",
+      "properties": {
+        "command": {
+          "description": "Command name.",
+          "type": "string"
+        },
+        "data": {
+          "description": "Command payload on success."
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RpcError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Failure details."
+        },
+        "id": {
+          "description": "Client identifier echoed from the request.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "success": {
+          "description": "True when the command succeeded.",
+          "type": "boolean"
+        },
+        "type": {
+          "$ref": "#/$defs/ResponseType",
+          "description": "Discriminator; always `response`."
+        },
+        "version": {
+          "description": "Protocol version.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "type",
+        "version",
+        "command",
+        "success"
+      ],
+      "type": "object"
+    },
+    "RpcSessionHeader": {
+      "description": "Session header emitted after the ready record and after `new_session`.",
+      "properties": {
+        "cwd": {
+          "description": "Absolute working directory.",
+          "type": "string"
+        },
+        "id": {
+          "description": "Session identifier.",
+          "type": "string"
+        },
+        "parent_session": {
+          "description": "Parent session identifier when forked or cloned.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timestamp": {
+          "description": "Creation time as an RFC 3339 string.",
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/SessionType",
+          "description": "Discriminator; always `session`."
+        },
+        "version": {
+          "description": "Session format version.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "type",
+        "version",
+        "id",
+        "timestamp",
+        "cwd"
+      ],
+      "type": "object"
+    },
+    "RpcSettled": {
+      "description": "Completion signal for one run.",
+      "properties": {
+        "aborted": {
+          "description": "True when the run was aborted.",
+          "type": "boolean"
+        },
+        "type": {
+          "$ref": "#/$defs/SettledType",
+          "description": "Discriminator; always `agent_settled`."
+        }
+      },
+      "required": [
+        "type",
+        "aborted"
+      ],
+      "type": "object"
+    },
+    "SessionType": {
+      "description": "The only value of [`RpcSessionHeader::record_type`].",
+      "oneOf": [
+        {
+          "const": "session",
+          "description": "`session`",
+          "type": "string"
+        }
+      ]
+    },
+    "SettledType": {
+      "description": "The only value of [`RpcSettled::record_type`].",
+      "oneOf": [
+        {
+          "const": "agent_settled",
+          "description": "`agent_settled`",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "anyOf": [
+    {
+      "$ref": "#/$defs/RpcReady",
+      "description": "Version handshake."
+    },
+    {
+      "$ref": "#/$defs/RpcSessionHeader",
+      "description": "Session header."
+    },
+    {
+      "$ref": "#/$defs/RpcResponse",
+      "description": "Command response."
+    },
+    {
+      "$ref": "#/$defs/RpcSettled",
+      "description": "Completion signal."
+    }
+  ],
+  "description": "Any record the server may write to stdout.",
+  "title": "RpcServerRecord"
+}

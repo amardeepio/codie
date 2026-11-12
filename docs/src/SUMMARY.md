@@ -10,6 +10,7 @@
 - [Sessions](sessions.md)
 - [Specifications](specs.md)
 - [Providers](providers.md)
+- [RPC mode](rpc.md)
 - [Platforms](platforms.md)
 - [Security](security.md)
 - [Roadmap](roadmap.md)

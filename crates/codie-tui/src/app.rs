@@ -34,7 +34,7 @@ use crate::permissions::{Decision, PermissionBroker, PermissionRequest, Permissi
 use crate::plain;
 use crate::render;
 use crate::theme::Theme;
-use crate::transcript::Transcript;
+use crate::transcript::{Entry, Transcript};
 
 /// Rendering mode for interactive runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -234,6 +234,15 @@ pub enum Overlay {
     Picker(Picker),
     /// A command, model, theme, or reasoning list.
     List(ChoiceList),
+    /// A transient banner with an optional OK affordance.
+    Notice {
+        /// Banner title.
+        title: String,
+        /// Banner body.
+        body: String,
+        /// True when the banner can be dismissed with OK.
+        ok: bool,
+    },
 }
 
 /// Interactive session picker state (`SESS-008`).
@@ -420,6 +429,8 @@ pub struct App {
     pub last_prompt: Option<String>,
     /// True after the one allowed overflow recovery attempt.
     pub overflow_retried: bool,
+    /// True when `/update` asked the event loop to start a check.
+    pub update_check_requested: bool,
     /// Session root for `/new`.
     session_dir: PathBuf,
     /// Working directory for file completion.
@@ -492,6 +503,7 @@ impl App {
             pending_retry: false,
             last_prompt: None,
             overflow_retried: false,
+            update_check_requested: false,
             session_dir,
             cwd: binding_cwd,
             permissions: VecDeque::new(),
@@ -728,8 +740,11 @@ impl App {
                 "theme" => self.open_themes(),
                 "thinking" => self.open_thinking(),
                 "quit" => self.should_quit = true,
-                "name" | "export" => {
+                "name" | "export" | "export html" => {
                     self.editor.insert_str(&format!("/{} ", item.value));
+                }
+                "skill:" | "template:" => {
+                    self.editor.insert_str(&format!("/{}", item.value));
                 }
                 _ => {
                     self.handle_command(&format!("/{}", item.value));
@@ -793,7 +808,14 @@ impl App {
             ("clone", "Clone this session"),
             ("name", "Name the session"),
             ("export", "Export the session as JSONL"),
+            ("export html", "Export a self-contained HTML transcript"),
+            ("copy", "Copy the last assistant message"),
+            ("debug", "Print diagnostics"),
             ("compact", "Compact the context"),
+            ("update", "Install a newer release"),
+            ("reload", "Reload skills, templates, and themes"),
+            ("skill:", "Invoke a skill"),
+            ("template:", "Expand a prompt template"),
             ("hotkeys", "Show keybindings"),
             ("quit", "Exit codie"),
         ];
@@ -1113,6 +1135,10 @@ impl App {
                 }
             }
             Command::Export(argument) => self.export_session(argument),
+            Command::ExportHtml(argument) => self.export_html_session(argument),
+            Command::Copy => self.copy_last_message(),
+            Command::Debug => self.show_debug(),
+            Command::Update => self.update_check_requested = true,
             Command::Theme(argument) => {
                 if let Some(name) = argument {
                     match Theme::load(Some(&name)) {
@@ -1320,6 +1346,83 @@ impl App {
                 .transcript
                 .push_error(format!("Cannot clone the session: {error}")),
         }
+    }
+
+    fn export_html_session(&mut self, argument: Option<String>) {
+        let Some(session) = self.session.as_ref() else {
+            self.transcript.push_info("No session is being persisted.");
+            return;
+        };
+        let path = argument.map_or_else(
+            || {
+                self.cwd
+                    .join(format!("codie-session-{}.html", session.id()))
+            },
+            std::path::PathBuf::from,
+        );
+        let result = std::fs::File::create(&path)
+            .map_err(|error| codie_core::Error::io(&path, error))
+            .and_then(|file| session.export_html(file));
+        match result {
+            Ok(()) => self
+                .transcript
+                .push_info(format!("Exported HTML to {}.", path.display())),
+            Err(error) => self
+                .transcript
+                .push_error(format!("Cannot export HTML: {error}")),
+        }
+    }
+
+    fn copy_last_message(&mut self) {
+        let text = self.transcript.entries().iter().rev().find_map(|entry| {
+            let Entry::Assistant(assistant) = entry else {
+                return None;
+            };
+            (!assistant.text.is_empty()).then(|| assistant.text.clone())
+        });
+        match text {
+            Some(text) => match crate::copy_to_clipboard(&text) {
+                Ok(()) => self
+                    .transcript
+                    .push_info("Copied the last message to the clipboard."),
+                Err(error) => self
+                    .transcript
+                    .push_error(format!("Cannot copy to the clipboard: {error}")),
+            },
+            None => self.transcript.push_info("No assistant message to copy."),
+        }
+    }
+
+    fn show_debug(&mut self) {
+        let session = self
+            .session
+            .as_ref()
+            .map_or_else(|| "ephemeral".to_owned(), |session| session.id().to_owned());
+        let tokens = self.session.as_ref().map_or_else(
+            || self.history.iter().map(message_chars).sum::<u64>() / 4,
+            codie_session::Session::estimate_tokens,
+        );
+        let percent = self
+            .session
+            .as_ref()
+            .map_or_else(
+                || {
+                    let window = u64::from(self.context_window.max(1));
+                    tokens.saturating_mul(100) / window
+                },
+                |session| u64::from(session.context_percent(u64::from(self.context_window))),
+            )
+            .min(100);
+        self.transcript.push_info(format!(
+            "codie {} · {} · {} · cwd {} · session {session} · {} messages · ~{tokens} tok · {percent}% ctx · theme {} · {}",
+            env!("CARGO_PKG_VERSION"),
+            self.model.model,
+            self.thinking.as_str(),
+            self.cwd.display(),
+            self.history.len(),
+            self.theme.name,
+            if self.auto_approve { "full access" } else { "guarded" },
+        ));
     }
 
     fn export_session(&mut self, argument: Option<String>) {
@@ -1565,6 +1668,46 @@ enum Input {
     Signal(i32),
 }
 
+/// Events produced by a manual or background update check.
+enum UpdateEvent {
+    /// The metadata check finished.
+    Checked {
+        /// True when the user asked from `/update`.
+        manual: bool,
+        /// Version comparison or an error.
+        result: std::result::Result<codie_ai::update::UpdateStatus, String>,
+    },
+    /// A verified download is in progress.
+    Installing(String),
+    /// Installation finished with the installed version or an error.
+    Installed(std::result::Result<String, String>),
+}
+
+fn spawn_update(sender: &mpsc::UnboundedSender<UpdateEvent>, manual: bool) {
+    let sender = sender.clone();
+    tokio::spawn(async move {
+        let result = codie_ai::update::check(None)
+            .await
+            .map_err(|error| error.to_string());
+
+        if manual
+            && let Ok(status) = &result
+            && status.newer()
+        {
+            let version = status.latest.clone();
+            let _ = sender.send(UpdateEvent::Installing(version.clone()));
+            let installed = codie_ai::update::install(&version)
+                .await
+                .map(|()| version)
+                .map_err(|error| error.to_string());
+            let _ = sender.send(UpdateEvent::Installed(installed));
+            return;
+        }
+
+        let _ = sender.send(UpdateEvent::Checked { manual, result });
+    });
+}
+
 fn spawn_input() -> mpsc::UnboundedReceiver<Input> {
     let (sender, receiver) = mpsc::unbounded_channel();
     std::thread::spawn({
@@ -1626,6 +1769,7 @@ async fn event_loop(
     let mut input = spawn_input();
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
     let (compact_tx, mut compact_rx) = mpsc::unbounded_channel();
+    let (update_tx, mut update_rx) = mpsc::unbounded_channel::<UpdateEvent>();
     let mut tick = tokio::time::interval(Duration::from_millis(33));
     let mut dirty = true;
     let mut signal_code = 0_i32;
@@ -1633,6 +1777,8 @@ async fn event_loop(
     if let Some(prompt) = options.initial_prompt.clone() {
         submit_prompt(app, &agent, &options, &event_tx, &compact_tx, prompt);
     }
+
+    let mut auto_update_started = false;
 
     loop {
         if dirty {
@@ -1669,6 +1815,15 @@ async fn event_loop(
                             Action::Submit(text) => {
                                 if app.handle_command(&text) {
                                     if app.should_quit { break; }
+                                    if app.update_check_requested {
+                                        app.update_check_requested = false;
+                                        app.overlay = Some(Overlay::Notice {
+                                            title: " update ".to_owned(),
+                                            body: "Checking for updates…".to_owned(),
+                                            ok: false,
+                                        });
+                                        spawn_update(&update_tx, true);
+                                    }
                                     if let Some(prompt) = app.command_prompt.take() {
                                         submit_prompt(
                                             app, &agent, &options, &event_tx, &compact_tx, prompt,
@@ -1716,6 +1871,57 @@ async fn event_loop(
                     start_compaction(app, &options, &compact_tx, String::new());
                 }
             }
+            Some(update) = update_rx.recv() => {
+                dirty = true;
+                match update {
+                    UpdateEvent::Checked { manual, result } => match result {
+                        Ok(status) if status.newer() => {
+                            app.transcript.push_info(format!(
+                                "Update available: codie {} → {}. Run /update to install it.",
+                                status.current, status.latest
+                            ));
+                        }
+                        Ok(status) if manual => {
+                            app.overlay = Some(Overlay::Notice {
+                                title: " update ".to_owned(),
+                                body: format!(
+                                    "No update found. codie {} is the latest release.",
+                                    status.current
+                                ),
+                                ok: true,
+                            });
+                        }
+                        Ok(_) => {}
+                        Err(error) if manual => {
+                            app.overlay = Some(Overlay::Notice {
+                                title: " update ".to_owned(),
+                                body: format!("Update check failed: {error}"),
+                                ok: true,
+                            });
+                        }
+                        Err(_) => {}
+                    },
+                    UpdateEvent::Installing(version) => {
+                        app.overlay = Some(Overlay::Notice {
+                            title: " update ".to_owned(),
+                            body: format!("Installing codie {version}…"),
+                            ok: false,
+                        });
+                    }
+                    UpdateEvent::Installed(result) => {
+                        app.overlay = Some(Overlay::Notice {
+                            title: " update ".to_owned(),
+                            body: match result {
+                                Ok(version) => format!(
+                                    "Updated to codie {version}.\nRestart codie to use the new version."
+                                ),
+                                Err(error) => format!("Update failed: {error}"),
+                            },
+                            ok: true,
+                        });
+                    }
+                }
+            }
             Some((instructions, result)) = compact_rx.recv() => {
                 dirty = true;
                 apply_compaction(app, instructions, result);
@@ -1731,6 +1937,13 @@ async fn event_loop(
             }
             _ = tick.tick() => {
                 app.tick = app.tick.wrapping_add(1);
+                if !auto_update_started {
+                    auto_update_started = true;
+                    // Start after the first frame so startup never waits on the network.
+                    if std::env::var_os("CODIE_NO_UPDATE_CHECK").is_none() {
+                        spawn_update(&update_tx, false);
+                    }
+                }
                 if app.tick % 30 == 0
                     && let Some(theme) = app
                         .theme_watcher
@@ -2288,6 +2501,25 @@ mod tests {
 
     #[test]
     #[spec("TUI-002")]
+    fn notice_banner_closes_with_enter() {
+        let mut app = app();
+        app.overlay = Some(Overlay::Notice {
+            title: " update ".to_owned(),
+            body: "No update found.".to_owned(),
+            ok: true,
+        });
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.overlay.is_none());
+    }
+
+    #[test]
+    fn update_command_requests_a_check() {
+        let mut app = app();
+        assert!(app.handle_command("/update"));
+        assert!(app.update_check_requested);
+    }
+
+    #[test]
     fn spec_tui_002_streaming_updates_replace_text() {
         let mut app = app();
         let mut message = codie_core::AssistantMessage::partial(
@@ -2680,6 +2912,10 @@ mod tests {
         };
         assert_eq!(list.kind, ChoiceKind::Commands);
         assert!(list.visible.len() >= 10);
+        assert!(
+            list.items.iter().any(|item| item.value == "update"),
+            "the palette must offer /update"
+        );
 
         for character in "theme".chars() {
             app.handle_key(key(KeyCode::Char(character)));
@@ -2687,7 +2923,7 @@ mod tests {
         let Some(Overlay::List(list)) = &app.overlay else {
             panic!("expected the command palette");
         };
-        assert_eq!(list.visible.len(), 1);
+        assert!(list.items.iter().any(|item| item.value.as_str() == "theme"));
         assert_eq!(
             list.current().map(|item| item.value.as_str()),
             Some("theme")

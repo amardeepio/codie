@@ -335,3 +335,98 @@ fn session_flags_conflict_cleanly() {
         .code(1)
         .stderr(predicate::str::contains("cannot be used with"));
 }
+
+#[tokio::test]
+async fn update_check_reports_a_newer_release() {
+    use serde_json::json;
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"tag_name": "v9.9.9"})))
+        .mount(&server)
+        .await;
+
+    let (mut command, _home) = codie();
+    command
+        .env("CODIE_UPDATE_URL", server.uri())
+        .arg("update")
+        .arg("--check")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("update available: 9.9.9"));
+}
+
+#[tokio::test]
+async fn update_check_reports_up_to_date() {
+    use serde_json::json;
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"tag_name": format!("v{}", env!("CARGO_PKG_VERSION"))})),
+        )
+        .mount(&server)
+        .await;
+
+    let (mut command, _home) = codie();
+    command
+        .env("CODIE_UPDATE_URL", server.uri())
+        .arg("update")
+        .arg("--check")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("up to date"));
+}
+
+#[test]
+fn sessions_export_html_is_self_contained() {
+    use codie_core::{Content, StopReason};
+    use codie_session::Session;
+
+    let (mut command, home) = codie();
+    let cwd = std::env::current_dir().expect("cwd");
+    let encoded = cwd
+        .to_string_lossy()
+        .trim_start_matches('/')
+        .replace(['/', '\\', ':'], "-");
+    let sessions = home.path().join("sessions").join(format!("--{encoded}--"));
+    std::fs::create_dir_all(&sessions).expect("sessions dir");
+
+    let mut session = Session::create(&cwd, &sessions).expect("session");
+    session
+        .append_message(&Message::user("hello <script>alert(1)</script>"))
+        .expect("user");
+    session
+        .append_message(&Message::assistant(
+            "openai-completions",
+            "deepseek",
+            "deepseek-flash",
+            vec![Content::text("hi there")],
+            StopReason::Stop,
+        ))
+        .expect("assistant");
+    let id = session.id().to_owned();
+    drop(session);
+
+    let output = command
+        .arg("sessions")
+        .arg("export")
+        .arg(&id)
+        .arg("--format")
+        .arg("html")
+        .output()
+        .expect("export html");
+
+    assert!(output.status.success(), "{output:?}");
+    let html = String::from_utf8(output.stdout).expect("utf8");
+    assert!(html.starts_with("<!doctype html>"));
+    assert!(html.contains("hi there"));
+    assert!(html.contains("&lt;script&gt;"));
+    assert!(!html.contains("<script>"));
+    assert!(!html.contains("<script "));
+}

@@ -59,6 +59,8 @@ pub(crate) enum OutputMode {
     Text,
     /// Emit a JSONL event stream.
     Json,
+    /// Serve line-delimited JSON commands for editor integrations.
+    Rpc,
 }
 
 /// Arguments for a one-shot run.
@@ -195,7 +197,7 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
     let can_prompt = std::io::stdin().is_terminal()
         && std::io::stdout().is_terminal()
         && !args.print
-        && !matches!(args.mode, OutputMode::Json);
+        && !matches!(args.mode, OutputMode::Json | OutputMode::Rpc);
     let project_root = if trust.is_trusted(&cwd) {
         Some(cwd.clone())
     } else if TrustStore::has_project_resources(&cwd) && can_prompt && prompt_trust(&cwd)? {
@@ -263,6 +265,9 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
         provider = provider.with_base_url(base_url);
     }
 
+    let catalog_endpoint = format!("{}/models", provider.base_url().trim_end_matches('/'));
+    let provider: Arc<dyn ChatClient> = Arc::new(provider);
+
     let registry = select_tools(args.tools.as_deref(), args.no_tools)?;
     let allowed = allowed_tools(&config, args.allow.as_deref(), args.allow_all);
     let session_dir = config.session_dir_for(&cwd);
@@ -282,7 +287,7 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
     }
 
     let interactive = !args.print
-        && !matches!(args.mode, OutputMode::Json)
+        && !matches!(args.mode, OutputMode::Json | OutputMode::Rpc)
         && std::io::stdin().is_terminal()
         && (std::io::stdout().is_terminal() || matches!(args.tui_mode, TuiModeArg::Plain));
 
@@ -294,7 +299,7 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
             .unwrap_or_default();
         let initial_prompt = (!args.message.is_empty()).then(|| args.message.join(" "));
         let options = TuiOptions {
-            client: Arc::new(provider),
+            client: Arc::clone(&provider),
             cwd: cwd.clone(),
             model: ModelRef {
                 api: model.api.to_string(),
@@ -328,6 +333,44 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
         Policy::headless(allowed),
     ));
 
+    if matches!(args.mode, OutputMode::Rpc) {
+        let mut session = open_session(&args, &cwd, &session_dir)?;
+        let mut history = session
+            .as_ref()
+            .map(Session::projection)
+            .unwrap_or_default();
+        ensure_system_message(
+            &mut history,
+            &mut session,
+            toolbox.as_ref(),
+            &cwd,
+            preamble.as_deref(),
+            append.as_deref(),
+            &customizations,
+        )?;
+        let model_ref = ModelRef {
+            api: model.api.to_string(),
+            provider: provider_id.clone(),
+            model: model_id.clone(),
+        };
+        return crate::rpc::run(crate::rpc::RpcOptions {
+            client: provider,
+            toolbox,
+            cwd,
+            session_dir,
+            session,
+            history,
+            model: model_ref,
+            context_window: u64::from(model.context_window),
+            thinking,
+            max_turns,
+            preamble,
+            append,
+            customizations,
+        })
+        .await;
+    }
+
     let text = read_prompt(&args)?;
     let expansion = expand_attachments(&text, &cwd);
     for error in &expansion.errors {
@@ -341,22 +384,15 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
         .map(Session::projection)
         .unwrap_or_default();
 
-    if !matches!(history.first(), Some(Message::System(_))) {
-        let declarations = toolbox.declarations();
-        let input = PromptInput {
-            cwd: cwd.clone(),
-            tools: declarations.clone(),
-            preamble: preamble.clone(),
-            append: append.clone(),
-            skills: customizations.skills().to_vec(),
-            project_context: load_project_context(&cwd),
-        };
-        let system = build_system_message(&input, declarations);
-        if let Some(session) = session.as_mut() {
-            session.append_message(&system)?;
-        }
-        history.insert(0, system);
-    }
+    ensure_system_message(
+        &mut history,
+        &mut session,
+        toolbox.as_ref(),
+        &cwd,
+        preamble.as_deref(),
+        append.as_deref(),
+        &customizations,
+    )?;
 
     let cancel = CancellationToken::new();
     let interrupted = install_signal_handlers(cancel.clone());
@@ -373,8 +409,6 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
     agent_config.session_id = session.as_ref().map(|session| session.id().to_owned());
     agent_config.cancel = cancel.clone();
 
-    let catalog_endpoint = format!("{}/models", provider.base_url().trim_end_matches('/'));
-    let provider: Arc<dyn ChatClient> = Arc::new(provider);
     let agent = Agent::new(Arc::clone(&provider), Arc::clone(&toolbox));
 
     if matches!(args.mode, OutputMode::Json) {
@@ -627,6 +661,36 @@ fn install_signal_handlers(cancel: CancellationToken) -> Arc<AtomicI32> {
     }
 
     code
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ensure_system_message(
+    history: &mut Vec<Message>,
+    session: &mut Option<Session>,
+    toolbox: &dyn Toolbox,
+    cwd: &Path,
+    preamble: Option<&str>,
+    append: Option<&str>,
+    customizations: &Customizations,
+) -> Result<()> {
+    if matches!(history.first(), Some(Message::System(_))) {
+        return Ok(());
+    }
+    let declarations = toolbox.declarations();
+    let input = PromptInput {
+        cwd: cwd.to_path_buf(),
+        tools: declarations.clone(),
+        preamble: preamble.map(str::to_owned),
+        append: append.map(str::to_owned),
+        skills: customizations.skills().to_vec(),
+        project_context: load_project_context(cwd),
+    };
+    let system = build_system_message(&input, declarations);
+    if let Some(session) = session.as_mut() {
+        session.append_message(&system)?;
+    }
+    history.insert(0, system);
+    Ok(())
 }
 
 fn validate_provider(provider: &str) -> Result<()> {

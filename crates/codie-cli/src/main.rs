@@ -13,8 +13,10 @@ mod auth_cmd;
 mod config;
 mod config_cmd;
 mod models_cmd;
+mod rpc;
 mod run;
 mod sessions_cmd;
+mod update_cmd;
 
 /// A fast, extensible coding agent for the terminal.
 #[derive(Debug, Parser)]
@@ -58,10 +60,13 @@ enum Commands {
     Config(config_cmd::ConfigArgs),
     /// Inspect and export sessions.
     Sessions(sessions_cmd::SessionsArgs),
+    /// Check for a newer release. Does not self-update.
+    Update(update_cmd::UpdateArgs),
 }
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    install_crash_reporter();
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(error) => {
@@ -88,6 +93,15 @@ async fn main() -> ExitCode {
         Some(Commands::Sessions(args)) => {
             config::Config::load().and_then(|config| sessions_cmd::run(args, &config))
         }
+        Some(Commands::Update(args)) => {
+            return match update_cmd::run(args).await {
+                Ok(code) => ExitCode::from(code),
+                Err(error) => {
+                    eprintln!("error: {error:#}");
+                    ExitCode::from(1)
+                }
+            };
+        }
         None => {
             return match run::run(cli.run).await {
                 Ok(code) => ExitCode::from(code),
@@ -106,6 +120,55 @@ async fn main() -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+/// Writes a local crash report when the process panics.
+///
+/// Reports contain the panic message, location, and a backtrace. They never
+/// include environment variables, credentials, or transcript content.
+fn install_crash_reporter() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if let Some(path) = write_crash_report(info) {
+            eprintln!("crash report: {}", path.display());
+        }
+        previous(info);
+    }));
+}
+
+fn write_crash_report(info: &std::panic::PanicHookInfo<'_>) -> Option<PathBuf> {
+    let base = std::env::var_os("CODIE_DATA_DIR")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share/codie"))
+        })?;
+    let directory = base.join("crashes");
+    std::fs::create_dir_all(&directory).ok()?;
+
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    let path = directory.join(format!("crash-{seconds}.txt"));
+
+    let message = info
+        .payload()
+        .downcast_ref::<&str>()
+        .map(|text| (*text).to_owned())
+        .or_else(|| info.payload().downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "non-string panic payload".to_owned());
+    let location = info
+        .location()
+        .map_or_else(|| "unknown".to_owned(), ToString::to_string);
+    let report = format!(
+        "codie crash report\nversion: {}\nos: {} {}\npanic: {message}\nlocation: {location}\n\nbacktrace:\n{}\n",
+        env!("CARGO_PKG_VERSION"),
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        std::backtrace::Backtrace::force_capture(),
+    );
+    std::fs::write(&path, report).ok()?;
+    Some(path)
 }
 
 /// Initializes structured logging on stderr.

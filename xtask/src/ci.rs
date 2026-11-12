@@ -23,6 +23,7 @@ pub(crate) fn run(root: &Path) -> Result<()> {
         ],
         &["test", "--workspace"],
         &["xtask", "spec-check"],
+        &["xtask", "schemas", "--check"],
         &["xtask", "coverage"],
         &["doc", "--workspace", "--no-deps"],
     ];

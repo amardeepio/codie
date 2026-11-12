@@ -37,6 +37,8 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo xtask spec-check --strict
+cargo xtask schemas --check
+cargo xtask perf
 cargo xtask coverage
 cargo deny check
 cargo audit
@@ -73,6 +75,13 @@ requirement requires an RFC under [`docs/rfc/`](../rfc/).
 - Provider tests use recorded fixtures and `FakeProvider`; live APIs are never called in CI.
 - Recording is opt-in through the `--record` test feature and an environment variable, and writes to a scratch
   directory.
+
+## Crash reports
+
+A panic writes `crash-<timestamp>.txt` under `$CODIE_DATA_DIR/crashes` (default
+`~/.local/share/codie/crashes`) and prints the path to stderr. A report contains the codie version, OS and
+architecture, the panic message, its location, and a backtrace. Environment variables, credentials, and
+transcript content are never included. Review the file before attaching it to an issue.
 
 ## Documentation
 

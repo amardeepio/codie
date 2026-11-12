@@ -31,3 +31,7 @@ perf.data*
 
 # mdBook
 docs/book/
+
+# Python bytecode (example clients)
+__pycache__/
+*.pyc
