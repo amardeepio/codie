@@ -144,7 +144,6 @@ fn draw_transcript(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
 fn transcript_lines(app: &App, width: u16) -> Vec<Line<'static>> {
     let palette = app.theme.palette;
     let mut lines = Vec::new();
-    let _ = width;
 
     if app.transcript.is_empty() {
         lines.push(Line::from(Span::styled(
@@ -185,7 +184,11 @@ fn transcript_lines(app: &App, width: u16) -> Vec<Line<'static>> {
                         )));
                     }
                 }
-                lines.extend(markdown::render(&assistant.text, &palette));
+                lines.extend(markdown::render(
+                    &assistant.text,
+                    &palette,
+                    usize::from(width),
+                ));
                 if assistant.streaming {
                     lines.push(Line::from(Span::styled(
                         "▌",
@@ -341,7 +344,7 @@ fn draw_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
     if app.footer.tokens > 0 {
         right.push_str(&format!(
             " · {} tok · ${:.4}",
-            app.footer.tokens,
+            format_tokens(app.footer.tokens),
             app.footer.cost as f64 / 1_000_000_000.0
         ));
     }
@@ -363,6 +366,31 @@ fn draw_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
         .alignment(Alignment::Right),
         columns[1],
     );
+}
+
+/// Abbreviates large counts for the footer: `999`, `1k`, `70.2k`, `1.2M`.
+fn format_tokens(tokens: u64) -> String {
+    const KILO: f64 = 1_000.0;
+    const MEGA: f64 = 1_000_000.0;
+    const GIGA: f64 = 1_000_000_000.0;
+
+    let scaled = tokens as f64;
+    let (value, suffix) = if tokens < 1_000 {
+        return tokens.to_string();
+    } else if scaled < 999_950.0 {
+        (scaled / KILO, "k")
+    } else if scaled < 999_950_000.0 {
+        (scaled / MEGA, "M")
+    } else {
+        (scaled / GIGA, "B")
+    };
+
+    let rounded = (value * 10.0).round() / 10.0;
+    if rounded.fract() == 0.0 {
+        format!("{rounded:.0}{suffix}")
+    } else {
+        format!("{rounded:.1}{suffix}")
+    }
 }
 
 fn draw_overlay(frame: &mut Frame<'_>, area: Rect, overlay: &Overlay, app: &App) {
@@ -559,6 +587,44 @@ mod tests {
         assert!(text.contains("codie"));
         assert!(text.contains("deepseek-flash"));
         assert!(text.contains("/tmp/project"));
+    }
+
+    #[test]
+    fn token_counts_use_compact_suffixes() {
+        assert_eq!(format_tokens(0), "0");
+        assert_eq!(format_tokens(999), "999");
+        assert_eq!(format_tokens(1_000), "1k");
+        assert_eq!(format_tokens(1_234), "1.2k");
+        assert_eq!(format_tokens(70_218), "70.2k");
+        assert_eq!(format_tokens(999_949), "999.9k");
+        assert_eq!(format_tokens(999_999), "1M");
+        assert_eq!(format_tokens(1_200_000), "1.2M");
+        assert_eq!(format_tokens(1_500_000_000), "1.5B");
+    }
+
+    #[test]
+    #[spec("TUI-006")]
+    fn spec_tui_006_footer_abbreviates_tokens() {
+        let mut app = app();
+        app.footer.tokens = 70_218;
+        app.footer.cost = 8_000_000;
+        app.footer.tokens_per_sec = Some(136.0);
+        app.footer.context_percent = Some(0);
+        app.footer.session = Some("0190f3a1".into());
+
+        let backend = TestBackend::new(160, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let text = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(text.contains("70.2k tok"), "footer tokens: {text}");
+        assert!(text.contains("$0.0080"), "footer cost: {text}");
     }
 
     #[test]

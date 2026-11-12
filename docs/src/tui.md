@@ -13,6 +13,27 @@ Phase 2 adds the primary human experience. Running `codie` with a terminal attac
 
 `-p/--print` and `--mode json` keep the Phase 1 headless behavior.
 
+## Markdown rendering
+
+Assistant messages are rendered as Markdown in the transcript: headings are styled by level without `#`
+markers, unordered lists use bullets, ordered lists keep their numbers and start value, and fenced code is
+highlighted by language.
+
+Tables render as width-aware grids with box-drawing borders, a header separator, and per-column alignment from
+the `:---:` row:
+
+```text
+┌──────────┬──────────────────────────────────┐
+│ Item     │ Spec                             │
+├──────────┼──────────────────────────────────┤
+│ Model    │ Mac mini (Mac16,10), MCYT4HN/A   │
+└──────────┴──────────────────────────────────┘
+```
+
+When the terminal is too narrow for the grid, each row falls back to stacked `Key: value` lines. Cells that
+still overflow their column truncate with `…`. Wide characters are measured by display width, so CJK and emoji
+do not shift column borders.
+
 ## Keys
 
 | Key | Action |
@@ -67,6 +88,11 @@ visible prompt immediately.
 
 `--allow edit,bash` (or `CODIE_ALLOW`) pre-approves tools for the run. A denial becomes an error tool result and
 the model can recover.
+
+## Footer
+
+The footer shows the working directory, model, thinking level, token total, cost, live throughput, context use,
+and session id. Token totals abbreviate thousands and millions: `999`, `1k`, `1.2k`, `70.2k`, `1.2M`.
 
 ## Themes
 

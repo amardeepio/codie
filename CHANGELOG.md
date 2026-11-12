@@ -15,11 +15,13 @@ that major series, with migrations applied on read.
 
 ### Changed
 
-- Nothing yet.
+- The footer abbreviates token totals (`999`, `1k`, `70.2k`, `1.2M`) instead of printing raw digits.
 
 ### Fixed
 
-- Nothing yet.
+- Assistant Markdown renders tables as width-aware grids with borders, header separators, and column
+  alignment, falling back to stacked `Key: value` rows on narrow terminals. Headings no longer show `#`
+  markers, ordered lists are numbered, and wide characters are measured by display width.
 
 ### Removed
 

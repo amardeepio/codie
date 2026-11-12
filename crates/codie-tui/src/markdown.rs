@@ -2,31 +2,40 @@
 
 use std::sync::OnceLock;
 
-use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Alignment, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use regex::Regex;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::theme::Palette;
 
-/// Renders Markdown into styled terminal lines.
+/// Narrowest column a table cell may shrink to before the table switches to a stacked layout.
+const MIN_COLUMN: usize = 3;
+
+type Cell = Vec<Span<'static>>;
+type Row = Vec<Cell>;
+
+/// Renders Markdown into styled terminal lines that fit within `width` columns.
 #[must_use]
-pub fn render(markdown: &str, palette: &Palette) -> Vec<Line<'static>> {
+pub fn render(markdown: &str, palette: &Palette, width: usize) -> Vec<Line<'static>> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
     options.insert(Options::ENABLE_STRIKETHROUGH);
 
     let mut renderer = Renderer {
         palette: *palette,
+        width: width.max(1),
         lines: Vec::new(),
         current: Vec::new(),
         code: None,
-        list_depth: 0,
+        lists: Vec::new(),
         blockquote: false,
         strong: false,
         emphasis: false,
         link: false,
-        heading: false,
+        heading: None,
+        table: None,
     };
 
     for event in Parser::new_ext(markdown, options) {
@@ -38,15 +47,50 @@ pub fn render(markdown: &str, palette: &Palette) -> Vec<Line<'static>> {
 
 struct Renderer {
     palette: Palette,
+    width: usize,
     lines: Vec<Line<'static>>,
     current: Vec<Span<'static>>,
     code: Option<(String, String)>,
-    list_depth: usize,
+    lists: Vec<ListState>,
     blockquote: bool,
     strong: bool,
     emphasis: bool,
     link: bool,
-    heading: bool,
+    heading: Option<u8>,
+    table: Option<TableState>,
+}
+
+struct ListState {
+    ordered: bool,
+    next: u64,
+}
+
+struct TableState {
+    alignments: Vec<Alignment>,
+    rows: Vec<Row>,
+    row: Row,
+    cell: Cell,
+    in_cell: bool,
+    header_rows: usize,
+}
+
+impl TableState {
+    fn new(alignments: Vec<Alignment>) -> Self {
+        Self {
+            alignments,
+            rows: Vec::new(),
+            row: Vec::new(),
+            cell: Vec::new(),
+            in_cell: false,
+            header_rows: 0,
+        }
+    }
+}
+
+enum Border {
+    Top,
+    Middle,
+    Bottom,
 }
 
 impl Renderer {
@@ -67,11 +111,17 @@ impl Renderer {
                     .bg(self.palette.border);
                 self.push_span(format!("`{text}`"), style);
             }
-            Event::SoftBreak | Event::HardBreak => self.flush(),
+            Event::SoftBreak | Event::HardBreak => {
+                if self.is_in_table_cell() {
+                    self.push_text(" ");
+                } else {
+                    self.flush();
+                }
+            }
             Event::Rule => {
                 self.flush();
                 self.lines.push(Line::from(Span::styled(
-                    "─".repeat(40),
+                    "─".repeat(self.width.min(40)),
                     Style::default().fg(self.palette.muted),
                 )));
             }
@@ -89,14 +139,7 @@ impl Renderer {
             Tag::Paragraph => {}
             Tag::Heading { level, .. } => {
                 self.flush();
-                self.heading = true;
-                let prefix = "#".repeat(usize::from(level as u8));
-                self.current.push(Span::styled(
-                    format!("{prefix} "),
-                    Style::default()
-                        .fg(self.palette.accent)
-                        .add_modifier(Modifier::BOLD),
-                ));
+                self.heading = Some(level as u8);
             }
             Tag::BlockQuote(_) => {
                 self.flush();
@@ -115,14 +158,25 @@ impl Renderer {
                 )));
                 self.code = Some((language, String::new()));
             }
-            Tag::List(_) => {
+            Tag::List(start) => {
                 self.flush();
-                self.list_depth += 1;
+                self.lists.push(ListState {
+                    ordered: start.is_some(),
+                    next: start.unwrap_or(1),
+                });
             }
             Tag::Item => {
                 self.flush();
                 self.push_prefix();
-                self.push_span("• ".to_owned(), Style::default().fg(self.palette.accent));
+                let marker = match self.lists.last_mut() {
+                    Some(list) if list.ordered => {
+                        let number = list.next;
+                        list.next += 1;
+                        format!("{number}. ")
+                    }
+                    _ => "• ".to_owned(),
+                };
+                self.push_span(marker, Style::default().fg(self.palette.accent));
             }
             Tag::Emphasis => self.emphasis = true,
             Tag::Strong => self.strong = true,
@@ -139,9 +193,23 @@ impl Renderer {
                     Style::default().fg(self.palette.muted),
                 );
             }
-            Tag::TableHead => self.flush(),
-            Tag::TableRow => self.flush(),
-            Tag::TableCell => self.push_text("│ "),
+            Tag::Table(alignments) => {
+                self.flush();
+                self.table = Some(TableState::new(alignments));
+            }
+            Tag::TableHead => {
+                self.table_row_end();
+                if let Some(table) = self.table.as_mut() {
+                    table.in_cell = false;
+                }
+            }
+            Tag::TableRow => self.table_row_end(),
+            Tag::TableCell => {
+                if let Some(table) = self.table.as_mut() {
+                    table.cell.clear();
+                    table.in_cell = true;
+                }
+            }
             _ => {}
         }
     }
@@ -149,11 +217,14 @@ impl Renderer {
     fn end(&mut self, tag: TagEnd) {
         match tag {
             TagEnd::Paragraph => {
+                if self.is_in_table_cell() {
+                    return;
+                }
                 self.flush();
                 self.blank();
             }
             TagEnd::Heading(_) => {
-                self.heading = false;
+                self.heading = None;
                 self.flush();
                 self.blank();
             }
@@ -177,8 +248,8 @@ impl Renderer {
             }
             TagEnd::List(_) => {
                 self.flush();
-                self.list_depth = self.list_depth.saturating_sub(1);
-                if self.list_depth == 0 {
+                self.lists.pop();
+                if self.lists.is_empty() {
                     self.blank();
                 }
             }
@@ -192,15 +263,51 @@ impl Renderer {
                 ));
             }
             TagEnd::Link => self.link = false,
-            TagEnd::TableHead | TagEnd::TableRow => self.flush(),
-            TagEnd::TableCell => self.push_text(" "),
+            TagEnd::TableCell => self.table_cell_end(),
+            TagEnd::TableRow => self.table_row_end(),
+            TagEnd::TableHead => {
+                self.table_row_end();
+                if let Some(table) = self.table.as_mut() {
+                    table.header_rows += 1;
+                    table.in_cell = false;
+                }
+            }
+            TagEnd::Table => {
+                self.flush();
+                if let Some(table) = self.table.take() {
+                    let lines = table_lines(table, &self.palette, self.width);
+                    self.lines.extend(lines);
+                }
+                self.blank();
+            }
             _ => {}
         }
     }
 
+    fn table_cell_end(&mut self) {
+        if let Some(table) = self.table.as_mut() {
+            table.in_cell = false;
+            let cell = trim_cell(std::mem::take(&mut table.cell));
+            table.row.push(cell);
+        }
+    }
+
+    fn table_row_end(&mut self) {
+        if let Some(table) = self.table.as_mut() {
+            let row = std::mem::take(&mut table.row);
+            if !row.is_empty() {
+                table.rows.push(row);
+            }
+        }
+    }
+
+    fn is_in_table_cell(&self) -> bool {
+        self.table.as_ref().is_some_and(|table| table.in_cell)
+    }
+
     fn push_text(&mut self, text: &str) {
         let mut style = Style::default().fg(self.palette.assistant);
-        if self.heading {
+        if self.heading.is_some() {
             style = style.fg(self.palette.accent).add_modifier(Modifier::BOLD);
         }
         if self.strong {
@@ -221,6 +328,12 @@ impl Renderer {
         if text.is_empty() {
             return;
         }
+        if let Some(table) = self.table.as_mut()
+            && table.in_cell
+        {
+            table.cell.push(Span::styled(text, style));
+            return;
+        }
         if self.current.is_empty() {
             self.push_prefix();
         }
@@ -228,7 +341,7 @@ impl Renderer {
     }
 
     fn push_prefix(&mut self) {
-        let indent = "  ".repeat(self.list_depth.saturating_sub(1));
+        let indent = "  ".repeat(self.lists.len().saturating_sub(1));
         if self.blockquote {
             self.current.push(Span::styled(
                 format!("{indent}│ "),
@@ -252,6 +365,234 @@ impl Renderer {
             self.lines.push(Line::default());
         }
     }
+}
+
+fn trim_cell(mut cell: Cell) -> Cell {
+    while cell
+        .last()
+        .is_some_and(|span| span.content.trim().is_empty())
+    {
+        cell.pop();
+    }
+    if let Some(first) = cell.first_mut() {
+        let trimmed = first.content.trim_start();
+        if trimmed.len() != first.content.len() {
+            *first = Span::styled(trimmed.to_owned(), first.style);
+        }
+    }
+    if let Some(last) = cell.last_mut() {
+        let trimmed = last.content.trim_end();
+        if trimmed.len() != last.content.len() {
+            *last = Span::styled(trimmed.to_owned(), last.style);
+        }
+    }
+    cell
+}
+
+fn spans_width(spans: &[Span<'static>]) -> usize {
+    spans
+        .iter()
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .sum()
+}
+
+fn spans_text(spans: &[Span<'static>]) -> String {
+    spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>()
+}
+
+fn table_lines(table: TableState, palette: &Palette, width: usize) -> Vec<Line<'static>> {
+    let columns = table
+        .alignments
+        .len()
+        .max(table.rows.iter().map(Vec::len).max().unwrap_or(0));
+    if columns == 0 {
+        return Vec::new();
+    }
+
+    let mut widths = vec![0usize; columns];
+    for row in &table.rows {
+        for (index, cell) in row.iter().enumerate() {
+            widths[index] = widths[index].max(spans_width(cell));
+        }
+    }
+
+    let overhead = 1 + columns * 3;
+    let available = width.saturating_sub(overhead);
+    if available < columns * MIN_COLUMN {
+        return stacked_lines(&table, palette);
+    }
+    shrink_widths(&mut widths, available);
+
+    let mut lines = Vec::new();
+    lines.push(border_line(&widths, palette, Border::Top));
+    for (index, row) in table.rows.iter().enumerate() {
+        let header = index < table.header_rows;
+        lines.push(row_line(row, &widths, &table.alignments, palette, header));
+        if header && index + 1 == table.header_rows && table.rows.len() > table.header_rows {
+            lines.push(border_line(&widths, palette, Border::Middle));
+        }
+    }
+    lines.push(border_line(&widths, palette, Border::Bottom));
+    lines
+}
+
+fn shrink_widths(widths: &mut [usize], available: usize) {
+    let mut total: usize = widths.iter().sum();
+    while total > available {
+        let widest = widths
+            .iter()
+            .enumerate()
+            .filter(|(_, width)| **width > MIN_COLUMN)
+            .max_by_key(|(_, width)| **width)
+            .map(|(index, _)| index);
+        let Some(index) = widest else {
+            break;
+        };
+        widths[index] -= 1;
+        total -= 1;
+    }
+}
+
+fn fit_cell(cell: &[Span<'static>], width: usize) -> Cell {
+    if spans_width(cell) <= width {
+        return cell.to_vec();
+    }
+
+    let limit = width.saturating_sub(1);
+    let mut fitted = Vec::new();
+    let mut used = 0usize;
+    'spans: for span in cell {
+        let mut text = String::new();
+        for character in span.content.chars() {
+            let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
+            if used + character_width > limit {
+                break 'spans;
+            }
+            text.push(character);
+            used += character_width;
+        }
+        if !text.is_empty() {
+            fitted.push(Span::styled(text, span.style));
+        }
+    }
+    let style = cell.last().map_or_else(Style::default, |span| span.style);
+    fitted.push(Span::styled("…".to_owned(), style));
+    fitted
+}
+
+fn row_line(
+    row: &Row,
+    widths: &[usize],
+    alignments: &[Alignment],
+    palette: &Palette,
+    header: bool,
+) -> Line<'static> {
+    let border = Style::default().fg(palette.border);
+    let mut spans = vec![Span::styled("│", border)];
+
+    for (index, width) in widths.iter().enumerate() {
+        let empty: Cell = Vec::new();
+        let cell = row.get(index).unwrap_or(&empty);
+        let mut fitted = fit_cell(cell, *width);
+        if header {
+            fitted = fitted
+                .into_iter()
+                .map(|span| {
+                    Span::styled(
+                        span.content,
+                        Style::default()
+                            .fg(palette.accent)
+                            .add_modifier(Modifier::BOLD),
+                    )
+                })
+                .collect();
+        }
+
+        let padding = width.saturating_sub(spans_width(&fitted));
+        let (left, right) = match alignments.get(index).copied().unwrap_or(Alignment::None) {
+            Alignment::Right => (padding, 0),
+            Alignment::Center => (padding / 2, padding - padding / 2),
+            Alignment::Left | Alignment::None => (0, padding),
+        };
+
+        spans.push(Span::raw(" "));
+        if left > 0 {
+            spans.push(Span::raw(" ".repeat(left)));
+        }
+        spans.extend(fitted);
+        if right > 0 {
+            spans.push(Span::raw(" ".repeat(right)));
+        }
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled("│", border));
+    }
+
+    Line::from(spans)
+}
+
+fn border_line(widths: &[usize], palette: &Palette, border: Border) -> Line<'static> {
+    let (left, join, right) = match border {
+        Border::Top => ('┌', '┬', '┐'),
+        Border::Middle => ('├', '┼', '┤'),
+        Border::Bottom => ('└', '┴', '┘'),
+    };
+
+    let mut text = String::new();
+    text.push(left);
+    for (index, width) in widths.iter().enumerate() {
+        if index > 0 {
+            text.push(join);
+        }
+        text.push_str(&"─".repeat(width + 2));
+    }
+    text.push(right);
+
+    Line::from(Span::styled(text, Style::default().fg(palette.border)))
+}
+
+/// Falls back to one `Key: value` line per cell when a table cannot fit the terminal.
+fn stacked_lines(table: &TableState, palette: &Palette) -> Vec<Line<'static>> {
+    let headers = (table.header_rows > 0)
+        .then(|| table.rows.first())
+        .flatten();
+    let start = table.header_rows.min(table.rows.len());
+
+    let mut lines = Vec::new();
+    for row in &table.rows[start..] {
+        for (index, cell) in row.iter().enumerate() {
+            if cell.is_empty() {
+                continue;
+            }
+            let mut spans = Vec::new();
+            if let Some(label) = headers.and_then(|headers| headers.get(index))
+                && !label.is_empty()
+            {
+                spans.push(Span::styled(
+                    format!("{}: ", spans_text(label)),
+                    Style::default()
+                        .fg(palette.accent)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            }
+            spans.extend(cell.iter().cloned());
+            lines.push(Line::from(spans));
+        }
+    }
+
+    if lines.is_empty()
+        && let Some(headers) = headers
+    {
+        for cell in headers {
+            if !cell.is_empty() {
+                lines.push(Line::from(cell.to_vec()));
+            }
+        }
+    }
+
+    lines
 }
 
 /// Highlights keywords in fenced code blocks.
@@ -324,16 +665,109 @@ mod tests {
             .collect()
     }
 
+    fn is_table_line(line: &str) -> bool {
+        matches!(line.chars().next(), Some('┌' | '├' | '└' | '│'))
+    }
+
     #[test]
     #[spec("TUI-004")]
-    fn headings_lists_and_code_render() {
+    fn spec_tui_004_headings_lists_and_code_render() {
         let palette = Palette::dark();
-        let lines = render("# Title\n\n- item\n\n```rust\nfn main() {}\n```", &palette);
+        let lines = render(
+            "# Title\n\n- item\n\n```rust\nfn main() {}\n```",
+            &palette,
+            80,
+        );
         let text = plain(&lines);
         assert!(text.iter().any(|line| line.contains("Title")));
+        assert!(!text.iter().any(|line| line.contains("# Title")));
         assert!(text.iter().any(|line| line.contains("• item")));
         assert!(text.iter().any(|line| line.contains("fn main")));
         assert!(text.iter().any(|line| line.contains("```rust")));
+    }
+
+    #[test]
+    #[spec("TUI-004")]
+    fn spec_tui_004_ordered_lists_are_numbered() {
+        let palette = Palette::dark();
+        let text = plain(&render("1. one\n2. two\n", &palette, 80));
+        assert!(text.iter().any(|line| line.contains("1. one")));
+        assert!(text.iter().any(|line| line.contains("2. two")));
+    }
+
+    #[test]
+    #[spec("TUI-004")]
+    fn spec_tui_004_tables_render_as_aligned_grid() {
+        let palette = Palette::dark();
+        let markdown = "| Item | Spec |\n|---|---|\n| Model | Mac mini |\n| Chip | Apple M4 |\n";
+        let text = plain(&render(markdown, &palette, 60));
+
+        assert!(text[0].starts_with('┌'), "{text:?}");
+        assert!(text.iter().any(|line| line.contains("│ Item")), "{text:?}");
+        assert!(text.iter().any(|line| line.starts_with("├")), "{text:?}");
+        assert!(text.iter().any(|line| line.starts_with("└")), "{text:?}");
+        assert!(text.iter().any(|line| line.contains("│ Model")), "{text:?}");
+
+        let widths = text
+            .iter()
+            .filter(|line| is_table_line(line))
+            .map(|line| UnicodeWidthStr::width(line.as_str()))
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(widths.len(), 1, "rows must share one width: {text:?}");
+    }
+
+    #[test]
+    #[spec("TUI-004")]
+    fn spec_tui_004_table_alignment_is_honored() {
+        let palette = Palette::dark();
+        let markdown = "| left | center | right |\n|:-----|:------:|------:|\n| a | b | c |\n";
+        let text = plain(&render(markdown, &palette, 80));
+
+        assert!(
+            text.iter().any(|line| line == "│ a    │   b    │     c │"),
+            "{text:?}"
+        );
+    }
+
+    #[test]
+    #[spec("TUI-004")]
+    fn spec_tui_004_table_widths_count_wide_characters() {
+        let palette = Palette::dark();
+        let markdown = "| 名前 | 値 |\n|---|---|\n| codie | テスト |\n";
+        let text = plain(&render(markdown, &palette, 40));
+
+        let widths = text
+            .iter()
+            .filter(|line| is_table_line(line))
+            .map(|line| UnicodeWidthStr::width(line.as_str()))
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            widths.len(),
+            1,
+            "wide characters must not shift columns: {text:?}"
+        );
+    }
+
+    #[test]
+    #[spec("TUI-004")]
+    fn spec_tui_004_narrow_tables_stack_key_value_rows() {
+        let palette = Palette::dark();
+        let markdown = "| Item | Spec |\n|---|---|\n| Model | Mac mini |\n";
+        let text = plain(&render(markdown, &palette, 12));
+
+        assert!(!text.iter().any(|line| line.starts_with('┌')), "{text:?}");
+        assert!(text.iter().any(|line| line == "Item: Model"), "{text:?}");
+        assert!(text.iter().any(|line| line == "Spec: Mac mini"), "{text:?}");
+    }
+
+    #[test]
+    #[spec("TUI-004")]
+    fn spec_tui_004_long_cells_truncate_with_ellipsis() {
+        let palette = Palette::dark();
+        let markdown = "| key | value |\n|---|---|\n| a | a very long value that cannot fit |\n";
+        let text = plain(&render(markdown, &palette, 24));
+
+        assert!(text.iter().any(|line| line.contains('…')), "{text:?}");
     }
 
     #[test]
@@ -350,7 +784,7 @@ mod tests {
     #[test]
     fn links_are_underlined() {
         let palette = Palette::dark();
-        let lines = render("[codie](https://example.com)", &palette);
+        let lines = render("[codie](https://example.com)", &palette, 80);
         assert!(lines.iter().any(|line| {
             line.spans.iter().any(|span| {
                 span.content.contains("codie")
