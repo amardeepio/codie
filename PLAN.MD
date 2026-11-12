@@ -1207,6 +1207,8 @@ Exit criteria:
 
 ### Phase 6 — Extensions (3 weeks)
 
+**Artifact:** `0.7.0` — extension protocol.
+
 **Goal:** customization without core bloat.
 
 Scope:
@@ -1259,11 +1261,13 @@ Exit criteria:
 | 3 Sessions | 2 wk | 9 wk | `0.3.0` — resume/fork/compact |
 | 4 Customization | 2 wk | 11 wk | `0.4.0` — skills/templates/trust |
 | 5 Protocols | 2 wk | 13 wk | `0.5.0` — RPC/export |
-| 6 Extensions | 3 wk | 16 wk | `0.6.0` — extension protocol |
+| 5.1 TUI polish (interim) | — | 13 wk | `0.6.0` — TUI refresh |
+| 6 Extensions | 3 wk | 16 wk | `0.7.0` — extension protocol |
 | 7 Hardening | 2 wk | 18 wk | `1.0.0` |
 
 Estimates assume one full-time engineer. They are planning bounds, not commitments; each phase's exit
-criteria are the real gate.
+criteria are the real gate. `0.6.0` is an interim TUI-polish release after Phase 5 and does not add a phase
+gate; the extension phase ships as `0.7.0`.
 
 ---
 

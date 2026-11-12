@@ -4,10 +4,10 @@ codie is built in gated phases. Each phase ends with a demoable, installable art
 No phase starts before the previous phase's exit criteria are met. Durations are planning bounds for one
 full-time engineer, not commitments; the exit criteria are the real gate.
 
-**Current status: Phase 5 (Protocols and polish) complete, released as `0.5.0`.** `0.1.0`
-shipped the headless core, `0.2.0` the interactive app, `0.3.0` full-fidelity sessions, and `0.4.0`
-customization and trust. Phase 5 adds RPC mode, generated JSON schemas, self-contained HTML export,
-`/copy`, `/debug`, checksum-verified self-update, and the performance gate.
+**Current status: Phase 5 complete, released as `0.5.0`; `0.6.0` adds the TUI refresh. Phase 6
+(extensions) is next and targets `0.7.0`.** `0.1.0` shipped the headless core, `0.2.0` the interactive app,
+`0.3.0` full-fidelity sessions, and `0.4.0` customization and trust. Phase 5 adds RPC mode, generated JSON
+schemas, self-contained HTML export, `/copy`, `/debug`, checksum-verified self-update, and the performance gate.
 
 ## Phase summary
 
@@ -19,7 +19,7 @@ customization and trust. Phase 5 adds RPC mode, generated JSON schemas, self-con
 | 3 | Sessions at full fidelity: resume, fork, compaction, picker | 2 weeks | 9 weeks | `0.3.0` — resume/fork/compact | Complete |
 | 4 | Customization and trust: skills, templates, `SYSTEM.md`, images | 2 weeks | 11 weeks | `0.4.0` — skills/templates/trust | Complete |
 | 5 | Protocols and polish: RPC, schemas, export, performance | 2 weeks | 13 weeks | `0.5.0` — RPC/export | Complete |
-| 6 | Extensions: JSON-RPC protocol, hooks, manifests, examples | 3 weeks | 16 weeks | `0.6.0` — extension protocol | Planned |
+| 6 | Extensions: JSON-RPC protocol, hooks, manifests, examples | 3 weeks | 16 weeks | `0.7.0` — extension protocol | Planned |
 | 7 | Release hardening: macOS matrix, signing, notarization, fuzzing | 2 weeks | 18 weeks | `1.0.0` | Planned |
 
 ## Phase 0: Foundations
@@ -128,6 +128,20 @@ Status: complete 2026-11-12; released as `0.5.0`.
 Exit criteria (met 2026-11-12): the RPC conformance suite covers the command matrix, prompt streaming, HTML
 export, EOF, and signal shutdown; `examples/rpc-client` is in the repository; release-build budgets pass at
 10.3 MB binary size, 8 ms startup p95, and 5.5 MB idle RSS.
+
+## 0.6.0: TUI polish
+
+Status: complete 2026-11-12; released as `0.6.0`.
+
+- OpenCode-inspired dark and light palettes with dedicated colors for surfaces, interactive elements, borders,
+  markdown, syntax, diffs, and states.
+- Semantic theme tokens that custom TOML themes can override, with backward-compatible fallbacks.
+- A `Codie!` startup banner with a narrow-terminal fallback.
+- Richer markdown rendering for headings, strong text, emphasis, inline code, links, quotes, lists, and rules.
+- Syntax highlighting for comments, strings, numbers, keywords, and function calls.
+- A README screenshot of the interactive app.
+
+This is an interim release after Phase 5. Phase 6 (extensions) now targets `0.7.0`.
 
 ## Later phases
 

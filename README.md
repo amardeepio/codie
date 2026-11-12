@@ -19,11 +19,12 @@ implementation language, the safety posture, and the provider scope.
 
 The command is `codie`.
 
-**Status: Phase 5 complete (`0.5.0`), pre-alpha.** The one-shot agent, the interactive app,
+**Status: Phase 5 complete (`0.6.0`), pre-alpha.** The one-shot agent, the interactive app,
 full-fidelity sessions, customization, and automation all work end to end: streaming transcript, editor dock,
-themes, slash commands, steering, permission prompts, plain mode, resume/fork/compact, search tools, skills,
-prompt templates, project trust, system instructions, `@file` and image inputs, guarded `web_fetch`, RPC mode,
-generated JSON schemas, HTML transcript export, and `codie update --check`. See
+OpenCode-inspired themes, the startup banner, slash commands, steering, permission prompts, plain mode,
+resume/fork/compact, search tools, skills, prompt templates, project trust, system instructions, `@file` and
+image inputs, guarded `web_fetch`, RPC mode, generated JSON schemas, HTML transcript export, and
+`codie update --check`. See
 [`docs/src/configuration.md`](docs/src/configuration.md), [`docs/src/rpc.md`](docs/src/rpc.md), and
 [`ROADMAP.md`](ROADMAP.md).
 
@@ -121,7 +122,7 @@ Pin a version or pick another directory:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh \
-  | sh -s -- --version 0.5.0
+  | sh -s -- --version 0.6.0
 
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh \
   | sh -s -- --bin-dir "$HOME/bin"

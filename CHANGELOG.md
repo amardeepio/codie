@@ -19,6 +19,42 @@ that major series, with migrations applied on read.
 
 ### Fixed
 
+- Nothing yet.
+
+### Removed
+
+- Nothing yet.
+
+### Security
+
+- Nothing yet.
+
+## [0.6.0] - 2026-11-12
+
+### Added
+
+- OpenCode-inspired built-in themes: a near-black canvas, warm peach focus, purple headings, blue secondary
+  text, green code, and distinct colors for warnings, emphasis, quotes, and lists. Light mode uses the same
+  hues darkened for contrast.
+- A `Codie!` block-art banner on the empty interactive screen, with a plain-text fallback on narrow terminals.
+- A README screenshot of the interactive app with the command palette open.
+- Semantic theme tokens for surfaces, interactive colors, borders, markdown, syntax, and diffs:
+  `surface`, `surface_alt`, `primary`, `secondary`, `warning`, `info`, `border_active`, `border_subtle`,
+  `heading`, `link`, `code`, `strong`, `emphasis`, `quote`, `list`, `list_enum`, and `rule`.
+
+### Changed
+
+- The built-in dark and light palettes now follow OpenCode's default theme.
+- User messages render on a raised surface with a colored left bar; the editor, footer, overlays, selected
+  rows, tool states, and diff output use the new palette.
+- Markdown renders headings, strong text, emphasis, inline code, links, block quotes, list markers, and rules
+  in distinct colors instead of a single accent.
+- Fenced code highlighting now covers comments, strings, numbers, keywords, and function calls.
+- Custom theme files remain compatible. Omitted semantic tokens fall back from `accent`, `primary`, `success`,
+  `warning`, `info`, and `muted`.
+
+### Fixed
+
 - `install.sh` selects the highest semantic version from the tags API even when GitHub returns compact JSON,
   and warns when another `codie` earlier in `PATH` shadows the new install.
 

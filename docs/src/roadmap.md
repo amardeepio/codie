@@ -14,7 +14,7 @@ not commitments; the exit criteria are the real gate.
 | 3 | Sessions at full fidelity: resume, fork, compaction, picker | 2 wk | 9 wk | `0.3.0` — resume/fork/compact | Complete |
 | 4 | Customization and trust: skills, templates, `SYSTEM.md`, images | 2 wk | 11 wk | `0.4.0` — skills/templates/trust | Complete |
 | 5 | Protocols and polish: RPC, schemas, export, performance | 2 wk | 13 wk | `0.5.0` — RPC/export | Complete |
-| 6 | Extensions: JSON-RPC protocol, hooks, manifests, examples | 3 wk | 16 wk | `0.6.0` — extension protocol | Planned |
+| 6 | Extensions: JSON-RPC protocol, hooks, manifests, examples | 3 wk | 16 wk | `0.7.0` — extension protocol | Planned |
 | 7 | Release hardening: macOS matrix, signing, notarization, fuzzing | 2 wk | 18 wk | `1.0.0` | Planned |
 
 ## Phase 0 exit criteria (met 2026-11-11)
@@ -78,6 +78,15 @@ not commitments; the exit criteria are the real gate.
 - `examples/rpc-client` demonstrates an integration.
 - Release budgets pass: 10.3 MB binary, 8 ms startup p95, 5.5 MB idle RSS.
 - Released as `0.5.0`.
+
+## 0.6.0 TUI polish (released 2026-11-12)
+
+An interim release after Phase 5; Phase 6 now targets `0.7.0`.
+
+- OpenCode-inspired dark and light palettes and semantic theme tokens.
+- A `Codie!` startup banner and a README screenshot.
+- Colored markdown for headings, strong text, emphasis, code, links, quotes, lists, and rules.
+- Syntax highlighting for comments, strings, numbers, keywords, and function calls.
 
 Later phase criteria are listed in [`PLAN.MD`](../../PLAN.MD) §8. This page mirrors `ROADMAP.md` and is updated at
 each phase boundary. Scope changes require an RFC; phase changes require maintainer approval recorded in
