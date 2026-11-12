@@ -1,7 +1,9 @@
 //! Release update checks (`CLI-007`).
 //!
 //! The check is read-only: it fetches release metadata from GitHub (or an
-//! explicit endpoint) and compares versions. Nothing is downloaded or executed.
+//! explicit endpoint), compares versions, and reports whether a prebuilt
+//! archive exists for this platform. Nothing is downloaded or executed by a
+//! check.
 
 use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
@@ -23,6 +25,9 @@ pub const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 pub const INSTALL_TIMEOUT: Duration = Duration::from_secs(180);
 /// Base URL for release artifacts.
 pub const RELEASE_DOWNLOAD: &str = "https://github.com/amardeepio/codie/releases/download";
+/// Installer command used when no prebuilt archive is published.
+pub const INSTALLER_COMMAND: &str =
+    "curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh | sh";
 
 /// Outcome of comparing the running build with the latest published release.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +38,12 @@ pub struct UpdateStatus {
     pub latest: String,
     /// `Less` means an update is available.
     pub ordering: Ordering,
+    /// Whether a prebuilt archive is published for this platform.
+    ///
+    /// `Some(false)` means a newer release exists but cannot be installed in
+    /// place, so the user has to run the installer. `None` means the check
+    /// could not confirm either way.
+    pub installable: Option<bool>,
 }
 
 impl UpdateStatus {
@@ -41,18 +52,22 @@ impl UpdateStatus {
     pub fn newer(&self) -> bool {
         self.ordering == Ordering::Less
     }
+
+    /// Returns true when a newer release can be installed in place.
+    #[must_use]
+    pub fn installable_release(&self) -> bool {
+        self.newer() && self.installable != Some(false)
+    }
 }
 
 /// Checks the published release for a newer version.
 ///
 /// With no endpoint, the releases API is tried first and the tag list is used
-/// as a fallback. An explicit endpoint is used verbatim.
+/// as a fallback. An explicit endpoint is used verbatim. When a newer release
+/// is found, the check also probes for a prebuilt archive for this platform so
+/// the caller does not advertise an update that cannot be installed.
 pub async fn check(endpoint: Option<&str>) -> Result<UpdateStatus> {
-    let client = reqwest::Client::builder()
-        .timeout(CHECK_TIMEOUT)
-        .user_agent(concat!("codie/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .map_err(|error| Error::provider(format!("cannot create the update client: {error}")))?;
+    let client = http_client(CHECK_TIMEOUT)?;
 
     let latest = match endpoint {
         Some(url) => fetch_latest(&client, url).await?,
@@ -69,11 +84,68 @@ pub async fn check(endpoint: Option<&str>) -> Result<UpdateStatus> {
         ))
     })?;
 
+    // Mirrors and tests point at their own metadata; probing the real release
+    // download for those would be wrong, so report availability as unknown.
+    let installable = if ordering == Ordering::Less && endpoint.is_none() {
+        asset_available_with(&client, RELEASE_DOWNLOAD, &latest)
+            .await
+            .ok()
+    } else {
+        None
+    };
+
     Ok(UpdateStatus {
         current,
         latest,
         ordering,
+        installable,
     })
+}
+
+fn http_client(timeout: Duration) -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .user_agent(concat!("codie/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|error| Error::provider(format!("cannot create the update client: {error}")))
+}
+
+/// Returns whether a prebuilt archive is published for this platform.
+///
+/// A missing archive means `/update` cannot install the release in place and
+/// the installer has to build it from source instead.
+pub async fn asset_available(version: &str) -> Result<bool> {
+    let client = http_client(CHECK_TIMEOUT)?;
+    asset_available_with(&client, RELEASE_DOWNLOAD, version).await
+}
+
+async fn asset_available_with(client: &reqwest::Client, base: &str, version: &str) -> Result<bool> {
+    let Some(target) = release_target() else {
+        return Ok(false);
+    };
+
+    for extension in ["tar.gz", "tar.xz"] {
+        let name = asset_name(version, target, extension);
+        let url = format!("{base}/v{version}/{name}");
+        let response = client
+            .head(&url)
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .await
+            .map_err(|error| Error::provider(format!("cannot check {url}: {error}")))?;
+
+        let status = response.status();
+        if status.is_success() {
+            return Ok(true);
+        }
+        if status != reqwest::StatusCode::NOT_FOUND {
+            return Err(Error::provider(format!(
+                "cannot check {url}: HTTP {status}"
+            )));
+        }
+    }
+
+    Ok(false)
 }
 
 async fn fetch_latest(client: &reqwest::Client, url: &str) -> Result<String> {
@@ -157,13 +229,12 @@ pub fn asset_name(version: &str, target: &str, extension: &str) -> String {
 /// closed when no prebuilt artifact is published for this version, rather than
 /// silently falling back to building from source inside the agent.
 pub async fn install(version: &str) -> Result<()> {
-    let target = release_target()
-        .ok_or_else(|| Error::provider("self-update is not supported on this platform"))?;
-    let client = reqwest::Client::builder()
-        .timeout(INSTALL_TIMEOUT)
-        .user_agent(concat!("codie/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .map_err(|error| Error::provider(format!("cannot create the update client: {error}")))?;
+    let target = release_target().ok_or_else(|| {
+        Error::provider(format!(
+            "self-update is not supported on this platform; reinstall with:\n{INSTALLER_COMMAND}"
+        ))
+    })?;
+    let client = http_client(INSTALL_TIMEOUT)?;
 
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -212,7 +283,7 @@ pub async fn install(version: &str) -> Result<()> {
     }
 
     Err(Error::provider(format!(
-        "no prebuilt binary is published for codie {version}; reinstall with the install script"
+        "no prebuilt binary is published for codie {version} on this platform; reinstall with:\n{INSTALLER_COMMAND}"
     )))
 }
 
@@ -399,5 +470,67 @@ mod tests {
         let status = check(Some(&server.uri())).await.expect("check");
         assert!(status.newer());
         assert_eq!(status.latest, "9.9.9");
+        // A mirror may not publish the release artifacts this build expects.
+        assert_eq!(status.installable, None);
+    }
+
+    #[tokio::test]
+    async fn asset_availability_probes_release_archives() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        if release_target().is_none() {
+            return;
+        }
+
+        let client = http_client(CHECK_TIMEOUT).expect("client");
+
+        let published = MockServer::start().await;
+        Mock::given(method("HEAD"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&published)
+            .await;
+        assert!(
+            asset_available_with(&client, &published.uri(), "0.6.0")
+                .await
+                .expect("availability")
+        );
+
+        let missing = MockServer::start().await;
+        Mock::given(method("HEAD"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&missing)
+            .await;
+        assert!(
+            !asset_available_with(&client, &missing.uri(), "0.6.0")
+                .await
+                .expect("availability")
+        );
+    }
+
+    #[test]
+    fn only_releases_with_archives_are_installable() {
+        let pending = UpdateStatus {
+            current: "0.5.0".to_owned(),
+            latest: "0.6.0".to_owned(),
+            ordering: Ordering::Less,
+            installable: Some(false),
+        };
+        assert!(pending.newer());
+        assert!(!pending.installable_release());
+
+        let ready = UpdateStatus {
+            installable: Some(true),
+            ..pending
+        };
+        assert!(ready.installable_release());
+
+        let current = UpdateStatus {
+            current: "0.6.0".to_owned(),
+            latest: "0.6.0".to_owned(),
+            ordering: Ordering::Equal,
+            installable: None,
+        };
+        assert!(!current.installable_release());
     }
 }

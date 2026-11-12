@@ -71,9 +71,10 @@ to scroll, and `Enter` to select. `Esc` closes it.
 `/export html [path]`, `/copy`, `/debug`, `/update`, `/theme [name]`, `/model [id]`, `/thinking [level]`,
 `/compact [instructions]`, `/quit`.
 
-`/update` checks for a newer release, installs it when one is available, and shows a banner with OK. The app
-also runs one silent background check at startup and only reports an available release; it never installs
-automatically. Disable the background check with `CODIE_NO_UPDATE_CHECK=1`. `/export html` writes a self-contained transcript; `/export` keeps the canonical JSONL format. `/copy` puts
+`/update` checks for a newer release, installs it when a prebuilt archive exists for the platform, and shows a
+banner with OK. When a tag has no published artifact, the banner explains how to reinstall with the installer
+instead. The app also runs one silent background check at startup and only reports an available release; it
+never installs automatically. Disable the background check with `CODIE_NO_UPDATE_CHECK=1`. `/export html` writes a self-contained transcript; `/export` keeps the canonical JSONL format. `/copy` puts
 the last assistant message on the system clipboard. `/debug` prints version, model, cwd, session, and token
 diagnostics as a transcript line.
 

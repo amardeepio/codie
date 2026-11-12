@@ -19,7 +19,7 @@ implementation language, the safety posture, and the provider scope.
 
 The command is `codie`.
 
-**Status: Phase 5 complete (`0.6.0`), pre-alpha.** The one-shot agent, the interactive app,
+**Status: Phase 5 complete (`0.6.1`), pre-alpha.** The one-shot agent, the interactive app,
 full-fidelity sessions, customization, and automation all work end to end: streaming transcript, editor dock,
 OpenCode-inspired themes, the startup banner, slash commands, steering, permission prompts, plain mode,
 resume/fork/compact, search tools, skills, prompt templates, project trust, system instructions, `@file` and
@@ -114,15 +114,15 @@ curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh | 
 ```
 
 The installer places `codie` in `~/.local/bin`, verifies checksums when a prebuilt release exists, and prints
-the `PATH` line to add if that directory is not already on your path. Until prebuilt artifacts are published,
-it builds from source and installs Rust 1.88 through rustup when necessary. Pass `--no-rust-install` to disable
-that.
+the `PATH` line to add if that directory is not already on your path. Tagged releases publish prebuilt archives
+for macOS and Linux; when a tag has no artifact, it builds from source and installs Rust 1.88 through rustup
+when necessary. Pass `--no-rust-install` to disable that.
 
 Pin a version or pick another directory:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh \
-  | sh -s -- --version 0.6.0
+  | sh -s -- --version 0.6.1
 
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh \
   | sh -s -- --bin-dir "$HOME/bin"

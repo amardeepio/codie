@@ -1,11 +1,15 @@
-//! `codie update --check`: report the latest published release without
-//! installing anything.
+//! `codie update`: report, install, or verify the latest published release.
 //!
-//! Self-update execution is intentionally out of scope for v1. The installer
-//! script remains the upgrade path.
+//! Installation is checksum-verified and only uses prebuilt archives. When a
+//! release has no artifact for this platform, the command prints the installer
+//! command instead of building from source.
+
+use std::cmp::Ordering;
 
 use anyhow::Result;
 use clap::Args;
+
+use codie_ai::update::INSTALLER_COMMAND;
 
 /// Arguments for `codie update`.
 #[derive(Debug, Args)]
@@ -19,7 +23,7 @@ pub(crate) struct UpdateArgs {
     pub(crate) endpoint: Option<String>,
 }
 
-/// Reports whether a newer release is available.
+/// Reports and, unless `--check` is passed, installs a newer release.
 pub(crate) async fn run(args: UpdateArgs) -> Result<u8> {
     let endpoint = args
         .endpoint
@@ -30,27 +34,51 @@ pub(crate) async fn run(args: UpdateArgs) -> Result<u8> {
         .await
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
 
-    if !args.check {
-        println!("Self-update is not implemented; checking for updates instead.");
-    }
-
     match status.ordering {
-        std::cmp::Ordering::Less => {
+        Ordering::Less => {
             println!(
                 "codie {} — update available: {}",
                 status.current, status.latest
             );
+
+            if args.check {
+                if status.installable == Some(false) {
+                    println!(
+                        "  no prebuilt binary is published for codie {} on this platform.",
+                        status.latest
+                    );
+                    println!("  reinstall with: {INSTALLER_COMMAND}");
+                } else {
+                    println!("  run `codie update` without --check to install it.");
+                }
+                return Ok(0);
+            }
+
+            if status.installable == Some(false) {
+                println!(
+                    "  no prebuilt binary is published for codie {} on this platform.",
+                    status.latest
+                );
+                println!("  reinstall with: {INSTALLER_COMMAND}");
+                return Ok(1);
+            }
+
+            println!("  installing…");
+            codie_ai::update::install(&status.latest)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
             println!(
-                "  curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh | sh"
+                "Installed codie {}. Restart codie to use the new version.",
+                status.latest
             );
         }
-        std::cmp::Ordering::Equal => {
+        Ordering::Equal => {
             println!(
                 "codie {} — up to date (latest {})",
                 status.current, status.latest
             );
         }
-        std::cmp::Ordering::Greater => {
+        Ordering::Greater => {
             println!(
                 "codie {} — newer than the latest published release ({})",
                 status.current, status.latest

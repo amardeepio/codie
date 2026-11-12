@@ -29,6 +29,35 @@ that major series, with migrations applied on read.
 
 - Nothing yet.
 
+## [0.6.1] - 2026-11-12
+
+### Added
+
+- Release workflow (`.github/workflows/release.yml`) that publishes checksum-verified archives for macOS
+  arm64/x64 and Linux arm64/x64 on every `v*` tag. `install.sh` and `/update` now install a prebuilt binary
+  instead of compiling from source. Linux archives are built in an Ubuntu 20.04 container so they support
+  glibc 2.31 and newer.
+- `codie update` now installs a newer release and reports the installed version; `--check` still only reports.
+- A Linux build job in CI so published Linux artifacts stay tested.
+
+### Changed
+
+- Update checks probe for a prebuilt archive for the current platform before advertising a release. A tag
+  without artifacts is reported with the installer command instead of an update that `/update` cannot install.
+- The TUI `/update` banner, plain mode, and `codie update` print the installer command when no artifact exists.
+
+### Fixed
+
+- Nothing yet.
+
+### Removed
+
+- Nothing yet.
+
+### Security
+
+- Nothing yet.
+
 ## [0.6.0] - 2026-11-12
 
 ### Added
