@@ -135,6 +135,7 @@ snake_case so failures are readable without the macro.
 | [`SPEC-TUI-002`](tui/0002-session-controls.md) — Session controls and picker | `TUI-011`..`TUI-013` | implemented | 3 |
 | [`SPEC-TUI-003`](tui/0003-command-palette.md) — Command palette and live pickers | `TUI-014`..`TUI-017` | implemented | 3 |
 | [`SPEC-TUI-004`](tui/0004-permission-mode.md) — Permission choices and full access | `TUI-018`, `TUI-019` | implemented | 3 |
+| [`SPEC-TUI-005`](tui/0005-running-indicators.md) — Running tool indicators | `TUI-020` | implemented | 4 |
 
 `PROTO-003`/`PROTO-006` (RPC) are reserved for Phase 5. `SEC-007`/`SEC-008` (project trust and approval
 prompts) are reserved for Phase 4. The full planned index is in `PLAN.MD` Appendix D.

@@ -58,6 +58,8 @@ attachments, image inputs, and a guarded `web_fetch` tool.
 ### Changed
 
 - The built-in tool set is now eight tools; `--allow-all` and `--tools` cover `web_fetch`.
+- Running tools show an animated marker, elapsed time, and the tool name in the editor border instead of the
+  generic streaming label.
 - Image blocks in user messages are sent as `image_url` data URLs (`PROV-023`); tool-result images remain text
   notes.
 - Workspace version is `0.4.0`.

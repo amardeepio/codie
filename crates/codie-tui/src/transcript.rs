@@ -1,5 +1,7 @@
 //! Transcript entries and tool blocks (`TUI-005`, `TUI-006`).
 
+use std::time::{Duration, Instant};
+
 use serde_json::Value;
 
 /// State of one tool call.
@@ -28,6 +30,8 @@ pub struct ToolBlock {
     pub output: String,
     /// Whether the full output is visible.
     pub expanded: bool,
+    /// When the call started, for the live elapsed indicator.
+    pub started: Option<Instant>,
 }
 
 impl ToolBlock {
@@ -49,6 +53,31 @@ impl ToolBlock {
         } else {
             format!("{} {}", self.name, truncate(arguments, 60))
         }
+    }
+
+    /// Returns how long the call has been running.
+    #[must_use]
+    pub fn elapsed(&self) -> Option<Duration> {
+        self.started.map(|started| started.elapsed())
+    }
+
+    /// Returns a compact elapsed label such as `12s` or `1m 03s`.
+    #[must_use]
+    pub fn elapsed_label(&self) -> Option<String> {
+        let elapsed = self.elapsed()?;
+        Some(format_elapsed(elapsed))
+    }
+}
+
+/// Formats a duration as `Ns`, `Nm SSs`, or `Nh MMm`.
+fn format_elapsed(elapsed: Duration) -> String {
+    let seconds = elapsed.as_secs();
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else if seconds < 3600 {
+        format!("{}m {:02}s", seconds / 60, seconds % 60)
+    } else {
+        format!("{}h {:02}m", seconds / 3600, (seconds % 3600) / 60)
     }
 }
 
@@ -191,8 +220,18 @@ impl Transcript {
             status: ToolStatus::Running,
             output: String::new(),
             expanded: false,
+            started: Some(Instant::now()),
         }));
         self.follow = true;
+    }
+
+    /// Returns the most recent tool that is still running.
+    #[must_use]
+    pub fn running_tool(&self) -> Option<&ToolBlock> {
+        self.entries.iter().rev().find_map(|entry| match entry {
+            Entry::Tool(block) if block.status == ToolStatus::Running => Some(block),
+            _ => None,
+        })
     }
 
     /// Finishes a tool block by id.
@@ -292,6 +331,23 @@ mod tests {
             }
             other => panic!("unexpected entry: {other:?}"),
         }
+    }
+
+    #[test]
+    #[spec("TUI-020")]
+    fn running_tool_reports_progress_until_it_finishes() {
+        let mut transcript = Transcript::new();
+        transcript.tool_start(
+            "call_1".into(),
+            "bash".into(),
+            json!({"command": "cargo test"}),
+        );
+        let running = transcript.running_tool().expect("running tool");
+        assert_eq!(running.name, "bash");
+        assert!(running.elapsed_label().is_some());
+
+        transcript.tool_end("call_1", "ok".into(), false);
+        assert!(transcript.running_tool().is_none());
     }
 
     #[test]
