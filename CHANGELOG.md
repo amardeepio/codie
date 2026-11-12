@@ -19,7 +19,8 @@ that major series, with migrations applied on read.
 
 ### Fixed
 
-- Nothing yet.
+- `install.sh` selects the highest semantic version from the tags API even when GitHub returns compact JSON,
+  and warns when another `codie` earlier in `PATH` shadows the new install.
 
 ### Removed
 
