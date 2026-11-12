@@ -64,7 +64,8 @@ attachments, image inputs, and a guarded `web_fetch` tool.
 
 ### Fixed
 
-- Nothing yet.
+- `bash` no longer hangs on commands that leave a background process holding the output pipe open, and now
+  applies a 120 second default timeout. Timeouts kill the command's process group.
 
 ### Removed
 

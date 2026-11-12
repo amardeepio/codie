@@ -2,6 +2,7 @@
 
 use std::{
     process::{ExitStatus, Stdio},
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -15,6 +16,12 @@ use crate::truncate::{DEFAULT_MAX_BYTES, TruncationResult, format_size, truncate
 /// Maximum timeout accepted by the tool, in seconds.
 pub const MAX_TIMEOUT_SECONDS: f64 = 2_147_483.647;
 
+/// Default timeout for commands that do not provide one, in seconds.
+pub const DEFAULT_TIMEOUT_SECONDS: f64 = 120.0;
+
+/// How long to wait for inherited output pipes to close after the shell exits.
+const PIPE_GRACE: Duration = Duration::from_millis(300);
+
 /// Executes shell commands with `/bin/bash` and keeps the tail of the output.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BashTool;
@@ -26,6 +33,9 @@ impl BashTool {
         Self
     }
 }
+
+/// A running output reader and the buffer it fills.
+type OutputReader = (tokio::task::JoinHandle<()>, Arc<Mutex<Vec<u8>>>);
 
 /// How waiting for the child process ended.
 enum WaitOutcome {
@@ -45,8 +55,10 @@ impl Tool for BashTool {
 
     fn description(&self) -> &str {
         "Execute a bash command in the current working directory. Returns combined stdout and \
-         stderr, truncated to the last 2000 lines or 50KB. There is no default timeout; provide \
-         timeout in seconds when a command may run too long. A non-zero exit code is an error."
+         stderr, truncated to the last 2000 lines or 50KB. Commands time out after 120 seconds \
+         by default; raise timeout for long builds. A command that starts a server must background \
+         it and redirect its output (`cmd > /tmp/out.log 2>&1 &`), otherwise the tool waits for it \
+         and then times out. A non-zero exit code is an error."
     }
 
     fn schema(&self) -> Value {
@@ -60,7 +72,7 @@ impl Tool for BashTool {
                 "timeout": {
                     "type": "number",
                     "minimum": 0,
-                    "description": "Timeout in seconds (optional, no default timeout)"
+                    "description": "Timeout in seconds (optional, defaults to 120)"
                 }
             },
             "required": ["command"],
@@ -100,6 +112,11 @@ impl Tool for BashTool {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
 
+        // A dedicated process group lets a timeout kill the shell and every
+        // child it started, instead of leaving a server running.
+        #[cfg(unix)]
+        process.process_group(0);
+
         let mut child = match process.spawn() {
             Ok(child) => child,
             Err(error) => {
@@ -107,20 +124,8 @@ impl Tool for BashTool {
             }
         };
 
-        let stdout_task = child.stdout.take().map(|mut stream| {
-            tokio::spawn(async move {
-                let mut buffer = Vec::new();
-                let _ = stream.read_to_end(&mut buffer).await;
-                buffer
-            })
-        });
-        let stderr_task = child.stderr.take().map(|mut stream| {
-            tokio::spawn(async move {
-                let mut buffer = Vec::new();
-                let _ = stream.read_to_end(&mut buffer).await;
-                buffer
-            })
-        });
+        let stdout = child.stdout.take().map(spawn_reader);
+        let stderr = child.stderr.take().map(spawn_reader);
 
         let outcome = wait_for_child(&mut child, timeout, context).await;
         let (exit_code, status, is_error, include_empty_placeholder) = match outcome {
@@ -152,7 +157,8 @@ impl Tool for BashTool {
                 (
                     -1,
                     Some(format!(
-                        "Command timed out after {} seconds",
+                        "Command timed out after {} seconds. If this starts a long-running process, \
+                         background it with output redirected (`cmd > /tmp/out.log 2>&1 &`).",
                         format_seconds(seconds)
                     )),
                     true,
@@ -165,8 +171,8 @@ impl Tool for BashTool {
             }
         };
 
-        let mut output_bytes = join_task(stdout_task).await;
-        output_bytes.extend(join_task(stderr_task).await);
+        let mut output_bytes = collect_reader(stdout).await;
+        output_bytes.extend(collect_reader(stderr).await);
         let output = String::from_utf8_lossy(&output_bytes).into_owned();
         let truncation = truncate_tail(&output);
         let mut text = if truncation.content.is_empty() {
@@ -228,18 +234,58 @@ async fn wait_for_child(
     }
 }
 
-/// Kills and reaps a child process.
+/// Kills the child's process group and reaps the shell.
 async fn stop_child(child: &mut tokio::process::Child) {
+    #[cfg(unix)]
+    if let Some(pid) = child.id() {
+        // `process_group(0)` makes the pid the group id. Shelling out keeps
+        // this crate free of unsafe code; a missing group is harmless.
+        let _ = Command::new("kill")
+            .arg("-KILL")
+            .arg(format!("-{pid}"))
+            .kill_on_drop(true)
+            .status()
+            .await;
+    }
     let _ = child.start_kill();
     let _ = child.wait().await;
 }
 
-/// Awaits an output reader task, using an empty buffer if the task failed.
-async fn join_task(task: Option<tokio::task::JoinHandle<Vec<u8>>>) -> Vec<u8> {
-    match task {
-        Some(task) => task.await.unwrap_or_default(),
-        None => Vec::new(),
+/// Spawns a reader that appends output to a shared buffer until EOF.
+fn spawn_reader<R>(mut stream: R) -> OutputReader
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+{
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let shared = Arc::clone(&buffer);
+    let handle = tokio::spawn(async move {
+        let mut chunk = [0_u8; 8192];
+        loop {
+            match stream.read(&mut chunk).await {
+                Ok(0) | Err(_) => break,
+                Ok(count) => shared
+                    .lock()
+                    .expect("output buffer")
+                    .extend_from_slice(&chunk[..count]),
+            }
+        }
+    });
+    (handle, buffer)
+}
+
+/// Collects buffered output, giving inherited pipes a short grace period.
+///
+/// A background process may keep the pipe open after the shell exits; waiting
+/// for EOF would hang the turn forever, so the reader is aborted after
+/// [`PIPE_GRACE`] and whatever arrived is returned.
+async fn collect_reader(reader: Option<OutputReader>) -> Vec<u8> {
+    let Some((mut handle, buffer)) = reader else {
+        return Vec::new();
+    };
+    if tokio::time::timeout(PIPE_GRACE, &mut handle).await.is_err() {
+        handle.abort();
     }
+    buffer.lock().expect("output buffer").clone()
 }
 
 /// Builds the tail-truncation notice.
@@ -271,10 +317,10 @@ fn truncation_notice(truncation: &TruncationResult) -> String {
 /// Parses and validates the optional timeout argument.
 fn parse_timeout(arguments: &Value) -> Result<Option<f64>, String> {
     let Some(value) = arguments.get("timeout") else {
-        return Ok(None);
+        return Ok(Some(DEFAULT_TIMEOUT_SECONDS));
     };
     if value.is_null() {
-        return Ok(None);
+        return Ok(Some(DEFAULT_TIMEOUT_SECONDS));
     }
     let Some(seconds) = value.as_f64() else {
         return Err("Invalid timeout: must be a positive finite number of seconds".to_owned());
@@ -313,5 +359,22 @@ fn exit_code_of(status: ExitStatus) -> i32 {
     #[cfg(not(unix))]
     {
         -1
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timeout_defaults_to_two_minutes() {
+        assert_eq!(
+            parse_timeout(&json!({})).expect("default timeout"),
+            Some(DEFAULT_TIMEOUT_SECONDS)
+        );
+        assert_eq!(
+            parse_timeout(&json!({"timeout": null})).expect("null timeout"),
+            Some(DEFAULT_TIMEOUT_SECONDS)
+        );
     }
 }
