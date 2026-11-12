@@ -7,13 +7,11 @@ with a Rust core, a stricter safety posture, and a deliberately narrow provider 
 
 ## Status
 
-**Phase 0: pre-alpha.** The repository currently contains the workspace skeleton, the error model, the initial
-test harness, and this documentation and specification baseline. The agent does not yet perform coding tasks.
-Provider support, the turn loop, tools, sessions, and the TUI land in Phases 1 through 3. See the
-[roadmap](roadmap.md) and [`ROADMAP.md`](../../ROADMAP.md).
-
-Phase 1 is complete: `codie -p "..."` runs a headless coding session and `--mode json` emits the event stream.
-Phase 2 is complete (`0.2.0`); run `codie` in a terminal for the interactive interface.
+**Pre-alpha (`0.3.0`).** The workspace, the error model, the test harness, and the documentation and specification
+baseline are in place, and the agent runs end to end. Phase 1 added the headless core
+(`codie -p "..."`, `--mode json`), Phase 2 the interactive terminal app, and Phase 3 full-fidelity sessions:
+resume with a picker, fork, clone, compaction, and a frozen session format v1 that is stable for the 1.x series.
+See the [roadmap](roadmap.md), [sessions](sessions.md), and [`ROADMAP.md`](../../ROADMAP.md).
 
 ## What it will do
 

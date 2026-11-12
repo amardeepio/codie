@@ -6,7 +6,7 @@ implementations, and only the CLI reads environment variables or decides process
 
 ## Crate graph
 
-Solid edges ship in 0.2.0; dashed edges are planned.
+Solid edges ship in 0.3.0; dashed edges are planned.
 
 ```mermaid
 flowchart TD
