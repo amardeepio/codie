@@ -24,7 +24,7 @@ Verification: `crates/codie-tui/src/app.rs::spec_tui_002_streaming_updates_repla
 Verification: `crates/codie-tui/src/editor.rs::movement_is_grapheme_correct`
 
 **TUI-004 (MUST)** Markdown rendering supports headings, emphasis, lists, blockquotes, tables, fenced code blocks with keyword highlighting, links, and horizontal rules.
-Verification: `crates/codie-tui/src/markdown.rs::headings_lists_and_code_render`
+Verification: `crates/codie-tui/src/markdown.rs::spec_tui_004_headings_lists_and_code_render`
 
 **TUI-005 (MUST)** Tool calls render as stateful blocks with running/success/error states, a compact summary, and expandable output (`Ctrl+O`); edit output colors added and removed lines.
 Verification: `crates/codie-tui/src/transcript.rs::tool_blocks_transition_and_expand`
