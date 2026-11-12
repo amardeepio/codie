@@ -98,9 +98,44 @@ flowchart TD
 The loop has no HTTP client. The provider adapter knows nothing about tool implementations. Only the CLI reads
 environment variables and decides process exit codes. Details are in [`docs/src/architecture.md`](docs/src/architecture.md).
 
+## Install
+
+macOS 13+ on arm64 or x64 is tier 1; Linux glibc 2.31+ is best effort.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh | sh
+```
+
+The installer places `codie` in `~/.local/bin`, verifies checksums when a prebuilt release exists, and prints
+the `PATH` line to add if that directory is not already on your path. Until prebuilt artifacts are published,
+it builds from source and installs Rust 1.88 through rustup when necessary. Pass `--no-rust-install` to disable
+that.
+
+Pin a version or pick another directory:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh \
+  | sh -s -- --version 0.4.0
+
+curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh \
+  | sh -s -- --bin-dir "$HOME/bin"
+```
+
+Prefer to read the script before running it:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh -o install.sh
+less install.sh
+sh install.sh
+```
+
+Uninstall with `rm ~/.local/bin/codie`. Full options and troubleshooting are in
+[`docs/src/install.md`](docs/src/install.md).
+
 ## Quickstart
 
-Requirements: Rust 1.88, installed through `rust-toolchain.toml`. macOS 13+ is the tier-1 platform.
+Requirements: Rust 1.88, installed through `rust-toolchain.toml`. macOS 13+ is the tier-1 platform. The
+[install](#install) section above is the fastest path; build from source as follows for development.
 
 ```bash
 git clone https://github.com/amardeepio/codie
@@ -110,12 +145,15 @@ cargo run -- --help
 cargo run -- --version
 ```
 
-Authenticate once (stored outside the repository, mode 0600):
+Then authenticate once and run:
 
 ```bash
+codie auth login openrouter
+codie auth status
+codie models
+
+# or through cargo while developing:
 cargo run -- auth login openrouter
-cargo run -- auth status
-cargo run -- models
 ```
 
 Run one prompt:
