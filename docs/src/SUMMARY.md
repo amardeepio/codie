@@ -2,6 +2,7 @@
 
 [Introduction](introduction.md)
 
+- [Installation](install.md)
 - [Architecture](architecture.md)
 - [Development](development.md)
 - [Configuration and environment](configuration.md)
