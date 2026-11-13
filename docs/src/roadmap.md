@@ -14,7 +14,7 @@ not commitments; the exit criteria are the real gate.
 | 3 | Sessions at full fidelity: resume, fork, compaction, picker | 2 wk | 9 wk | `0.3.0` — resume/fork/compact | Complete |
 | 4 | Customization and trust: skills, templates, `SYSTEM.md`, images | 2 wk | 11 wk | `0.4.0` — skills/templates/trust | Complete |
 | 5 | Protocols and polish: RPC, schemas, export, performance | 2 wk | 13 wk | `0.5.0` — RPC/export | Complete |
-| 6 | Extensions: JSON-RPC protocol, hooks, manifests, examples | 3 wk | 16 wk | `0.7.0` — extension protocol | Implemented |
+| 6 | Extensions: JSON-RPC protocol, hooks, manifests, examples | 3 wk | 16 wk | `0.7.0` — extension protocol | Complete |
 | 7 | Release hardening: macOS matrix, signing, notarization, fuzzing | 2 wk | 18 wk | `1.0.0` | Planned |
 
 ## Phase 0 exit criteria (met 2026-11-11)
@@ -94,7 +94,8 @@ An interim release after Phase 5; Phase 6 targets `0.7.0`.
 - Python and TypeScript example extensions run against the same protocol.
 - A hung extension is killed without hanging the agent.
 - Extension manifests, discovery, trust, tools, commands, hooks, render hints, and flags are documented.
-- The `0.7.0` release is pending.
+- The `0.7.0` release shipped with the extension protocol, an OpenRouter coding-model catalog, and
+  in-session `/provider` switching.
 
 Later phase criteria are listed in [`PLAN.MD`](../../PLAN.MD) §8. This page mirrors `ROADMAP.md` and is updated at
 each phase boundary. Scope changes require an RFC; phase changes require maintainer approval recorded in

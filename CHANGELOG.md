@@ -11,6 +11,28 @@ that major series, with migrations applied on read.
 
 ### Added
 
+- Nothing yet.
+
+### Changed
+
+- Nothing yet.
+
+### Fixed
+
+- Nothing yet.
+
+### Removed
+
+- Nothing yet.
+
+### Security
+
+- Nothing yet.
+
+## [0.7.0] - 2026-11-13
+
+### Added
+
 - Out-of-process extensions (`codie-ext`): a versioned JSON-RPC 2.0 protocol over stdio with process
   supervision, capability negotiation, hook and tool timeouts, and process-group termination.
 - Hook points `session_start`, `session_shutdown`, `before_agent_start`, `context`, `before_tool_call`,
