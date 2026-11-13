@@ -4,7 +4,7 @@ codie is built in gated phases. Each phase ends with a demoable, installable art
 No phase starts before the previous phase's exit criteria are met. Durations are planning bounds for one
 full-time engineer, not commitments; the exit criteria are the real gate.
 
-**Current status: Phase 6 (extensions) implemented; the `0.7.0` release is pending.** `0.1.0` shipped the
+**Current status: Phase 6 (extensions) complete; released as `0.7.0`.** `0.1.0` shipped the
 headless core, `0.2.0` the interactive app, `0.3.0` full-fidelity sessions, `0.4.0` customization and trust,
 `0.5.0` RPC and export, and `0.6.0` the TUI refresh. Phase 6 adds the out-of-process extension protocol,
 hooks, manifests, custom tools and commands, and Python and TypeScript examples.
@@ -19,7 +19,7 @@ hooks, manifests, custom tools and commands, and Python and TypeScript examples.
 | 3 | Sessions at full fidelity: resume, fork, compaction, picker | 2 weeks | 9 weeks | `0.3.0` — resume/fork/compact | Complete |
 | 4 | Customization and trust: skills, templates, `SYSTEM.md`, images | 2 weeks | 11 weeks | `0.4.0` — skills/templates/trust | Complete |
 | 5 | Protocols and polish: RPC, schemas, export, performance | 2 weeks | 13 weeks | `0.5.0` — RPC/export | Complete |
-| 6 | Extensions: JSON-RPC protocol, hooks, manifests, examples | 3 weeks | 16 weeks | `0.7.0` — extension protocol | Implemented |
+| 6 | Extensions: JSON-RPC protocol, hooks, manifests, examples | 3 weeks | 16 weeks | `0.7.0` — extension protocol | Complete |
 | 7 | Release hardening: macOS matrix, signing, notarization, fuzzing | 2 weeks | 18 weeks | `1.0.0` | Planned |
 
 ## Phase 0: Foundations
@@ -145,7 +145,7 @@ This is an interim release after Phase 5. Phase 6 (extensions) now targets `0.7.
 
 ## Phase 6: Extensions
 
-Status: implemented 2026-11-13; the `0.7.0` release is pending.
+Status: complete 2026-11-13; released as `0.7.0`.
 
 - `codie-ext` JSON-RPC 2.0 protocol over stdio, versioned by protocol version 1.
 - Process supervision, capability negotiation, hook and tool timeouts, and process-group termination.

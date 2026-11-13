@@ -7,13 +7,14 @@ with a Rust core, a stricter safety posture, and a deliberately narrow provider 
 
 ## Status
 
-**Pre-alpha (`0.6.1`).** The workspace, the error model, the test harness, and the
+**Pre-alpha (`0.7.0`).** The workspace, the error model, the test harness, and the
 documentation and specification baseline are in place, and the agent runs end to end. Phase 1 added the headless
 core (`codie -p "..."`, `--mode json`), Phase 2 the interactive terminal app, Phase 3 full-fidelity sessions,
-Phase 4 customization and trust, and Phase 5 RPC mode, generated schemas, HTML export, update checks, and the
-performance gate. The `0.6.0` release refreshes the terminal UI with OpenCode-inspired colors, richer markdown
-and syntax highlighting, and a startup banner. See the [roadmap](roadmap.md), [RPC mode](rpc.md),
-[configuration](configuration.md), and [`ROADMAP.md`](../../ROADMAP.md).
+Phase 4 customization and trust, Phase 5 RPC mode, generated schemas, HTML export, update checks, and the
+performance gate, and Phase 6 out-of-process extensions with hooks, custom tools and commands, and generated
+schemas. The `0.6.0` release refreshed the terminal UI, and `0.7.0` adds the extension protocol plus an
+OpenRouter coding-model catalog and in-session `/provider` switching. See the [roadmap](roadmap.md),
+[RPC mode](rpc.md), [configuration](configuration.md), and [`ROADMAP.md`](../../ROADMAP.md).
 
 ## What it will do
 
