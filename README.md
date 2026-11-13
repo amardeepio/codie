@@ -19,13 +19,15 @@ implementation language, the safety posture, and the provider scope.
 
 The command is `codie`.
 
-**Status: Phase 6 complete (`0.7.1`), pre-alpha.** The one-shot agent, the interactive app,
+**Status: Phase 6 complete (`0.8.0`), pre-alpha.** The one-shot agent, the interactive app,
 full-fidelity sessions, customization, automation, and out-of-process extensions all work end to end:
 streaming transcript, editor dock, OpenCode-inspired themes, the startup banner, slash commands, steering,
 permission prompts, plain mode, resume/fork/compact, search tools, skills, prompt templates, project trust,
 system instructions, `@file` and image inputs, guarded `web_fetch`, RPC mode, generated JSON schemas, HTML
 transcript export, `codie update --check`, extension hooks, tools, commands, and examples, and an OpenRouter
-coding-model catalog with live `/provider` switching. See
+coding-model catalog with live `/provider` switching. The `0.8.0` release adds rich edit/write previews,
+collapsed reasoning, `Esc`/`/stop` cancellation, a context meter with `/usage`, permission review previews,
+tool navigation, folded turns, and session picker previews. See
 [`docs/src/configuration.md`](docs/src/configuration.md), [`docs/src/rpc.md`](docs/src/rpc.md), and
 [`ROADMAP.md`](ROADMAP.md).
 
@@ -153,7 +155,7 @@ Pin a version or pick another directory:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh \
-  | sh -s -- --version 0.7.1
+  | sh -s -- --version 0.8.0
 
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh \
   | sh -s -- --bin-dir "$HOME/bin"

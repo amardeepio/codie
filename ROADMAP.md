@@ -4,10 +4,12 @@ codie is built in gated phases. Each phase ends with a demoable, installable art
 No phase starts before the previous phase's exit criteria are met. Durations are planning bounds for one
 full-time engineer, not commitments; the exit criteria are the real gate.
 
-**Current status: Phase 6 (extensions) complete; released as `0.7.0`.** `0.1.0` shipped the
+**Current status: Phase 6 (extensions) complete; release line at `0.8.0`.** `0.1.0` shipped the
 headless core, `0.2.0` the interactive app, `0.3.0` full-fidelity sessions, `0.4.0` customization and trust,
-`0.5.0` RPC and export, and `0.6.0` the TUI refresh. Phase 6 adds the out-of-process extension protocol,
-hooks, manifests, custom tools and commands, and Python and TypeScript examples.
+`0.5.0` RPC and export, `0.6.0` the TUI refresh, and `0.7.0` the out-of-process extension protocol, hooks,
+manifests, custom tools and commands, and Python and TypeScript examples. `0.7.1` refined `/update`, and
+`0.8.0` adds rich edit/write previews, collapsed reasoning, `Esc`/`/stop` cancellation, a context meter and
+`/usage`, permission review previews, tool navigation, folded turns, and session picker previews.
 
 ## Phase summary
 
