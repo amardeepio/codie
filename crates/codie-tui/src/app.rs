@@ -60,6 +60,30 @@ pub struct ModelChoice {
     pub context_window: u32,
 }
 
+/// One provider offered by the `/provider` picker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderChoice {
+    /// Provider identifier used on the wire.
+    pub id: String,
+    /// Human-readable provider name.
+    pub name: String,
+}
+
+/// The state returned after a successful provider switch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderRuntime {
+    /// Models offered by the newly active provider.
+    pub models: Vec<ModelChoice>,
+    /// Model to select after the switch.
+    pub default_model: String,
+}
+
+/// Reloads the picker models for one provider.
+pub type ModelsLoader = Arc<dyn Fn(&str) -> Vec<ModelChoice> + Send + Sync>;
+
+/// Switches the active provider client and returns its runtime state.
+pub type ProviderSwitcher = Arc<dyn Fn(&str) -> Result<ProviderRuntime, String> + Send + Sync>;
+
 /// One selectable row in a list overlay.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChoiceItem {
@@ -78,6 +102,8 @@ pub enum ChoiceKind {
     Commands,
     /// Models for the active provider.
     Models,
+    /// Supported providers.
+    Providers,
     /// Built-in themes.
     Themes,
     /// Reasoning levels.
@@ -173,6 +199,13 @@ pub struct TuiOptions {
     pub context_window: u32,
     /// Models offered by the picker.
     pub models: Vec<ModelChoice>,
+    /// Reloads the picker models when `/model` opens, so a completed catalog
+    /// refresh is visible without restarting.
+    pub models_loader: Option<ModelsLoader>,
+    /// Providers offered by the `/provider` picker.
+    pub providers: Vec<ProviderChoice>,
+    /// Switches the active provider client and returns its models.
+    pub switch_provider: Option<ProviderSwitcher>,
     /// Initial thinking level.
     pub thinking: ThinkingLevel,
     /// Maximum assistant requests per run.
@@ -205,6 +238,8 @@ pub struct TuiOptions {
     pub append: Option<String>,
     /// Skills and templates available to slash commands.
     pub customizations: Customizations,
+    /// Loaded out-of-process extensions.
+    pub extensions: Arc<codie_ext::ExtensionSet>,
 }
 
 /// Live status shown in the editor border.
@@ -413,6 +448,12 @@ pub struct App {
     pub context_window: u32,
     /// Models offered by the picker.
     pub models: Vec<ModelChoice>,
+    /// Optional reloader for the picker models.
+    pub models_loader: Option<ModelsLoader>,
+    /// Providers offered by the `/provider` picker.
+    pub providers: Vec<ProviderChoice>,
+    /// Optional provider switcher.
+    pub switch_provider: Option<ProviderSwitcher>,
     /// When the current run started, for live tokens/sec.
     pub run_started: Option<std::time::Instant>,
     /// Conversation history.
@@ -449,6 +490,10 @@ pub struct App {
     pub customizations: Customizations,
     /// Prompt produced by a customization command, submitted by the event loop.
     pub command_prompt: Option<String>,
+    /// Slash commands declared by extensions.
+    pub extension_commands: Vec<String>,
+    /// True after `/new` starts a fresh session.
+    pub extension_session_reset: bool,
 }
 
 impl App {
@@ -495,6 +540,9 @@ impl App {
             thinking,
             context_window,
             models,
+            models_loader: None,
+            providers: Vec::new(),
+            switch_provider: None,
             run_started: None,
             history,
             session,
@@ -513,6 +561,8 @@ impl App {
             theme_watcher,
             customizations: Customizations::default(),
             command_prompt: None,
+            extension_commands: Vec::new(),
+            extension_session_reset: false,
         }
     }
 
@@ -710,8 +760,10 @@ impl App {
             KeyCode::PageUp => list.move_by(-5),
             KeyCode::PageDown => list.move_by(5),
             KeyCode::Enter => {
-                if let Some(item) = list.current().cloned() {
-                    self.apply_choice(list.kind, &item);
+                if let Some(item) = list.current().cloned()
+                    && let Some(action) = self.apply_choice(list.kind, &item)
+                {
+                    return action;
                 }
                 return Action::None;
             }
@@ -733,18 +785,28 @@ impl App {
         Action::None
     }
 
-    fn apply_choice(&mut self, kind: ChoiceKind, item: &ChoiceItem) {
+    fn apply_choice(&mut self, kind: ChoiceKind, item: &ChoiceItem) -> Option<Action> {
         match kind {
             ChoiceKind::Commands => match item.value.as_str() {
                 "model" => self.open_models(),
                 "theme" => self.open_themes(),
                 "thinking" => self.open_thinking(),
                 "quit" => self.should_quit = true,
+                "new" => return Some(Action::Submit("/new".to_owned())),
                 "name" | "export" | "export html" => {
                     self.editor.insert_str(&format!("/{} ", item.value));
                 }
                 "skill:" | "template:" => {
                     self.editor.insert_str(&format!("/{}", item.value));
+                }
+                value
+                    if value.starts_with("ext:")
+                        || self
+                            .extension_commands
+                            .iter()
+                            .any(|command| command == &format!("/{value}")) =>
+                {
+                    return Some(Action::Submit(format!("/{value}")));
                 }
                 _ => {
                     self.handle_command(&format!("/{}", item.value));
@@ -769,6 +831,7 @@ impl App {
                         .push_info(format!("Model: {} ({})", choice.name, choice.id));
                 }
             }
+            ChoiceKind::Providers => self.switch_provider_to(&item.value),
             ChoiceKind::Themes => match Theme::load(Some(&item.value)) {
                 Ok(theme) => {
                     self.theme_watcher = std::path::Path::new(&theme.name)
@@ -793,11 +856,13 @@ impl App {
                 }
             }
         }
+        None
     }
 
     fn open_palette(&mut self) {
         let commands = [
             ("help", "Show all commands"),
+            ("provider", "Choose a provider"),
             ("model", "Choose a model"),
             ("theme", "Choose a theme"),
             ("thinking", "Set the reasoning level"),
@@ -819,14 +884,25 @@ impl App {
             ("hotkeys", "Show keybindings"),
             ("quit", "Exit codie"),
         ];
-        let items = commands
+        let mut items = commands
             .into_iter()
             .map(|(name, description)| ChoiceItem {
                 label: format!("/{name}"),
                 detail: description.to_owned(),
                 value: name.to_owned(),
             })
-            .collect();
+            .collect::<Vec<_>>();
+        for command in &self.extension_commands {
+            let value = command.trim_start_matches('/').to_owned();
+            if items.iter().any(|item| item.value == value) {
+                continue;
+            }
+            items.push(ChoiceItem {
+                label: command.clone(),
+                detail: "Extension command".to_owned(),
+                value,
+            });
+        }
         self.overlay = Some(Overlay::List(ChoiceList::new(
             ChoiceKind::Commands,
             " commands ",
@@ -836,6 +912,12 @@ impl App {
     }
 
     fn open_models(&mut self) {
+        if let Some(loader) = &self.models_loader {
+            let refreshed = loader(&self.model.provider);
+            if !refreshed.is_empty() {
+                self.models = refreshed;
+            }
+        }
         let current = self.model.model.clone();
         let mut items = self
             .models
@@ -863,6 +945,74 @@ impl App {
             items,
             "type to filter · ↑/↓ scroll · Enter select",
         )));
+    }
+
+    fn open_providers(&mut self) {
+        let current = self.model.provider.clone();
+        let mut items = self
+            .providers
+            .iter()
+            .map(|provider| ChoiceItem {
+                label: if provider.id == current {
+                    format!("{} (current)", provider.name)
+                } else {
+                    provider.name.clone()
+                },
+                detail: provider.id.clone(),
+                value: provider.id.clone(),
+            })
+            .collect::<Vec<_>>();
+        if items.is_empty() {
+            items.push(ChoiceItem {
+                label: format!("{current} (current)"),
+                detail: "No other providers are configured".to_owned(),
+                value: current,
+            });
+        }
+        self.overlay = Some(Overlay::List(ChoiceList::new(
+            ChoiceKind::Providers,
+            " providers ",
+            items,
+            "type to filter · ↑/↓ scroll · Enter select",
+        )));
+    }
+
+    fn switch_provider_to(&mut self, id: &str) {
+        let Some(switch) = self.switch_provider.clone() else {
+            self.transcript
+                .push_info("Provider switching is unavailable in this mode.");
+            return;
+        };
+        let name = self
+            .providers
+            .iter()
+            .find(|provider| provider.id == id)
+            .map(|provider| provider.name.clone())
+            .unwrap_or_else(|| id.to_owned());
+        match switch(id) {
+            Ok(runtime) => {
+                self.model.provider = id.to_owned();
+                self.model.model = runtime.default_model.clone();
+                self.models = runtime.models;
+                if let Some(model) = self
+                    .models
+                    .iter()
+                    .find(|model| model.id == self.model.model)
+                {
+                    self.context_window = model.context_window;
+                }
+                self.footer.model = self.model.model.clone();
+                if let Some(session) = self.session.as_mut() {
+                    let _ = session.append_model_change(id.to_owned(), self.model.model.clone());
+                }
+                self.refresh_context();
+                self.transcript
+                    .push_info(format!("Provider: {name} · model: {}", self.model.model));
+            }
+            Err(error) => self
+                .transcript
+                .push_error(format!("Cannot switch provider: {error}")),
+        }
     }
 
     fn open_themes(&mut self) {
@@ -1077,7 +1227,10 @@ impl App {
             Command::Help => self.overlay = Some(Overlay::Help),
             Command::Hotkeys => self.overlay = Some(Overlay::Hotkeys),
             Command::Quit => self.should_quit = true,
-            Command::New => self.new_session(),
+            Command::New => {
+                self.new_session();
+                self.extension_session_reset = true;
+            }
             Command::Session => {
                 let text = self.session.as_ref().map_or_else(
                     || "No session is being persisted.".to_owned(),
@@ -1155,6 +1308,13 @@ impl App {
                     }
                 } else {
                     self.open_themes();
+                }
+            }
+            Command::Provider(argument) => {
+                if let Some(provider) = argument {
+                    self.switch_provider_to(&provider);
+                } else {
+                    self.open_providers();
                 }
             }
             Command::Model(argument) => {
@@ -1473,7 +1633,14 @@ impl App {
         }
 
         if token.starts_with('/') {
+            let extension = self
+                .extension_commands
+                .iter()
+                .find(|command| command.starts_with(token))
+                .map(String::as_str);
             if let Some(command) = crate::commands::completions(token).first() {
+                self.editor.replace_token(start, command);
+            } else if let Some(command) = extension {
                 self.editor.replace_token(start, command);
             }
         }
@@ -1562,10 +1729,15 @@ async fn run_full(mut options: TuiOptions) -> Result<u8> {
     let broker = PermissionBroker::new(permission_tx, options.auto_allowed.clone());
     let permission_broker = broker.clone();
     let toolbox: Arc<dyn Toolbox> = Arc::new(PermissionToolbox::new(registry.clone(), broker));
-    let agent = Arc::new(Agent::new(
-        Arc::clone(&options.client),
-        Arc::clone(&toolbox),
-    ));
+    let agent = Arc::new(match options.extensions.hooks() {
+        Some(hooks) => Agent::with_hooks(Arc::clone(&options.client), Arc::clone(&toolbox), hooks),
+        None => Agent::new(Arc::clone(&options.client), Arc::clone(&toolbox)),
+    });
+    let session_id = options
+        .session
+        .as_ref()
+        .map(|session| session.id().to_owned());
+    options.extensions.set_session_id(session_id.clone());
 
     let mut history = options.history.clone();
     let mut app = App::new(
@@ -1582,6 +1754,10 @@ async fn run_full(mut options: TuiOptions) -> Result<u8> {
         Bindings::load(options.keybindings.as_deref())?,
     );
     app.customizations = options.customizations.clone();
+    app.models_loader = options.models_loader.clone();
+    app.providers = options.providers.clone();
+    app.switch_provider = options.switch_provider.clone();
+    app.extension_commands = options.extensions.command_names();
 
     if !matches!(history.first(), Some(Message::System(_))) {
         let declarations = toolbox.declarations();
@@ -1610,6 +1786,14 @@ async fn run_full(mut options: TuiOptions) -> Result<u8> {
         }
     }
 
+    let session_info = codie_protocol::ext::ExtSessionInfo {
+        id: session_id,
+        cwd: app.cwd.display().to_string(),
+        model: Some(app.model.model.clone()),
+    };
+    options.extensions.session_start(&session_info).await;
+    let extensions = Arc::clone(&options.extensions);
+
     let mut terminal = setup_terminal(options.mode)?;
     let result = event_loop(
         &mut terminal,
@@ -1622,6 +1806,7 @@ async fn run_full(mut options: TuiOptions) -> Result<u8> {
     )
     .await;
     restore_terminal();
+    extensions.shutdown("tui exit").await;
     result
 }
 
@@ -1774,6 +1959,63 @@ fn spawn_input() -> mpsc::UnboundedReceiver<Input> {
     receiver
 }
 
+async fn submit_user_prompt(
+    app: &mut App,
+    extensions: &Arc<codie_ext::ExtensionSet>,
+    text: String,
+) -> Option<String> {
+    let session = codie_protocol::ext::ExtSessionInfo {
+        id: app.session.as_ref().map(|session| session.id().to_owned()),
+        cwd: app.cwd.display().to_string(),
+        model: Some(app.model.model.clone()),
+    };
+    let submitted = extensions.user_submit(&session, &text).await;
+    if submitted.block {
+        app.transcript.push_error(
+            submitted
+                .reason
+                .unwrap_or_else(|| "prompt blocked by an extension".to_owned()),
+        );
+        None
+    } else {
+        Some(submitted.prompt.unwrap_or(text))
+    }
+}
+
+async fn handle_extension_command(
+    app: &mut App,
+    extensions: &Arc<codie_ext::ExtensionSet>,
+    text: &str,
+) -> Result<bool> {
+    let Some(invocation) = extensions
+        .resolve_command(text)
+        .map_err(anyhow::Error::msg)?
+    else {
+        return Ok(false);
+    };
+    let session = codie_protocol::ext::ExtSessionInfo {
+        id: app.session.as_ref().map(|session| session.id().to_owned()),
+        cwd: app.cwd.display().to_string(),
+        model: Some(app.model.model.clone()),
+    };
+    match extensions.invoke_command(&invocation, &session).await {
+        Ok(result) => {
+            if let Some(prompt) = result.prompt {
+                app.command_prompt = Some(prompt);
+            } else if let Some(display) = result.display {
+                let text = display.title.map_or(display.text.clone(), |title| {
+                    format!("{title}\n{}", display.text)
+                });
+                app.transcript.push_info(text);
+            } else {
+                app.transcript.push_info("Extension command handled.");
+            }
+            Ok(true)
+        }
+        Err(error) => Err(anyhow::anyhow!(error.to_string())),
+    }
+}
+
 async fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     app: &mut App,
@@ -1830,7 +2072,49 @@ async fn event_loop(
                                 app.transcript.push_info("Cancelling…");
                             }
                             Action::Submit(text) => {
-                                if app.handle_command(&text) {
+                                let extension_candidate = text.trim_start().starts_with("/ext:")
+                                    || matches!(
+                                        parse_command(&text),
+                                        Some(Command::Unknown(_))
+                                    );
+                                let extension_handled = if extension_candidate {
+                                    match handle_extension_command(
+                                        app,
+                                        &options.extensions,
+                                        &text,
+                                    )
+                                    .await
+                                    {
+                                        Ok(handled) => handled,
+                                        Err(error) => {
+                                            app.transcript.push_error(error.to_string());
+                                            true
+                                        }
+                                    }
+                                } else {
+                                    false
+                                };
+                                if !extension_handled && app.handle_command(&text) {
+                                    if app.extension_session_reset {
+                                        app.extension_session_reset = false;
+                                        options
+                                            .extensions
+                                            .session_shutdown("new session")
+                                            .await;
+                                        let session_info =
+                                            codie_protocol::ext::ExtSessionInfo {
+                                                id: app.session.as_ref().map(|session| {
+                                                    session.id().to_owned()
+                                                }),
+                                                cwd: app.cwd.display().to_string(),
+                                                model: Some(app.model.model.clone()),
+                                            };
+                                        options.extensions.set_session_id(session_info.id.clone());
+                                        options
+                                            .extensions
+                                            .session_start(&session_info)
+                                            .await;
+                                    }
                                     if app.should_quit { break; }
                                     if app.update_check_requested {
                                         app.update_check_requested = false;
@@ -1841,22 +2125,57 @@ async fn event_loop(
                                         });
                                         spawn_update(&update_tx, true);
                                     }
-                                    if let Some(prompt) = app.command_prompt.take() {
+                                    if let Some(prompt) = app.command_prompt.take()
+                                        && let Some(prompt) = submit_user_prompt(
+                                            app,
+                                            &options.extensions,
+                                            prompt,
+                                        )
+                                        .await
+                                    {
                                         submit_prompt(
                                             app, &agent, &options, &event_tx, &compact_tx, prompt,
                                         );
                                     }
-                                } else if app.status == Status::Streaming {
-                                    agent.steer(Message::user(text.clone()));
-                                    app.transcript.push_user(text);
-                                } else {
-                                    submit_prompt(
-                                        app, &agent, &options, &event_tx, &compact_tx, text,
-                                    );
+                                } else if extension_handled {
+                                    if let Some(prompt) = app.command_prompt.take()
+                                        && let Some(prompt) = submit_user_prompt(
+                                            app,
+                                            &options.extensions,
+                                            prompt,
+                                        )
+                                        .await
+                                    {
+                                        submit_prompt(
+                                            app, &agent, &options, &event_tx, &compact_tx, prompt,
+                                        );
+                                    }
+                                } else if let Some(text) = submit_user_prompt(
+                                    app,
+                                    &options.extensions,
+                                    text,
+                                )
+                                .await
+                                {
+                                    if app.status == Status::Streaming {
+                                        agent.steer(Message::user(text.clone()));
+                                        app.transcript.push_user(text);
+                                    } else {
+                                        submit_prompt(
+                                            app, &agent, &options, &event_tx, &compact_tx, text,
+                                        );
+                                    }
                                 }
                             }
                             Action::FollowUp(text) => {
-                                if !text.trim().is_empty() {
+                                if !text.trim().is_empty()
+                                    && let Some(text) = submit_user_prompt(
+                                        app,
+                                        &options.extensions,
+                                        text,
+                                    )
+                                    .await
+                                {
                                     agent.follow_up(Message::user(text.clone()));
                                     app.transcript.push_user(text);
                                 }
@@ -2334,7 +2653,13 @@ fn handle_agent_event(app: &mut App, event: AgentEvent) {
                 .filter_map(Content::as_text)
                 .collect::<Vec<_>>()
                 .join("\n");
-            app.transcript.tool_end(&tool_call_id, output, is_error);
+            let render = result
+                .details
+                .as_ref()
+                .and_then(|details| details.get("codie_render"))
+                .and_then(|value| serde_json::from_value(value.clone()).ok());
+            app.transcript
+                .tool_end(&tool_call_id, output, is_error, render);
         }
         AgentEvent::TurnEnd { .. } | AgentEvent::TurnStart => {}
         AgentEvent::AgentEnd { messages, status } => {
@@ -2364,6 +2689,11 @@ fn persist_tool_result(app: &mut App, result: &ToolResultMessage) {
             .collect::<Vec<_>>()
             .join("\n"),
         result.is_error,
+        result
+            .details
+            .as_ref()
+            .and_then(|details| details.get("codie_render"))
+            .and_then(|value| serde_json::from_value(value.clone()).ok()),
     );
 }
 
@@ -2520,6 +2850,12 @@ mod tests {
         app.editor.insert_str("/he");
         app.handle_key(key(KeyCode::Tab));
         assert_eq!(app.editor.text(), "/help");
+
+        app.extension_commands = vec!["/ext:todo:todo".to_owned()];
+        app.editor.clear();
+        app.editor.insert_str("/ext:to");
+        app.handle_key(key(KeyCode::Tab));
+        assert_eq!(app.editor.text(), "/ext:todo:todo");
     }
 
     #[test]
@@ -2895,6 +3231,9 @@ mod tests {
             model: app.model.clone(),
             context_window: 20_000,
             models: Vec::new(),
+            models_loader: None,
+            providers: Vec::new(),
+            switch_provider: None,
             thinking: ThinkingLevel::Medium,
             max_turns: 10,
             session: None,
@@ -2911,6 +3250,7 @@ mod tests {
             preamble: None,
             append: None,
             customizations: Customizations::default(),
+            extensions: Arc::new(codie_ext::ExtensionSet::default()),
         };
         let agent = Arc::new(Agent::new(
             Arc::clone(&options.client),
@@ -2995,6 +3335,49 @@ mod tests {
         assert!(app.handle_command("/theme"));
         app.handle_key(key(KeyCode::Enter));
         assert_eq!(app.theme.name, "system");
+    }
+
+    #[test]
+    #[spec("TUI-015")]
+    fn spec_tui_015_provider_picker_switches_client_and_model() {
+        let (_dir, mut app) = app_with_named_session();
+        app.model.provider = "deepseek".to_owned();
+        app.model.model = "deepseek-flash".to_owned();
+        app.providers = vec![
+            ProviderChoice {
+                id: "deepseek".to_owned(),
+                name: "DeepSeek".to_owned(),
+            },
+            ProviderChoice {
+                id: "openrouter".to_owned(),
+                name: "OpenRouter".to_owned(),
+            },
+        ];
+        app.switch_provider = Some(Arc::new(|id: &str| {
+            assert_eq!(id, "openrouter");
+            Ok(ProviderRuntime {
+                models: vec![ModelChoice {
+                    provider: "openrouter".to_owned(),
+                    id: "openrouter/auto".to_owned(),
+                    name: "OpenRouter Auto".to_owned(),
+                    context_window: 128_000,
+                }],
+                default_model: "openrouter/auto".to_owned(),
+            })
+        }));
+
+        assert!(app.handle_command("/provider"));
+        app.handle_key(key(KeyCode::Down));
+        app.handle_key(key(KeyCode::Enter));
+
+        assert_eq!(app.model.provider, "openrouter");
+        assert_eq!(app.model.model, "openrouter/auto");
+        assert_eq!(app.context_window, 128_000);
+        assert_eq!(app.models[0].id, "openrouter/auto");
+        assert_eq!(
+            app.session.as_ref().unwrap().latest_model(),
+            Some(("openrouter", "openrouter/auto"))
+        );
     }
 
     #[test]

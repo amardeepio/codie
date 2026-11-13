@@ -15,11 +15,17 @@ struct FileConfig {
     max_turns: Option<usize>,
     base_url: Option<String>,
     permissions: Option<FilePermissions>,
+    extensions: Option<FileExtensions>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 struct FilePermissions {
     allow: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct FileExtensions {
+    disabled: Option<Vec<String>>,
 }
 
 /// Resolved CLI configuration.
@@ -45,6 +51,8 @@ pub(crate) struct Config {
     pub(crate) base_url: Option<String>,
     /// Mutating tools allowed in headless mode.
     pub(crate) allow: Vec<String>,
+    /// Extension names disabled by configuration.
+    pub(crate) extensions_disabled: Vec<String>,
 }
 
 impl Config {
@@ -80,6 +88,10 @@ impl Config {
             bail!("max_turns must be greater than zero");
         }
 
+        let extensions_disabled = file
+            .extensions
+            .and_then(|extensions| extensions.disabled)
+            .unwrap_or_default();
         let mut allow = file
             .permissions
             .and_then(|permissions| permissions.allow)
@@ -107,6 +119,7 @@ impl Config {
             max_turns,
             base_url: env_string("CODIE_BASE_URL").or(file.base_url),
             allow,
+            extensions_disabled,
         })
     }
 
@@ -171,6 +184,7 @@ mod tests {
             max_turns: 200,
             base_url: None,
             allow: Vec::new(),
+            extensions_disabled: Vec::new(),
         };
         let directory = config.session_dir_for(Path::new("/Users/me/project"));
         assert!(directory.ends_with("--Users-me-project--"));

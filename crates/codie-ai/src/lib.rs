@@ -27,8 +27,11 @@ pub mod update;
 
 pub use auth::{AuthError, AuthStore, resolve_key};
 pub use catalog::{
-    Architecture, CATALOG_FRESHNESS, CATALOG_TIMEOUT, CatalogCache, CatalogModel,
-    OPENROUTER_MODELS_URL, OpenRouterCatalog, RefreshOutcome, is_selectable, selectable_models,
+    AliasTarget, Architecture, ArtificialAnalysis, Benchmarks, CATALOG_FRESHNESS, CATALOG_TIMEOUT,
+    CODING_INDEX_THRESHOLD, CatalogCache, CatalogModel, FALLBACK_CONTEXT_WINDOW,
+    FALLBACK_MAX_OUTPUT_TOKENS, OPENROUTER_MODELS_URL, OpenRouterCatalog, PROGRAMMING_CATEGORY,
+    Reasoning, RefreshOutcome, TopProvider, catalog_model, coding_models, is_coding_selectable,
+    is_selectable, merge_models, selectable_models,
 };
 pub use model::{
     Compat, DEFAULT_HTTP_REFERER, DEFAULT_X_TITLE, HeaderMap, MaxTokensField, Model, ModelCost,

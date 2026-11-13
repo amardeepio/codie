@@ -20,6 +20,7 @@ serde_json.workspace = true
 
 [dev-dependencies]
 codie-testkit.workspace = true
+toml.workspace = true
 
 [lints]
 workspace = true

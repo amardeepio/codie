@@ -41,6 +41,8 @@ image inputs, guarded `web_fetch`, RPC mode, generated JSON schemas, HTML transc
   recorded-fixture conformance. No live API calls in CI.
 - **Sessions you can trust.** Append-only JSONL with resume, branch, fork, clone, and compaction. The file is
   the source of truth; the model-visible context is a projection.
+- **Extensible without a plugin runtime.** Skills, templates, themes, and out-of-process extensions add tools,
+  commands, and hooks; foreign code never runs in the agent's address space.
 - **Spec-first engineering.** Every normative requirement has an ID, a test path, and a traceability check.
 
 ## Principles
@@ -60,7 +62,8 @@ flowchart LR
     P["Provider adapter<br/>OpenAI-compatible"] -->|"SSE deltas"| S["Assistant event stream"]
     S --> L["Agent loop"]
     L <-->|"append / projection"| DB["Session store<br/>append-only JSONL"]
-    L --> T["Tool execution<br/>read · write · edit · bash<br/>grep · find · ls"]
+    L --> T["Tool execution<br/>read · write · edit · bash<br/>grep · find · ls<br/>extension tools"]
+    L <-->|"hooks / tools / commands"| X["codie-ext<br/>JSON-RPC over stdio"]
     L --> M["Interfaces"]
     M --> I["Interactive TUI"]
     M --> P1["Print"]
@@ -177,6 +180,10 @@ cargo run -- -p --allow-all --cwd /path/to/project \
 cargo run -- --mode json -p "Summarize this repository"
 cargo run -- --mode rpc          # line-delimited JSON commands on stdin
 cargo run -- update --check      # report newer releases without installing
+
+# Extensions
+cargo run -- --extension examples/extensions/todo -p "/todo"
+cargo run -- --extension examples/extensions/todo --allow todo_add -p "add a todo: write docs"
 ```
 
 Environment variables and `.env`:
@@ -221,7 +228,8 @@ Support claims and the macOS terminal matrix are in [`docs/src/platforms.md`](do
 - [`PLAN.MD`](PLAN.MD) — scope, architecture, phases, decision log.
 - [`specs/`](specs/) — normative requirements and the specification process.
 - [`docs/src/`](docs/src/) — mdBook: introduction, architecture, development, configuration, interactive
-  terminal, specs, providers, platforms, security, roadmap.
+  terminal, RPC, extensions, specs, providers, platforms, security, roadmap.
+- [`examples/extensions/`](examples/extensions/) — Python and TypeScript extensions plus minimal SDKs.
 - [`docs/adr/`](docs/adr/) — architecture decision records.
 - [`docs/rfc/`](docs/rfc/) — change proposals for accepted or released behavior.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — development setup, spec-first workflow, PR checklist.

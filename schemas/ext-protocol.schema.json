@@ -1,0 +1,92 @@
+{
+  "$defs": {
+    "ExtNotification": {
+      "description": "A JSON-RPC notification sent by the host.",
+      "properties": {
+        "jsonrpc": {
+          "description": "Always `2.0`.",
+          "type": "string"
+        },
+        "method": {
+          "description": "Method name.",
+          "type": "string"
+        },
+        "params": {
+          "default": null,
+          "description": "Method parameters."
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "method"
+      ],
+      "type": "object"
+    },
+    "ExtResponse": {
+      "description": "A JSON-RPC response sent by an extension.",
+      "properties": {
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExtRpcError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Failure payload."
+        },
+        "id": {
+          "description": "Request identifier being answered.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "jsonrpc": {
+          "description": "Always `2.0`.",
+          "type": "string"
+        },
+        "result": {
+          "description": "Success payload."
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id"
+      ],
+      "type": "object"
+    },
+    "ExtRpcError": {
+      "description": "A JSON-RPC error object.",
+      "properties": {
+        "code": {
+          "description": "Numeric JSON-RPC error code.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "message": {
+          "description": "Human-readable message.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "anyOf": [
+    {
+      "$ref": "#/$defs/ExtResponse",
+      "description": "A response to a host request."
+    },
+    {
+      "$ref": "#/$defs/ExtNotification",
+      "description": "An unsolicited notification."
+    }
+  ],
+  "description": "Any JSON-RPC value an extension may write to stdout.",
+  "title": "ExtServerRecord"
+}

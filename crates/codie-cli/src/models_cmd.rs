@@ -2,7 +2,11 @@
 
 use anyhow::Result;
 use clap::Args;
-use codie_ai::builtin_models;
+use codie_ai::{
+    OpenRouterCatalog, PROVIDER_OPENROUTER, builtin_models, merge_models, provider_base_url,
+};
+
+use crate::config::Config;
 
 /// Model listing options.
 #[derive(Debug, Args)]
@@ -15,9 +19,27 @@ pub(crate) struct ModelsArgs {
     pub(crate) json: bool,
 }
 
-/// Lists the bundled model catalog.
-pub(crate) fn run(args: ModelsArgs) -> Result<()> {
-    let models = builtin_models()
+/// Lists the bundled catalog plus cached OpenRouter coding models.
+pub(crate) fn run(args: ModelsArgs, config: &Config) -> Result<()> {
+    let openrouter = args
+        .provider
+        .as_deref()
+        .is_none_or(|provider| provider == PROVIDER_OPENROUTER);
+
+    let mut catalog_stale = false;
+    let mut models = builtin_models();
+    if openrouter {
+        let base_url = config
+            .base_url
+            .clone()
+            .unwrap_or_else(|| provider_base_url(PROVIDER_OPENROUTER).to_owned());
+        let catalog = OpenRouterCatalog::new(config.cache_dir.join("openrouter-models.json"))
+            .with_endpoint(format!("{}/models", base_url.trim_end_matches('/')));
+        catalog_stale = catalog.has_stale_cache();
+        models = merge_models(models, catalog.cached_coding_models());
+    }
+
+    let models = models
         .into_iter()
         .filter(|model| {
             args.provider
@@ -57,18 +79,24 @@ pub(crate) fn run(args: ModelsArgs) -> Result<()> {
     }
 
     println!(
-        "{:<12} {:<30} {:>10} {:>10} {:>10} {:>10}",
+        "{:<12} {:<38} {:>10} {:>10} {:>10} {:>10}",
         "provider", "model", "context", "output", "in $/M", "out $/M"
     );
     for model in models {
         println!(
-            "{:<12} {:<30} {:>10} {:>10} {:>10.2} {:>10.2}",
+            "{:<12} {:<38} {:>10} {:>10} {:>10.2} {:>10.2}",
             model.provider,
             model.id,
             model.context_window,
             model.max_output_tokens,
             model.cost.input,
             model.cost.output,
+        );
+    }
+
+    if openrouter && catalog_stale {
+        eprintln!(
+            "hint: the OpenRouter catalog cache is stale; run `codie` once to refresh it in the background"
         );
     }
     Ok(())

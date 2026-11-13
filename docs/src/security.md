@@ -65,8 +65,16 @@ and a diagnostic command prints the effective endpoints. Exports warn when outpu
 ## Extensions
 
 Extensions are separate processes speaking JSON-RPC over stdio. They cannot mutate the transcript directly,
-must go through the permission policy for tool calls, and inherit no secrets by default. A hung or crashing
-extension is isolated and killed without hanging the agent.
+must go through the permission policy for tool calls, and inherit no secrets by default. Their environment is
+cleared down to an allowlist, so provider API keys and `TOKEN` variables never reach them. A hung or crashing
+extension is isolated and killed with its process group without hanging the agent.
 
-The normative permission requirements are `SEC-001`..`SEC-008` in [`PLAN.MD`](../../PLAN.MD) §6.13 and will be
-specified in `specs/security/0001-permissions.md`. See [`docs/rfc/`](../rfc/) for changes to released behavior.
+The process boundary is not a sandbox. Extension code runs with the user's privileges and can read files or
+start processes on its own; the host permission engine only protects host tool calls. Installing an extension
+or trusting a project with `.codie/extensions` is therefore a security decision. Project extensions never load
+until the project is trusted, and `--extension` is explicit consent for one run.
+
+The normative extension requirements are `EXT-001`..`EXT-016` in
+[`specs/extensions/0001-jsonrpc-hooks.md`](../../specs/extensions/0001-jsonrpc-hooks.md). Permission
+requirements are `SEC-001`..`SEC-008` in [`PLAN.MD`](../../PLAN.MD) §6.13 and
+[`specs/security/0001-permissions.md`](../../specs/security/0001-permissions.md).

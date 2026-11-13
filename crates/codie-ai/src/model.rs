@@ -161,6 +161,8 @@ pub struct Model {
     pub max_output_tokens: u32,
     /// True when the model supports reasoning.
     pub reasoning: bool,
+    /// True when the provider does not allow reasoning to be disabled.
+    pub reasoning_mandatory: bool,
     /// Supported thinking levels and their provider-native effort names.
     ///
     /// A `None` value means the level is supported but the provider accepts no
@@ -206,7 +208,8 @@ impl Model {
     /// Returns true when the model supports reasoning at `level`.
     #[must_use]
     pub fn supports_thinking_level(&self, level: ThinkingLevel) -> bool {
-        level == ThinkingLevel::Off || self.thinking_levels.contains_key(&level)
+        (level == ThinkingLevel::Off && !self.reasoning_mandatory)
+            || self.thinking_levels.contains_key(&level)
     }
 }
 
@@ -280,6 +283,7 @@ pub fn builtin_models() -> Vec<Model> {
             context_window: 1_000_000,
             max_output_tokens: 384_000,
             reasoning: true,
+            reasoning_mandatory: false,
             thinking_levels: deepseek_thinking_levels(),
             cost: ModelCost {
                 input: 0.30,
@@ -299,6 +303,7 @@ pub fn builtin_models() -> Vec<Model> {
             context_window: 1_000_000,
             max_output_tokens: 384_000,
             reasoning: true,
+            reasoning_mandatory: false,
             thinking_levels: deepseek_thinking_levels(),
             cost: ModelCost {
                 input: 1.32,
@@ -318,6 +323,7 @@ pub fn builtin_models() -> Vec<Model> {
             context_window: 128_000,
             max_output_tokens: 8192,
             reasoning: false,
+            reasoning_mandatory: false,
             thinking_levels: openrouter_thinking_levels(),
             cost: ModelCost::default(),
             compat: Compat::openrouter(),
@@ -332,6 +338,7 @@ pub fn builtin_models() -> Vec<Model> {
             context_window: 1_000_000,
             max_output_tokens: 384_000,
             reasoning: true,
+            reasoning_mandatory: false,
             thinking_levels: openrouter_thinking_levels(),
             // OpenRouter reports the billed cost per request, so the catalog
             // price is only an estimate for offline planning.
@@ -368,6 +375,7 @@ pub fn fallback_model(provider: &str, id: &str) -> Model {
         base_url: provider_base_url(provider).to_owned(),
         context_window: 128_000,
         max_output_tokens: 8192,
+        reasoning_mandatory: false,
         reasoning: false,
         thinking_levels: BTreeMap::new(),
         cost: ModelCost::default(),

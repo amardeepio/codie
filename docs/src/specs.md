@@ -71,7 +71,8 @@ snake-case requirement ID so failures are readable.
 | [Session tree operations](../../specs/session/0002-tree-operations.md) | `SESS-010`..`SESS-025` | implemented | 3 |
 | [Context compaction](../../specs/context/0001-compaction.md) | `CTX-001`..`CTX-007` | implemented | 3 |
 | [System prompt](../../specs/prompt/0001-system-prompt.md) | `PRMPT-001`..`PRMPT-008` | accepted | 1 |
-| [CLI surface](../../specs/cli/0001-cli-surface.md) | `CLI-001`..`CLI-007` | accepted | 1 |
+| [CLI surface](../../specs/cli/0001-cli-surface.md) | `CLI-001`..`CLI-008` | implemented | 1, 6 |
+| [Out-of-process extensions](../../specs/extensions/0001-jsonrpc-hooks.md) | `EXT-001`..`EXT-016` | implemented | 6 |
 | [JSON events](../../specs/protocol/0001-json-events.md) | `PROTO-001`, `PROTO-002`, `PROTO-004`, `PROTO-005` | accepted | 1 |
 | [Permissions](../../specs/security/0001-permissions.md) | `SEC-001`..`SEC-006` | accepted | 1 |
 | [Interactive terminal](../../specs/tui/0001-layout-and-rendering.md) | `TUI-001`..`TUI-010` | accepted | 2 |

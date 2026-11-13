@@ -309,6 +309,8 @@ Core flags (Phase 1 subset marked ●):
 | `--allow <pattern>` / `--deny <pattern>` | 4 | Permission policy overrides |
 | `--no-context-files` | 4 | Skip AGENTS.md discovery |
 | `--theme <name>` | 4 | TUI theme |
+| `--extension <path>` | 6 | Load an extension manifest or directory |
+| `--no-extensions` | 6 | Disable every extension process |
 | `--offline` | 2 | Disable network catalog/version checks |
 | `-V, --version`, `-h, --help` ● | 0 | |
 | `-v, --verbose` ● | 0 | Increase log verbosity (repeatable) |
@@ -1713,10 +1715,10 @@ implementations.
 | `specs/context/0001-compaction.md` | CTX-001..007 | 3 |
 | `specs/prompt/0001-system-prompt.md` | PRMPT-001..008 | 1, 4 |
 | `specs/tui/0001-layout-and-rendering.md` | TUI-001..010 | 2 |
-| `specs/cli/0001-cli-surface.md` | CLI-001..007 | 1 |
+| `specs/cli/0001-cli-surface.md` | CLI-001..008 | 1, 6 |
 | `specs/protocol/0001-json-events.md` | PROTO-001, PROTO-002, PROTO-004, PROTO-005 | 1 |
 | `specs/protocol/0002-rpc.md` | PROTO-003, PROTO-006 | 5 |
-| `specs/extensions/0001-jsonrpc-hooks.md` | EXT-001..006 | 6 |
+| `specs/extensions/0001-jsonrpc-hooks.md` | EXT-001..016 | 6 |
 | `specs/security/0001-permissions.md` | SEC-001..008 | 1, 4 |
 
 ---

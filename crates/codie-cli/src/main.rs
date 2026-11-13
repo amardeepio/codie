@@ -12,6 +12,7 @@ use tracing_subscriber::EnvFilter;
 mod auth_cmd;
 mod config;
 mod config_cmd;
+mod ext_flags;
 mod models_cmd;
 mod rpc;
 mod run;
@@ -67,28 +68,44 @@ enum Commands {
 #[tokio::main]
 async fn main() -> ExitCode {
     install_crash_reporter();
-    let cli = match Cli::try_parse() {
-        Ok(cli) => cli,
-        Err(error) => {
-            let code = match error.kind() {
-                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion => 0,
-                _ => 1,
-            };
-            let _ = error.print();
-            return ExitCode::from(code);
-        }
-    };
+    let raw = std::env::args_os().skip(1).collect();
+    let (raw, deferred) = ext_flags::split(raw);
+    let cli =
+        match Cli::try_parse_from(std::iter::once(std::ffi::OsString::from("codie")).chain(raw)) {
+            Ok(cli) => cli,
+            Err(error) => {
+                let code = match error.kind() {
+                    clap::error::ErrorKind::DisplayHelp
+                    | clap::error::ErrorKind::DisplayVersion => 0,
+                    _ => 1,
+                };
+                let _ = error.print();
+                return ExitCode::from(code);
+            }
+        };
     if let Err(error) = load_env(cli.env_file.as_deref()) {
         eprintln!("error: {error:#}");
         return ExitCode::from(1);
     }
     init_tracing(cli.verbose);
 
+    if cli.command.is_some() && !deferred.values.is_empty() {
+        let name = deferred
+            .values
+            .keys()
+            .next()
+            .map_or_else(String::new, |name| format!(" `--{name}`"));
+        eprintln!("error: unknown flag{name} for a management subcommand");
+        return ExitCode::from(1);
+    }
+
     let result = match cli.command {
         Some(Commands::Auth(args)) => {
             config::Config::load().and_then(|config| auth_cmd::run(args, &config))
         }
-        Some(Commands::Models(args)) => models_cmd::run(args).map(|()| 0),
+        Some(Commands::Models(args)) => config::Config::load()
+            .and_then(|config| models_cmd::run(args, &config))
+            .map(|()| 0),
         Some(Commands::Config(args)) => config_cmd::run(args).map(|()| 0),
         Some(Commands::Sessions(args)) => {
             config::Config::load().and_then(|config| sessions_cmd::run(args, &config))
@@ -103,7 +120,7 @@ async fn main() -> ExitCode {
             };
         }
         None => {
-            return match run::run(cli.run).await {
+            return match run::run(cli.run, deferred.values).await {
                 Ok(code) => ExitCode::from(code),
                 Err(error) => {
                     eprintln!("error: {error:#}");

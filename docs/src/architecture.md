@@ -6,7 +6,7 @@ implementations, and only the CLI reads environment variables or decides process
 
 ## Crate graph
 
-Solid edges ship in 0.6.0; dashed edges are planned.
+Solid edges ship in 0.7.0; dashed edges are planned.
 
 ```mermaid
 flowchart TD
@@ -19,7 +19,8 @@ flowchart TD
     PROMPT["codie-prompt<br/>prompt · skills · trust"]
 
     TUI["codie-tui<br/>interactive"]
-    PROTO["codie-protocol<br/>Phase 5"]
+    PROTO["codie-protocol<br/>schemas · RPC · extension wire types"]
+    EXT["codie-ext<br/>discovery · supervision · hooks"]
     CONTEXT["codie-context<br/>Phase 3"]
 
     CLI --> CORE
@@ -27,25 +28,29 @@ flowchart TD
     CLI --> TOOLS
     CLI --> SESSION
     CLI --> PROMPT
+    CLI --> EXT
+    CLI --> PROTO
 
     AI --> CORE
     TOOLS --> CORE
     SESSION --> CORE
     PROMPT --> CORE
+    EXT --> CORE
+    EXT --> PROTO
 
     TUI --> CORE
-    PROTO -.-> CORE
+    TUI --> EXT
     CONTEXT -.-> CORE
 
     TESTKIT["codie-testkit<br/>dev only"] -.-> CORE
 ```
 
-The graph is deliberately wider than the current workspace. `context` and `protocol` are split out when a
-second consumer appears. Premature crates are as harmful as monolithic modules.
+The graph is deliberately wider than the current workspace. `context` is split out when a second consumer
+appears. Premature crates are as harmful as monolithic modules.
 
 Current repository crates are `codie-core`, `codie-ai`, `codie-tools`, `codie-session`, `codie-prompt`,
-`codie-tui`, `codie-cli`, `codie-testkit`, and the `codie-spec-macro` helper used by the test attribute.
-`xtask` is repository automation, not a shipped library.
+`codie-ext`, `codie-protocol`, `codie-tui`, `codie-cli`, `codie-testkit`, and the `codie-spec-macro`
+helper used by the test attribute. `xtask` is repository automation, not a shipped library.
 
 ## Boundaries
 
@@ -57,6 +62,9 @@ Current repository crates are `codie-core`, `codie-ai`, `codie-tools`, `codie-se
 - `codie-session` owns the append-only store and projection. It does not call providers. Branch selections are
   persisted as leaf markers; fork and clone write new files and never touch the source.
 - `codie-prompt` discovers project instructions and builds deterministic system prompts.
+- `codie-ext` discovers and supervises extension processes, translates hooks into the core hook trait,
+  registers extension tools and commands, and enforces timeout, environment, and protocol limits.
+- `codie-protocol` owns generated wire schemas, the RPC types, and the extension JSON-RPC types.
 - `codie-cli` is the only crate that reads environment variables or maps outcomes to process exit codes.
 - Public APIs are `pub(crate)` by default; crates expose narrow, documented surfaces.
 

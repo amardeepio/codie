@@ -454,6 +454,7 @@ dependencies = [
  "clap",
  "codie-ai",
  "codie-core",
+ "codie-ext",
  "codie-prompt",
  "codie-protocol",
  "codie-session",
@@ -492,6 +493,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "codie-ext"
+version = "0.6.1"
+dependencies = [
+ "async-trait",
+ "codie-core",
+ "codie-protocol",
+ "codie-testkit",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-util",
+ "toml",
+ "tracing",
+]
+
+[[package]]
 name = "codie-prompt"
 version = "0.6.1"
 dependencies = [
@@ -510,6 +528,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "toml",
 ]
 
 [[package]]
@@ -568,7 +587,9 @@ dependencies = [
  "async-trait",
  "codie-ai",
  "codie-core",
+ "codie-ext",
  "codie-prompt",
+ "codie-protocol",
  "codie-session",
  "codie-testkit",
  "codie-tools",

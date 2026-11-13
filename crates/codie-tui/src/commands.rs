@@ -37,6 +37,8 @@ pub enum Command {
     Theme(Option<String>),
     /// Change or report the model.
     Model(Option<String>),
+    /// Change or report the provider.
+    Provider(Option<String>),
     /// Change or report the thinking level.
     Thinking(Option<String>),
     /// Manual compaction (Phase 3).
@@ -101,6 +103,7 @@ pub fn parse(input: &str) -> Option<Command> {
         "update" => Command::Update,
         "theme" => Command::Theme(argument),
         "model" => Command::Model(argument),
+        "provider" => Command::Provider(argument),
         "thinking" => Command::Thinking(argument),
         "compact" => Command::Compact(argument),
         "reload" => Command::Reload,
@@ -133,6 +136,7 @@ pub fn names() -> &'static [&'static str] {
         "/update",
         "/theme",
         "/model",
+        "/provider",
         "/thinking",
         "/compact",
         "/reload",
@@ -160,6 +164,11 @@ mod tests {
         assert_eq!(
             parse("/model openrouter/auto"),
             Some(Command::Model(Some("openrouter/auto".to_owned())))
+        );
+        assert_eq!(parse("/provider"), Some(Command::Provider(None)));
+        assert_eq!(
+            parse("/provider openrouter"),
+            Some(Command::Provider(Some("openrouter".to_owned())))
         );
         assert_eq!(parse("/thinking"), Some(Command::Thinking(None)));
         assert_eq!(

@@ -268,19 +268,48 @@ fn transcript_lines(app: &App, width: u16) -> Vec<Line<'static>> {
                     ));
                 }
                 lines.push(Line::from(spans));
-                if block.expanded && !block.output.is_empty() {
-                    for line in block.output.lines().take(200) {
-                        let color = if line.starts_with('+') {
-                            palette.diff_add
-                        } else if line.starts_with('-') {
-                            palette.diff_del
-                        } else {
-                            palette.foreground
-                        };
-                        lines.push(Line::from(Span::styled(
-                            format!("  {line}"),
-                            Style::default().fg(color),
-                        )));
+                if block.expanded {
+                    if let Some(render) = &block.render {
+                        if let Some(title) = &render.title {
+                            lines.push(Line::from(Span::styled(
+                                format!("  {title}"),
+                                Style::default().fg(palette.heading),
+                            )));
+                        }
+                        for line in render.text.lines().take(200) {
+                            let color =
+                                if matches!(render.kind, codie_protocol::ext::ExtRenderKind::Diff)
+                                    && line.starts_with('+')
+                                {
+                                    palette.diff_add
+                                } else if matches!(
+                                    render.kind,
+                                    codie_protocol::ext::ExtRenderKind::Diff
+                                ) && line.starts_with('-')
+                                {
+                                    palette.diff_del
+                                } else {
+                                    palette.foreground
+                                };
+                            lines.push(Line::from(Span::styled(
+                                format!("  {line}"),
+                                Style::default().fg(color),
+                            )));
+                        }
+                    } else if !block.output.is_empty() {
+                        for line in block.output.lines().take(200) {
+                            let color = if line.starts_with('+') {
+                                palette.diff_add
+                            } else if line.starts_with('-') {
+                                palette.diff_del
+                            } else {
+                                palette.foreground
+                            };
+                            lines.push(Line::from(Span::styled(
+                                format!("  {line}"),
+                                Style::default().fg(color),
+                            )));
+                        }
                     }
                 }
             }

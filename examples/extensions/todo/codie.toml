@@ -1,0 +1,10 @@
+name = "todo"
+version = "0.1.0"
+protocol = 1
+description = "Example todo tools and a /todo command."
+entrypoint = ["python3", "todo.py"]
+capabilities = ["tools", "commands"]
+
+[limits]
+hook_timeout_ms = 2000
+tool_timeout_ms = 120000

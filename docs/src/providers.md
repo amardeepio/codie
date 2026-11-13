@@ -70,8 +70,21 @@ never re-emits content already delivered to the consumer.
 
 Models are selected by `provider/model`, for example `deepseek/deepseek-flash`. OpenRouter model IDs are used
 verbatim inside that path; codie does not rewrite vendor prefixes. A model is selectable only when it is a chat
-model whose input modalities include text. `codie models [--provider <p>] [--json]` is planned for Phase 1; the
-DeepSeek catalog ships as bundled data, so newly released DeepSeek models require a codie release.
+model whose input modalities include text. The DeepSeek catalog ships as bundled data, so newly released
+DeepSeek models require a codie release.
+
+OpenRouter models come from the live `/models` catalog, cached under the data directory. The picker narrows the
+catalog to coding models: models that support tool calling and either appear in OpenRouter's `programming`
+category or score at least 70 on the Artificial Analysis coding index. `:batch` aliases and tilde aliases are
+dropped, and models sharing a base ID are deduplicated. Curated entries (`openrouter/auto` and the DeepSeek
+OpenRouter default) are merged first, so the picker stays usable when the cache is empty or stale. The catalog
+refresh runs in the background in every mode; a completed refresh appears the next time `/model` opens.
+
+`codie models [--provider <p>] [--json]` lists the merged catalog from the local cache without a network call.
+
+In the TUI, `/provider` switches between DeepSeek and OpenRouter in place. The agent keeps one stable client
+handle, so an in-flight session can change provider without restarting; the switch selects the new provider's
+default model and persists a model-change entry.
 
 ## Testing and limitations
 

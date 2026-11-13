@@ -22,9 +22,13 @@ closes without running anything. Selecting a command with optional text inserts 
 Verification: `crates/codie-tui/src/app.rs::spec_tui_014_slash_opens_a_filterable_command_palette`
 
 **TUI-015 (MUST)** The model picker lists models for the active provider, marks the current model, applies the
-selection to the next request, updates the context window, and persists a model-change entry. The theme picker
-applies `system`, `dark`, or `light` immediately.
-Verification: `crates/codie-tui/src/app.rs::spec_tui_015_model_and_theme_pickers_apply_selection`
+selection to the next request, updates the context window, and persists a model-change entry. The provider picker
+lists the supported providers, marks the current one, switches the active chat client in place, selects the new
+provider's default model, refreshes the model list, updates the context window, and persists a model-change
+entry. The theme picker applies `system`, `dark`, or `light` immediately. A switch that cannot resolve a
+credential reports an error and leaves the current provider active.
+Verification: `crates/codie-tui/src/app.rs::spec_tui_015_model_and_theme_pickers_apply_selection`,
+`crates/codie-tui/src/app.rs::spec_tui_015_provider_picker_switches_client_and_model`
 
 **TUI-016 (MUST)** The reasoning picker lists `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`,
 marks the current level, applies the selection, and persists a thinking-level entry.
@@ -51,9 +55,11 @@ only opened from an empty editor, so a leading `/` inside a multi-line prompt is
 # Edge cases
 
 - An empty result set shows "No matches." and `Enter` does nothing.
-- `/model <id>` and `/theme <name>` typed manually still work and persist the same state.
-- Selecting the current model or theme is allowed and only refreshes metadata.
+- `/model <id>`, `/provider <id>`, and `/theme <name>` typed manually still work and persist the same state.
+- Selecting the current model, provider, or theme is allowed and only refreshes metadata.
 - The model list falls back to the current model when the catalog is unavailable.
+- Provider switches keep the agent and tool registry alive by swapping the client behind one stable handle.
+- Switching provider selects that provider's default model; the next request uses the new provider.
 - Tokens/sec is an estimate during streaming and an exact usage/duration ratio after completion.
 
 # Non-goals

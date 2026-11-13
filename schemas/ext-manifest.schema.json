@@ -1,0 +1,108 @@
+{
+  "$defs": {
+    "ExtCapability": {
+      "description": "A capability an extension may request.",
+      "oneOf": [
+        {
+          "const": "hooks",
+          "description": "The extension wants hook calls.",
+          "type": "string"
+        },
+        {
+          "const": "tools",
+          "description": "The extension declares model-visible tools.",
+          "type": "string"
+        },
+        {
+          "const": "commands",
+          "description": "The extension declares slash commands.",
+          "type": "string"
+        },
+        {
+          "const": "renderers",
+          "description": "The extension returns structured render hints.",
+          "type": "string"
+        },
+        {
+          "const": "flags",
+          "description": "The extension declares command-line flags.",
+          "type": "string"
+        }
+      ]
+    },
+    "ExtLimits": {
+      "description": "Extension-declared timeout limits.",
+      "properties": {
+        "hook_timeout_ms": {
+          "default": 2000,
+          "description": "Hook timeout in milliseconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tool_timeout_ms": {
+          "default": 120000,
+          "description": "Tool timeout in milliseconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "An extension manifest (`codie.toml`).",
+  "properties": {
+    "capabilities": {
+      "default": [],
+      "description": "Capabilities the extension intends to use.",
+      "items": {
+        "$ref": "#/$defs/ExtCapability"
+      },
+      "type": "array"
+    },
+    "description": {
+      "default": "",
+      "description": "One-line description.",
+      "type": "string"
+    },
+    "entrypoint": {
+      "description": "Executable and arguments, relative to the manifest directory.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "limits": {
+      "$ref": "#/$defs/ExtLimits",
+      "default": {
+        "hook_timeout_ms": 2000,
+        "tool_timeout_ms": 120000
+      },
+      "description": "Timeout overrides."
+    },
+    "name": {
+      "description": "Stable extension name.",
+      "type": "string"
+    },
+    "protocol": {
+      "description": "Protocol version the extension implements.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "version": {
+      "description": "Extension version.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "name",
+    "version",
+    "protocol",
+    "entrypoint"
+  ],
+  "title": "ExtManifest",
+  "type": "object"
+}

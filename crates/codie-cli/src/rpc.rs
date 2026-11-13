@@ -9,14 +9,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
 
 use anyhow::{Context, Result};
-use codie_ai::{fallback_model, find_model};
+use codie_ai::{Model, fallback_model, find_model};
 use codie_core::{
     Agent, AgentConfig, AgentEvent, AgentEventStream, ChatClient, Message, ModelRef, RunStatus,
     ThinkingLevel, Toolbox,
 };
+use codie_ext::ExtensionSet;
 use codie_prompt::{
     Customizations, PromptInput, build_system_message, expand_attachments, load_project_context,
 };
+use codie_protocol::ext::ExtSessionInfo;
 use codie_protocol::{
     RpcCommand, RpcReady, RpcRequest, RpcResponse, RpcSessionHeader, RpcSettled, SessionType,
 };
@@ -35,12 +37,15 @@ pub(crate) struct RpcOptions {
     pub(crate) session: Option<Session>,
     pub(crate) history: Vec<Message>,
     pub(crate) model: ModelRef,
+    /// Selectable models, including cached OpenRouter catalog entries.
+    pub(crate) models: Vec<Model>,
     pub(crate) context_window: u64,
     pub(crate) thinking: ThinkingLevel,
     pub(crate) max_turns: usize,
     pub(crate) preamble: Option<String>,
     pub(crate) append: Option<String>,
     pub(crate) customizations: Customizations,
+    pub(crate) extensions: Arc<ExtensionSet>,
 }
 
 struct ActiveRun {
@@ -63,10 +68,14 @@ struct State {
 
 /// Runs the RPC server until stdin closes, `shutdown`, or a signal.
 pub(crate) async fn run(options: RpcOptions) -> Result<u8> {
-    let agent = Arc::new(Agent::new(
-        Arc::clone(&options.client),
-        Arc::clone(&options.toolbox),
-    ));
+    let agent = Arc::new(match options.extensions.hooks() {
+        Some(hooks) => Agent::with_hooks(
+            Arc::clone(&options.client),
+            Arc::clone(&options.toolbox),
+            hooks,
+        ),
+        None => Agent::new(Arc::clone(&options.client), Arc::clone(&options.toolbox)),
+    });
     let mut state = State {
         options,
         agent,
@@ -84,6 +93,17 @@ pub(crate) async fn run(options: RpcOptions) -> Result<u8> {
         exit_code: None,
     };
     state.take_options();
+    let session_id = state
+        .session
+        .as_ref()
+        .map(|session| session.id().to_owned());
+    state.options.extensions.set_session_id(session_id.clone());
+    let session_info = ExtSessionInfo {
+        id: session_id,
+        cwd: state.options.cwd.display().to_string(),
+        model: Some(state.model.model.clone()),
+    };
+    state.options.extensions.session_start(&session_info).await;
     state.emit(&RpcReady::new())?;
     state.emit_session_header()?;
 
@@ -146,6 +166,7 @@ pub(crate) async fn run(options: RpcOptions) -> Result<u8> {
     if state.active.is_some() {
         state.finish_run(RunStatus::Aborted)?;
     }
+    state.options.extensions.shutdown("rpc exit").await;
 
     Ok(state.exit_code.unwrap_or(0))
 }
@@ -226,7 +247,7 @@ impl State {
         let command = request.command_name();
         let id = request.id.clone();
         match request.command {
-            RpcCommand::Prompt { message } => self.prompt(id, command, &message),
+            RpcCommand::Prompt { message } => self.prompt(id, command, &message).await,
             RpcCommand::Steer { message } => self.queue(id, command, &message, true),
             RpcCommand::FollowUp { message } => self.queue(id, command, &message, false),
             RpcCommand::Abort => {
@@ -246,7 +267,7 @@ impl State {
             RpcCommand::GetMessages => self.get_messages(id, command),
             RpcCommand::GetEntries => self.get_entries(id, command),
             RpcCommand::GetSessionStats => self.get_session_stats(id, command),
-            RpcCommand::NewSession => self.new_session(id, command),
+            RpcCommand::NewSession => self.new_session(id, command).await,
             RpcCommand::SetModel { model, provider } => {
                 self.set_model(id, command, &model, provider.as_deref())
             }
@@ -265,8 +286,65 @@ impl State {
         }
     }
 
-    fn prompt(&mut self, id: Option<String>, command: &str, message: &str) -> Result<()> {
-        let expansion = expand_attachments(message, &self.options.cwd);
+    async fn prompt(&mut self, id: Option<String>, command: &str, message: &str) -> Result<()> {
+        let session_info = ExtSessionInfo {
+            id: self.session.as_ref().map(|session| session.id().to_owned()),
+            cwd: self.options.cwd.display().to_string(),
+            model: Some(self.model.model.clone()),
+        };
+        let mut message = message.to_owned();
+        if let Some(invocation) = self
+            .options
+            .extensions
+            .resolve_command(&message)
+            .map_err(anyhow::Error::msg)?
+        {
+            match self
+                .options
+                .extensions
+                .invoke_command(&invocation, &session_info)
+                .await
+            {
+                Ok(result) => {
+                    if let Some(prompt) = result.prompt {
+                        message = prompt;
+                    } else {
+                        return self.respond(RpcResponse::success(
+                            id,
+                            command,
+                            json!({"handled": true, "display": result.display}),
+                        ));
+                    }
+                }
+                Err(error) => {
+                    return self.respond(RpcResponse::failure(
+                        id,
+                        command,
+                        "extension_failed",
+                        error.to_string(),
+                    ));
+                }
+            }
+        }
+        let submitted = self
+            .options
+            .extensions
+            .user_submit(&session_info, &message)
+            .await;
+        if submitted.block {
+            return self.respond(RpcResponse::failure(
+                id,
+                command,
+                "blocked",
+                submitted
+                    .reason
+                    .unwrap_or_else(|| "prompt blocked by an extension".to_owned()),
+            ));
+        }
+        if let Some(prompt) = submitted.prompt {
+            message = prompt;
+        }
+        let expansion = expand_attachments(&message, &self.options.cwd);
         let prompt = Message::user_with_content(expansion.content);
         let warnings = expansion.errors;
 
@@ -381,7 +459,7 @@ impl State {
         ))
     }
 
-    fn new_session(&mut self, id: Option<String>, command: &str) -> Result<()> {
+    async fn new_session(&mut self, id: Option<String>, command: &str) -> Result<()> {
         if self.active.is_some() {
             return self.respond(RpcResponse::failure(
                 id,
@@ -390,12 +468,25 @@ impl State {
                 "abort the active run before starting a new session",
             ));
         }
+        self.options
+            .extensions
+            .session_shutdown("new session")
+            .await;
         let mut session = Session::create(&self.options.cwd, &self.options.session_dir)?;
         let system = self.system_message();
         session.append_message(&system)?;
         self.history = vec![system];
         let session_id = session.id().to_owned();
         self.session = Some(session);
+        self.options
+            .extensions
+            .set_session_id(Some(session_id.clone()));
+        let session_info = ExtSessionInfo {
+            id: Some(session_id.clone()),
+            cwd: self.options.cwd.display().to_string(),
+            model: Some(self.model.model.clone()),
+        };
+        self.options.extensions.session_start(&session_info).await;
         self.emit_session_header()?;
         self.respond(RpcResponse::success(
             id,
@@ -421,8 +512,14 @@ impl State {
             ));
         }
 
-        let model =
-            find_model(&provider, model_id).unwrap_or_else(|| fallback_model(&provider, model_id));
+        let model = self
+            .options
+            .models
+            .iter()
+            .find(|candidate| candidate.provider == provider && candidate.id == model_id)
+            .cloned()
+            .or_else(|| find_model(&provider, model_id))
+            .unwrap_or_else(|| fallback_model(&provider, model_id));
         self.model.model = model_id.to_owned();
         self.context_window = u64::from(model.context_window);
         if let Some(session) = self.session.as_mut() {

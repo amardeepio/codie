@@ -42,11 +42,17 @@ value with `codie config set provider openrouter`, print the file path with `cod
 | Skills | `.codie/skills/<name>/SKILL.md`, `~/.config/codie/skills/` | Reusable instruction blocks invoked with `/skill:<name>` |
 | Templates | `.codie/templates/<name>.md`, `~/.config/codie/templates/` | Prompts with `$ARGUMENTS` and `$1`..`$9`, invoked with `/template:<name>` |
 | System prompt | `SYSTEM.md`, `APPEND_SYSTEM.md` from the working directory upward | Replace or extend the preamble |
-| Flags | `--system-prompt`, `--append-system-prompt` | Per-run overrides for the files above |
+| Extensions | `.codie/extensions/<name>/codie.toml`, `~/.config/codie/extensions/` | Out-of-process tools, commands, and hooks |
+| Flags | `--system-prompt`, `--append-system-prompt`, `--extension`, `--no-extensions` | Per-run overrides |
 
 Project resources under `.codie/` load only for trusted projects. Approve once with `codie --approve`, or answer
 the interactive trust prompt. Non-interactive runs never prompt and treat the project as untrusted. Trust is
-stored in `trust.toml` by canonical path.
+stored in `trust.toml` by canonical path. Project extensions follow the same rule.
+
+Load an extension for one run with `--extension <path>`, or disable every extension with
+`--no-extensions`. Disable selected names with `[extensions] disabled = ["plan-mode"]` or
+`codie config set extensions-disabled plan-mode`. See [Extensions](extensions.md) for the manifest and
+protocol.
 
 `@path` in a prompt attaches a file: text becomes a `<file>` block and images become image content for models
 that accept it. Use `/reload` in the interactive app to pick up new skills and templates.
@@ -85,6 +91,9 @@ max_turns = 200
 
 [permissions]
 allow = ["edit", "bash"]
+
+[extensions]
+disabled = []
 ```
 
 The config directory is `~/.config/codie` on macOS and Linux, overridable with `CODIE_CONFIG_DIR`.
