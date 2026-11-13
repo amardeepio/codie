@@ -15,12 +15,11 @@ that major series, with migrations applied on read.
 
 ### Changed
 
-- `/update` reports download progress as a percentage and byte count while it replaces the binary.
+- Nothing yet.
 
 ### Fixed
 
-- `/update` selected from the command palette now starts the check instead of silently doing nothing. The event
-  loop services the request after any input path, and a second request is ignored while one is in flight.
+- Nothing yet.
 
 ### Removed
 
@@ -29,6 +28,17 @@ that major series, with migrations applied on read.
 ### Security
 
 - Nothing yet.
+
+## [0.7.1] - 2026-11-13
+
+### Changed
+
+- `/update` reports download progress as a percentage and byte count while it replaces the binary.
+
+### Fixed
+
+- `/update` selected from the command palette now starts the check instead of silently doing nothing. The event
+  loop services the request after any input path, and a second request is ignored while one is in flight.
 
 ## [0.7.0] - 2026-11-13
 
