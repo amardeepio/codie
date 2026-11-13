@@ -78,6 +78,30 @@ pub async fn summarize(
     session_id: Option<String>,
     input_limit_tokens: u64,
 ) -> Result<CompactionOutcome, String> {
+    summarize_with_cancel(
+        client,
+        model,
+        thinking,
+        messages,
+        instructions,
+        session_id,
+        input_limit_tokens,
+        CancellationToken::new(),
+    )
+    .await
+}
+
+/// Summarizes `messages` and aborts the request when `cancel` is triggered.
+pub async fn summarize_with_cancel(
+    client: Arc<dyn ChatClient>,
+    model: ModelRef,
+    thinking: ThinkingLevel,
+    messages: &[Message],
+    instructions: Option<&str>,
+    session_id: Option<String>,
+    input_limit_tokens: u64,
+    cancel: CancellationToken,
+) -> Result<CompactionOutcome, String> {
     let mut prompt = String::from("Conversation to summarize:\n\n<transcript>\n");
     let budget_chars = input_limit_tokens.saturating_mul(4).max(4_000) as usize;
     let mut rendered = Vec::new();
@@ -126,7 +150,7 @@ pub async fn summarize(
         max_output_tokens: None,
         temperature: Some(0.2),
         session_id,
-        cancel: CancellationToken::new(),
+        cancel,
     };
     let message = client.stream(&context, &options).result().await;
     if message.stop_reason.is_terminal_failure() {

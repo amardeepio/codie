@@ -13,6 +13,19 @@ Phase 2 adds the primary human experience. Running `codie` with a terminal attac
 
 `-p/--print` and `--mode json` keep the Phase 1 headless behavior.
 
+## Tool output
+
+`edit` calls show a side-by-side diff with line numbers on both sides, three lines of context, and tinted
+removed/added rows. `write` calls show the written file with line numbers. Both views are syntax-highlighted
+and visible without expanding the block. Long bodies are capped at 80 rows; `Ctrl+O` toggles the full body.
+Narrow terminals fall back to a single-column unified diff.
+
+## Reasoning
+
+Reasoning is collapsed by default to an animated `Thinking…` line while the model is still planning. Click that
+line to expand the live reasoning stream, and press `Esc` (or click the header again) to collapse it. Once the
+answer starts streaming, the collapsed form reads `Thought  (click to view)`.
+
 ## Markdown rendering
 
 Assistant messages are rendered as Markdown in the transcript: headings are styled by level without `#`
@@ -42,13 +55,19 @@ do not shift column borders.
 | `Alt+Enter` | Queue a follow-up message |
 | `Shift+Enter`, `Ctrl+J` | Insert a newline |
 | `Ctrl+C` | Cancel the run; a second press quits |
+| `Esc` | Stop the active run; closes open reasoning first; when idle, return to the bottom |
 | `Ctrl+O` | Expand or collapse the last tool block |
+| `Ctrl+T` | Pick a tool block from the transcript |
+| `Ctrl+Shift+O` | Expand or collapse every tool block |
+| `Ctrl+Shift+T` | Expand or collapse every user turn |
+| Mouse click on a tool or turn header | Toggle that block or turn |
+| Mouse click on `Thinking` | Show the live reasoning stream |
+| Mouse click on the footer | Show usage details |
 | `Shift+Tab` | Toggle full-access mode (no permission prompts) |
 | `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / redo |
 | `Ctrl+K` / `Ctrl+Y` | Kill to end of line / yank |
 | `Ctrl+P` / `Ctrl+N` | Prompt history |
 | `PgUp` / `PgDn`, `Shift+Up/Down`, `Alt+Up/Down`, mouse wheel | Scroll the transcript |
-| `Esc` | Return to the bottom and resume following |
 | `Tab` | Complete a slash command or an `@file` path |
 
 Keybindings can be overridden in `~/.config/codie/keybindings.toml`:
@@ -62,6 +81,27 @@ quit = []
 
 An empty list unbinds the action; unknown actions and keys are rejected at startup.
 
+## Stopping work
+
+Press `Esc` or run `/stop` to stop the active model request or tool call. A running `bash` command is killed
+together with its process group. Open reasoning is closed by the first `Esc`; pressing it again stops the run.
+When nothing is running, `/stop` reports that there is nothing to stop and `Esc` returns the transcript to the
+bottom. Stopping also drops steering and follow-up messages that have not reached the model yet.
+
+## Context and usage
+
+The footer shows a context meter such as `ctx ████████░░ 81%`. It turns amber as compaction approaches and red
+at the compaction threshold. Click the footer or run `/usage` for a breakdown of the context estimate, input,
+output, cache reads, cache writes, total tokens, cost, throughput, and session id.
+
+Starting a new prompt folds older turns into one summary line. Click a turn header to expand it, or use
+`Ctrl+Shift+T` to expand or collapse every turn.
+
+## Tool navigation
+
+Click any tool header to expand or collapse that tool. `Ctrl+O` toggles the newest tool, `Ctrl+Shift+O` toggles
+every tool, and `Ctrl+T` opens a keyboard-selectable list of tool calls.
+
 ## Slash commands
 
 Pressing `/` in an empty editor opens the command palette. Type to filter, use `Up`/`Down` or `PageUp`/`PageDown`
@@ -69,11 +109,14 @@ to scroll, and `Enter` to select. `Esc` closes it.
 
 `/help`, `/hotkeys`, `/new`, `/session`, `/tree`, `/fork [entry]`, `/clone`, `/name [text]`, `/export [path]`,
 `/export html [path]`, `/copy`, `/debug`, `/update`, `/theme [name]`, `/provider [id]`, `/model [id]`,
-`/thinking [level]`, `/compact [instructions]`, `/quit`.
+`/thinking [level]`, `/compact [instructions]`, `/usage`, `/stop`, `/quit`.
 
 Extensions can add commands. Invoke one as `/ext:<extension>:<command> [arguments]`; a bare
 `/<command>` also works when it is unambiguous and does not collide with a built-in. Extension commands
 appear in the palette and completion list. See [Extensions](extensions.md).
+
+The session picker shows the list on the left and a preview on the right with the name, model, message count,
+tokens, cost, working directory, age, last prompt, and last reply.
 
 `/update` checks for a newer release, installs it when a prebuilt archive exists for the platform, and shows a
 banner with OK. When a tag has no published artifact, the banner explains how to reinstall with the installer
@@ -91,10 +134,11 @@ estimate while streaming.
 
 ## Permissions
 
-Read-only tools run without prompting. `write`, `edit`, and `bash` ask before executing:
+Read-only tools run without prompting. `write`, `edit`, and `bash` ask before executing. The prompt previews the
+operation: edits show a diff, new files show numbered code, and bash shows the command.
 
 ```text
-[y] yes   [n] no   [A] always allow   [Shift+Tab] full access (no prompts)
+[y] allow once   [A] always allow   [n] deny   [Enter] allow   [Esc] deny   [Shift+Tab] full access
 ```
 
 `y`/`Y` allows once, `n`/`N` or `Esc` denies, `A` allows the tool for the rest of the run, and `Enter` allows.
@@ -106,8 +150,11 @@ the model can recover.
 
 ## Footer
 
-The footer shows the working directory, model, thinking level, token total, cost, live throughput, context use,
-and session id. Token totals abbreviate thousands and millions: `999`, `1k`, `1.2k`, `70.2k`, `1.2M`.
+The footer shows the working directory and git branch, a context meter, model, thinking level, full-access
+state, session token total, cost, live throughput, and session id. Lower-priority fields drop out as the
+terminal narrows. Token totals abbreviate thousands and millions: `999`, `1k`, `1.2k`, `70.2k`, `1.2M`.
+
+Click the footer or run `/usage` for the full token and cost breakdown.
 
 ## Themes
 

@@ -50,6 +50,16 @@ pub struct SessionSummary {
     pub message_count: usize,
     /// Session this one was cloned or forked from.
     pub parent_session: Option<String>,
+    /// Most recent model used on the branch.
+    pub model: Option<String>,
+    /// Estimated tokens on the branch.
+    pub tokens: u64,
+    /// Latest recorded cost in nano-USD.
+    pub cost: u64,
+    /// Most recent user prompt.
+    pub last_user: Option<String>,
+    /// Most recent assistant reply.
+    pub last_assistant: Option<String>,
 }
 
 /// One row in a session tree listing.
@@ -269,6 +279,48 @@ impl Session {
                 .metadata()
                 .and_then(|metadata| metadata.modified())
                 .unwrap_or(SystemTime::UNIX_EPOCH);
+            let projection = session.projection();
+            let last_user = projection.iter().rev().find_map(|message| {
+                let Message::User(user) = message else {
+                    return None;
+                };
+                let text = user
+                    .content
+                    .iter()
+                    .filter_map(Content::as_text)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                (!text.trim().is_empty()).then_some(text)
+            });
+            let last_assistant = projection.iter().rev().find_map(|message| {
+                let Message::Assistant(assistant) = message else {
+                    return None;
+                };
+                let text = assistant.text();
+                (!text.trim().is_empty()).then_some(text)
+            });
+            let model = projection.iter().rev().find_map(|message| {
+                let Message::Assistant(assistant) = message else {
+                    return None;
+                };
+                Some(assistant.model.clone())
+            });
+            let tokens = projection.iter().map(estimate_message_tokens).sum::<u64>();
+            let mut cost = 0_u64;
+            for entry in session.branch() {
+                match entry {
+                    Entry::Message {
+                        message: Message::Assistant(assistant),
+                        ..
+                    } => {
+                        cost = cost.saturating_add(assistant.usage.cost.total);
+                    }
+                    Entry::Usage { usage, .. } => {
+                        cost = cost.saturating_add(usage.cost.total);
+                    }
+                    _ => {}
+                }
+            }
             summaries.push(SessionSummary {
                 path,
                 id: session.id().to_owned(),
@@ -282,6 +334,11 @@ impl Session {
                     .filter(|entry| entry.message().is_some())
                     .count(),
                 parent_session: session.header.parent_session.clone(),
+                model,
+                tokens,
+                cost,
+                last_user,
+                last_assistant,
             });
         }
         summaries.sort_by(|left, right| {

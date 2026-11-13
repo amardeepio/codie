@@ -29,10 +29,18 @@ pub enum ActionId {
     FollowUp,
     /// Cancel the run, clear the editor, or quit.
     Cancel,
+    /// Stop the active run, collapse reasoning, or return to the bottom.
+    Stop,
     /// Quit immediately.
     Quit,
     /// Expand the last tool block.
     ExpandTool,
+    /// Expand or collapse every tool block.
+    ToggleAllTools,
+    /// Open the tool block picker.
+    ToolPicker,
+    /// Expand or collapse every user turn.
+    ToggleAllTurns,
     /// Undo an edit.
     Undo,
     /// Redo an edit.
@@ -61,13 +69,17 @@ pub enum ActionId {
 
 impl ActionId {
     /// Every action in display order.
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 22] = [
         Self::Submit,
         Self::Newline,
         Self::FollowUp,
         Self::Cancel,
+        Self::Stop,
         Self::Quit,
         Self::ExpandTool,
+        Self::ToggleAllTools,
+        Self::ToolPicker,
+        Self::ToggleAllTurns,
         Self::Undo,
         Self::Redo,
         Self::KillLine,
@@ -90,8 +102,12 @@ impl ActionId {
             Self::Newline => "newline",
             Self::FollowUp => "follow_up",
             Self::Cancel => "cancel",
+            Self::Stop => "stop",
             Self::Quit => "quit",
             Self::ExpandTool => "expand_tool",
+            Self::ToggleAllTools => "toggle_all_tools",
+            Self::ToolPicker => "tool_picker",
+            Self::ToggleAllTurns => "toggle_all_turns",
             Self::Undo => "undo",
             Self::Redo => "redo",
             Self::KillLine => "kill_line",
@@ -115,8 +131,12 @@ impl ActionId {
             Self::Newline => "insert a newline",
             Self::FollowUp => "queue a follow-up",
             Self::Cancel => "cancel the run / clear / quit",
+            Self::Stop => "stop the run, collapse reasoning, or return to bottom",
             Self::Quit => "quit",
             Self::ExpandTool => "expand the last tool block",
+            Self::ToggleAllTools => "expand or collapse all tool blocks",
+            Self::ToolPicker => "choose a tool block",
+            Self::ToggleAllTurns => "expand or collapse all user turns",
             Self::Undo => "undo",
             Self::Redo => "redo",
             Self::KillLine => "kill to end of line",
@@ -285,8 +305,12 @@ impl Default for Bindings {
         bind(ActionId::Newline, &["shift+enter", "ctrl+j"]);
         bind(ActionId::FollowUp, &["alt+enter"]);
         bind(ActionId::Cancel, &["ctrl+c"]);
+        bind(ActionId::Stop, &["esc"]);
         bind(ActionId::Quit, &["ctrl+d"]);
         bind(ActionId::ExpandTool, &["ctrl+o"]);
+        bind(ActionId::ToggleAllTools, &["ctrl+shift+o"]);
+        bind(ActionId::ToolPicker, &["ctrl+t"]);
+        bind(ActionId::ToggleAllTurns, &["ctrl+shift+t"]);
         bind(ActionId::Undo, &["ctrl+z"]);
         bind(ActionId::Redo, &["ctrl+shift+z"]);
         bind(ActionId::KillLine, &["ctrl+k"]);
@@ -383,6 +407,8 @@ mod tests {
         let bindings = Bindings::default();
         let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
         assert_eq!(bindings.action_for(&enter), Some(ActionId::Submit));
+        let escape = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(bindings.action_for(&escape), Some(ActionId::Stop));
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("keybindings.toml");

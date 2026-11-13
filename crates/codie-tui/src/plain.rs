@@ -133,9 +133,13 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
             }
             match command {
                 Command::Quit => break,
+                Command::Stop => println!("Nothing is running."),
+                Command::Usage => {
+                    println!("Usage details are available in the full-screen interface.")
+                }
                 Command::Help | Command::Hotkeys => {
                     println!(
-                        "/help /quit /new /session /tree /fork /clone /name /export [path] /export html [path] /copy /debug /update /theme /provider [id] /model [id] /thinking [level] /compact /skill:<name> /template:<name> /reload"
+                        "/help /quit /stop /usage /new /session /tree /fork /clone /name /export [path] /export html [path] /copy /debug /update /theme /provider [id] /model [id] /thinking [level] /compact /skill:<name> /template:<name> /reload"
                     )
                 }
                 Command::Theme(argument) => match argument {

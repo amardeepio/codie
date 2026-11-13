@@ -29,6 +29,54 @@ that major series, with migrations applied on read.
 
 - Nothing yet.
 
+## [0.8.0] - 2026-11-13
+
+### Added
+
+- Side-by-side `edit` diffs with line numbers on both sides, three lines of context, tinted added and removed
+  rows, syntax highlighting, and word wrapping. Narrow terminals fall back to a unified diff.
+- Numbered, syntax-highlighted `write` previews with a `# Wrote path` header.
+- Collapsed reasoning by default with an animated thinking indicator. Clicking the indicator expands the live
+  reasoning stream; `Esc` collapses it.
+- `Esc` and `/stop` stop active model requests, tools, and compaction. Bash process groups are killed and queued
+  steering or follow-up messages are dropped.
+- Context meter in the footer with warning and compaction-threshold colors. `/usage` or a footer click opens a
+  breakdown of context estimates, input, output, cache reads, cache writes, total tokens, cost, throughput, and
+  session id.
+- Rich permission review: edit and overwriting write calls show diffs, new files show numbered code, and bash
+  shows the command before approval.
+- Clickable tool headers, a `Ctrl+T` tool picker, `Ctrl+Shift+O` expand/collapse-all for tools, and
+  `Ctrl+Shift+T` expand/collapse-all for turns.
+- Automatic folding of older user turns into one-line summaries with tool, edit, error, and hidden-reply counts.
+- Split session picker with a preview of each session's model, message count, context tokens, cumulative cost,
+  working directory, age, last prompt, and last reply.
+
+### Changed
+
+- The footer is responsive: lower-priority fields drop out as the terminal narrows, and the working directory
+  includes the git branch when available.
+- Cumulative session usage now tracks input, output, cache-read, and cache-write tokens separately.
+- Aborted runs return the editor to idle and report `Stopped.` instead of an error.
+- Session summaries include the last model, context token estimate, cumulative cost, last prompt, and last reply.
+- Transcript and rich tool bodies are cached by content revision, width, and theme; only visible rows are cloned
+  while scrolling.
+
+### Fixed
+
+- Large edit diffs no longer make the TUI hang or scroll slowly. Diff parsing, syntax highlighting, wrapping, and
+  transcript layout are reused instead of rebuilt on every frame.
+- Permission prompts keep the action bar visible even when the preview is truncated.
+- Compaction can be cancelled through `Esc` or `/stop` and does not run the pending prompt after it is stopped.
+
+### Removed
+
+- Nothing yet.
+
+### Security
+
+- Permission review now shows the actual edit diff or shell command before approval instead of a raw JSON
+  argument blob.
+
 ## [0.7.1] - 2026-11-13
 
 ### Changed
