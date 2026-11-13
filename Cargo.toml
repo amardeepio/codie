@@ -5,7 +5,7 @@ exclude = ["fuzz"]
 default-members = ["crates/codie-cli"]
 
 [workspace.package]
-version = "0.7.0"
+version = "0.7.1"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
@@ -18,16 +18,16 @@ categories = ["command-line-utilities", "development-tools"]
 
 [workspace.dependencies]
 # Internal crates
-codie-core = { path = "crates/codie-core", version = "0.7.0" }
-codie-ai = { path = "crates/codie-ai", version = "0.7.0" }
-codie-tools = { path = "crates/codie-tools", version = "0.7.0" }
-codie-tui = { path = "crates/codie-tui", version = "0.7.0" }
-codie-session = { path = "crates/codie-session", version = "0.7.0" }
-codie-prompt = { path = "crates/codie-prompt", version = "0.7.0" }
-codie-protocol = { path = "crates/codie-protocol", version = "0.7.0" }
-codie-ext = { path = "crates/codie-ext", version = "0.7.0" }
-codie-testkit = { path = "crates/codie-testkit", version = "0.7.0" }
-codie-spec-macro = { path = "crates/codie-spec-macro", version = "0.7.0" }
+codie-core = { path = "crates/codie-core", version = "0.7.1" }
+codie-ai = { path = "crates/codie-ai", version = "0.7.1" }
+codie-tools = { path = "crates/codie-tools", version = "0.7.1" }
+codie-tui = { path = "crates/codie-tui", version = "0.7.1" }
+codie-session = { path = "crates/codie-session", version = "0.7.1" }
+codie-prompt = { path = "crates/codie-prompt", version = "0.7.1" }
+codie-protocol = { path = "crates/codie-protocol", version = "0.7.1" }
+codie-ext = { path = "crates/codie-ext", version = "0.7.1" }
+codie-testkit = { path = "crates/codie-testkit", version = "0.7.1" }
+codie-spec-macro = { path = "crates/codie-spec-macro", version = "0.7.1" }
 
 # Runtime
 anyhow = "1"

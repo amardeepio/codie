@@ -60,6 +60,25 @@ impl UpdateStatus {
     }
 }
 
+/// Download progress reported while an update archive is fetched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UpdateProgress {
+    /// Bytes received so far.
+    pub downloaded: u64,
+    /// Total archive size, when the server reports a content length.
+    pub total: Option<u64>,
+}
+
+impl UpdateProgress {
+    /// Completion percentage (0–100) when the total size is known.
+    #[must_use]
+    pub fn percent(&self) -> Option<u8> {
+        let total = self.total.filter(|total| *total > 0)?;
+        let percent = self.downloaded.min(total).saturating_mul(100) / total;
+        Some(u8::try_from(percent).unwrap_or(100))
+    }
+}
+
 /// Checks the published release for a newer version.
 ///
 /// With no endpoint, the releases API is tried first and the tag list is used
@@ -229,6 +248,17 @@ pub fn asset_name(version: &str, target: &str, extension: &str) -> String {
 /// closed when no prebuilt artifact is published for this version, rather than
 /// silently falling back to building from source inside the agent.
 pub async fn install(version: &str) -> Result<()> {
+    install_with_progress(version, |_| {}).await
+}
+
+/// Downloads and installs a release while reporting archive download progress.
+///
+/// `on_progress` receives the bytes received and, when the server reports it,
+/// the total archive size. Checksum and extraction steps are not reported.
+pub async fn install_with_progress(
+    version: &str,
+    mut on_progress: impl FnMut(UpdateProgress) + Send,
+) -> Result<()> {
     let target = release_target().ok_or_else(|| {
         Error::provider(format!(
             "self-update is not supported on this platform; reinstall with:\n{INSTALLER_COMMAND}"
@@ -248,7 +278,8 @@ pub async fn install(version: &str) -> Result<()> {
     for extension in ["tar.gz", "tar.xz"] {
         let name = asset_name(version, target, extension);
         let url = format!("{RELEASE_DOWNLOAD}/v{version}/{name}");
-        let Some(bytes) = download_optional(&client, &url).await? else {
+        let Some(bytes) = download_optional_with_progress(&client, &url, &mut on_progress).await?
+        else {
             continue;
         };
 
@@ -288,7 +319,15 @@ pub async fn install(version: &str) -> Result<()> {
 }
 
 async fn download_optional(client: &reqwest::Client, url: &str) -> Result<Option<Vec<u8>>> {
-    let response = client
+    download_optional_with_progress(client, url, |_| {}).await
+}
+
+async fn download_optional_with_progress(
+    client: &reqwest::Client,
+    url: &str,
+    mut on_progress: impl FnMut(UpdateProgress),
+) -> Result<Option<Vec<u8>>> {
+    let mut response = client
         .get(url)
         .send()
         .await
@@ -302,11 +341,22 @@ async fn download_optional(client: &reqwest::Client, url: &str) -> Result<Option
             response.status()
         )));
     }
-    let bytes = response
-        .bytes()
+
+    let total = response.content_length();
+    // Chunked responses omit the length; report bytes received instead.
+    let mut bytes = Vec::with_capacity(total.unwrap_or(0).min(64 * 1024 * 1024) as usize);
+    let mut downloaded = 0_u64;
+    on_progress(UpdateProgress { downloaded, total });
+    while let Some(chunk) = response
+        .chunk()
         .await
-        .map_err(|error| Error::provider(format!("cannot read {url}: {error}")))?;
-    Ok(Some(bytes.to_vec()))
+        .map_err(|error| Error::provider(format!("cannot read {url}: {error}")))?
+    {
+        bytes.extend_from_slice(&chunk);
+        downloaded = downloaded.saturating_add(chunk.len() as u64);
+        on_progress(UpdateProgress { downloaded, total });
+    }
+    Ok(Some(bytes))
 }
 
 async fn download_text(client: &reqwest::Client, url: &str) -> Result<String> {
@@ -506,6 +556,85 @@ mod tests {
                 .await
                 .expect("availability")
         );
+    }
+
+    #[tokio::test]
+    async fn downloads_report_progress_while_streaming() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let payload = vec![7_u8; 4096];
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(payload.clone()))
+            .mount(&server)
+            .await;
+
+        let client = http_client(CHECK_TIMEOUT).expect("client");
+        let mut events = Vec::new();
+        let bytes = download_optional_with_progress(&client, &server.uri(), |event| {
+            events.push(event);
+        })
+        .await
+        .expect("download")
+        .expect("present");
+
+        assert_eq!(bytes, payload);
+        assert!(
+            events.len() >= 2,
+            "expected a start and a chunk: {events:?}"
+        );
+        assert_eq!(events[0].downloaded, 0);
+        let last = events.last().expect("events");
+        assert_eq!(last.downloaded, 4096);
+        assert_eq!(last.percent(), Some(100));
+    }
+
+    #[tokio::test]
+    async fn downloads_treat_404_as_missing() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        let client = http_client(CHECK_TIMEOUT).expect("client");
+        assert!(
+            download_optional_with_progress(&client, &server.uri(), |_| {})
+                .await
+                .expect("download")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn update_progress_reports_percentages_when_the_size_is_known() {
+        let half = UpdateProgress {
+            downloaded: 5 * 1024 * 1024,
+            total: Some(10 * 1024 * 1024),
+        };
+        assert_eq!(half.percent(), Some(50));
+
+        let done = UpdateProgress {
+            downloaded: 20,
+            total: Some(10),
+        };
+        assert_eq!(done.percent(), Some(100), "overshoot must clamp");
+
+        let unknown = UpdateProgress {
+            downloaded: 1234,
+            total: None,
+        };
+        assert_eq!(unknown.percent(), None);
+
+        let empty = UpdateProgress {
+            downloaded: 0,
+            total: Some(0),
+        };
+        assert_eq!(empty.percent(), None, "a zero total must not divide");
     }
 
     #[test]

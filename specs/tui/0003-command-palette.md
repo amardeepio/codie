@@ -19,7 +19,11 @@ interaction; model/provider behavior remains in `SPEC-PROV-001` and themes in `S
 **TUI-014 (MUST)** Pressing `/` in an empty editor opens a filterable command list. Typing filters by name or
 description, `Up`/`Down` and `PageUp`/`PageDown` move the selection with scrolling, `Enter` selects, and `Esc`
 closes without running anything. Selecting a command with optional text inserts `/name ` into the editor.
-Verification: `crates/codie-tui/src/app.rs::spec_tui_014_slash_opens_a_filterable_command_palette`
+Selecting `/update` requests exactly one update check, showing a "Checking for updates…" notice and then either
+the available release or the failure reason; repeating the selection while a check or install is running is
+ignored.
+Verification: `crates/codie-tui/src/app.rs::spec_tui_014_slash_opens_a_filterable_command_palette`,
+`crates/codie-tui/src/app.rs::spec_tui_014_selecting_update_from_the_palette_requests_a_check`
 
 **TUI-015 (MUST)** The model picker lists models for the active provider, marks the current model, applies the
 selection to the next request, updates the context window, and persists a model-change entry. The provider picker

@@ -19,7 +19,7 @@ implementation language, the safety posture, and the provider scope.
 
 The command is `codie`.
 
-**Status: Phase 6 complete (`0.7.0`), pre-alpha.** The one-shot agent, the interactive app,
+**Status: Phase 6 complete (`0.7.1`), pre-alpha.** The one-shot agent, the interactive app,
 full-fidelity sessions, customization, automation, and out-of-process extensions all work end to end:
 streaming transcript, editor dock, OpenCode-inspired themes, the startup banner, slash commands, steering,
 permission prompts, plain mode, resume/fork/compact, search tools, skills, prompt templates, project trust,
@@ -126,7 +126,7 @@ Pin a version or pick another directory:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh \
-  | sh -s -- --version 0.7.0
+  | sh -s -- --version 0.7.1
 
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh \
   | sh -s -- --bin-dir "$HOME/bin"

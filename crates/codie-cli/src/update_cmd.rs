@@ -5,6 +5,7 @@
 //! command instead of building from source.
 
 use std::cmp::Ordering;
+use std::io::IsTerminal;
 
 use anyhow::Result;
 use clap::Args;
@@ -64,9 +65,24 @@ pub(crate) async fn run(args: UpdateArgs) -> Result<u8> {
             }
 
             println!("  installing…");
-            codie_ai::update::install(&status.latest)
-                .await
-                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            let interactive = std::io::stdout().is_terminal();
+            let mut last_percent = None;
+            codie_ai::update::install_with_progress(&status.latest, |progress| {
+                let Some(percent) = progress.percent() else {
+                    return;
+                };
+                if !interactive || last_percent == Some(percent) {
+                    return;
+                }
+                last_percent = Some(percent);
+                print!("\r  downloading… {percent}%   ");
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+            })
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            if last_percent.is_some() {
+                println!();
+            }
             println!(
                 "Installed codie {}. Restart codie to use the new version.",
                 status.latest
