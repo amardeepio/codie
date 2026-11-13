@@ -1862,8 +1862,15 @@ enum UpdateEvent {
         /// Version comparison or an error.
         result: std::result::Result<codie_ai::update::UpdateStatus, String>,
     },
-    /// A verified download is in progress.
-    Installing(String),
+    /// A newer release was found, with the running and target versions.
+    Installing {
+        /// Version that is currently running.
+        current: String,
+        /// Version being installed.
+        latest: String,
+    },
+    /// The verified archive download reported progress.
+    Progress(codie_ai::update::UpdateProgress),
     /// Installation finished with the installed version or an error.
     Installed(std::result::Result<String, String>),
 }
@@ -1879,18 +1886,57 @@ fn spawn_update(sender: &mpsc::UnboundedSender<UpdateEvent>, manual: bool) {
             && let Ok(status) = &result
             && status.installable_release()
         {
+            let current = status.current.clone();
             let version = status.latest.clone();
-            let _ = sender.send(UpdateEvent::Installing(version.clone()));
-            let installed = codie_ai::update::install(&version)
-                .await
-                .map(|()| version)
-                .map_err(|error| error.to_string());
+            let _ = sender.send(UpdateEvent::Installing {
+                current,
+                latest: version.clone(),
+            });
+
+            // Report only meaningful jumps so the overlay does not redraw for
+            // every network chunk.
+            let progress_sender = sender.clone();
+            let mut last_percent = None;
+            let mut last_bytes = 0_u64;
+            let installed = codie_ai::update::install_with_progress(&version, move |event| {
+                let percent = event.percent();
+                let stepped = percent.is_some() && percent != last_percent;
+                let advanced = event.downloaded.saturating_sub(last_bytes) >= 256 * 1024;
+                if stepped || advanced {
+                    last_percent = percent;
+                    last_bytes = event.downloaded;
+                    let _ = progress_sender.send(UpdateEvent::Progress(event));
+                }
+            })
+            .await
+            .map(|()| version)
+            .map_err(|error| error.to_string());
             let _ = sender.send(UpdateEvent::Installed(installed));
             return;
         }
 
         let _ = sender.send(UpdateEvent::Checked { manual, result });
     });
+}
+
+/// Consumes a pending `/update` request and shows immediate feedback.
+///
+/// Returns true when the event loop should start a manual check. The request
+/// is ignored while another update is in flight so repeated selections cannot
+/// race two installs.
+fn take_update_request(app: &mut App, in_flight: bool) -> bool {
+    if !std::mem::take(&mut app.update_check_requested) {
+        return false;
+    }
+    if in_flight {
+        return false;
+    }
+    app.overlay = Some(Overlay::Notice {
+        title: " update ".to_owned(),
+        body: "Checking for updates…".to_owned(),
+        ok: false,
+    });
+    true
 }
 
 /// Describes a newer release and how to install it.
@@ -1907,6 +1953,57 @@ fn update_available_message(status: &codie_ai::update::UpdateStatus) -> String {
             "Update available: codie {} → {}. Run /update to install it.",
             status.current, status.latest
         )
+    }
+}
+
+/// Renders the download progress shown while `/update` runs.
+fn update_progress_message(
+    current: &str,
+    latest: &str,
+    progress: codie_ai::update::UpdateProgress,
+) -> String {
+    let mut message = format!("Updating codie {current} → {latest}…");
+    if let (Some(percent), Some(total)) = (progress.percent(), progress.total) {
+        message.push_str(&format!(
+            "\n\n{} {percent}%  ·  {} of {}",
+            progress_bar(percent),
+            format_bytes(progress.downloaded),
+            format_bytes(total)
+        ));
+    } else {
+        message.push_str(&format!(
+            "\n\nDownloaded {}…",
+            format_bytes(progress.downloaded)
+        ));
+    }
+    message.push_str("\n\nVerifying the checksum and replacing the binary.");
+    message
+}
+
+/// Builds a 24-cell bar such as `████░░░░` for a completion percentage.
+fn progress_bar(percent: u8) -> String {
+    const WIDTH: u8 = 24;
+    let percent = percent.min(100);
+    let filled = (u32::from(percent) * u32::from(WIDTH) / 100) as u8;
+    let empty = WIDTH.saturating_sub(filled);
+    format!(
+        "[{}{}]",
+        "█".repeat(usize::from(filled)),
+        "░".repeat(usize::from(empty))
+    )
+}
+
+/// Abbreviates byte counts for progress text: `999 B`, `1.2 KB`, `10.4 MB`.
+fn format_bytes(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = 1024.0 * 1024.0;
+    let value = bytes as f64;
+    if value < KIB {
+        format!("{bytes} B")
+    } else if value < MIB {
+        format!("{:.1} KB", value / KIB)
+    } else {
+        format!("{:.1} MB", value / MIB)
     }
 }
 
@@ -2038,6 +2135,11 @@ async fn event_loop(
     }
 
     let mut auto_update_started = false;
+    // True between a manual `/update` request and its final Checked/Installed
+    // event, so repeated requests cannot run concurrent installs.
+    let mut update_in_flight = false;
+    // Versions shown on the progress overlay while an install runs.
+    let mut updating: Option<(String, String)> = None;
 
     loop {
         if dirty {
@@ -2116,15 +2218,6 @@ async fn event_loop(
                                             .await;
                                     }
                                     if app.should_quit { break; }
-                                    if app.update_check_requested {
-                                        app.update_check_requested = false;
-                                        app.overlay = Some(Overlay::Notice {
-                                            title: " update ".to_owned(),
-                                            body: "Checking for updates…".to_owned(),
-                                            ok: false,
-                                        });
-                                        spawn_update(&update_tx, true);
-                                    }
                                     if let Some(prompt) = app.command_prompt.take()
                                         && let Some(prompt) = submit_user_prompt(
                                             app,
@@ -2210,47 +2303,64 @@ async fn event_loop(
             Some(update) = update_rx.recv() => {
                 dirty = true;
                 match update {
-                    UpdateEvent::Checked { manual, result } => match result {
-                        Ok(status) if status.newer() => {
-                            let message = update_available_message(&status);
-                            if manual {
+                    UpdateEvent::Checked { manual, result } => {
+                        if manual {
+                            update_in_flight = false;
+                        }
+                        match result {
+                            Ok(status) if status.newer() => {
+                                let message = update_available_message(&status);
+                                if manual {
+                                    app.overlay = Some(Overlay::Notice {
+                                        title: " update ".to_owned(),
+                                        body: message,
+                                        ok: true,
+                                    });
+                                } else {
+                                    app.transcript.push_info(message);
+                                }
+                            }
+                            Ok(status) if manual => {
                                 app.overlay = Some(Overlay::Notice {
                                     title: " update ".to_owned(),
-                                    body: message,
+                                    body: format!(
+                                        "No update found. codie {} is the latest release.",
+                                        status.current
+                                    ),
                                     ok: true,
                                 });
-                            } else {
-                                app.transcript.push_info(message);
                             }
+                            Ok(_) => {}
+                            Err(error) if manual => {
+                                app.overlay = Some(Overlay::Notice {
+                                    title: " update ".to_owned(),
+                                    body: format!("Update check failed: {error}"),
+                                    ok: true,
+                                });
+                            }
+                            Err(_) => {}
                         }
-                        Ok(status) if manual => {
-                            app.overlay = Some(Overlay::Notice {
-                                title: " update ".to_owned(),
-                                body: format!(
-                                    "No update found. codie {} is the latest release.",
-                                    status.current
-                                ),
-                                ok: true,
-                            });
-                        }
-                        Ok(_) => {}
-                        Err(error) if manual => {
-                            app.overlay = Some(Overlay::Notice {
-                                title: " update ".to_owned(),
-                                body: format!("Update check failed: {error}"),
-                                ok: true,
-                            });
-                        }
-                        Err(_) => {}
-                    },
-                    UpdateEvent::Installing(version) => {
+                    }
+                    UpdateEvent::Installing { current, latest } => {
+                        updating = Some((current.clone(), latest.clone()));
                         app.overlay = Some(Overlay::Notice {
                             title: " update ".to_owned(),
-                            body: format!("Installing codie {version}…"),
+                            body: format!("Updating codie {current} → {latest}…"),
                             ok: false,
                         });
                     }
+                    UpdateEvent::Progress(progress) => {
+                        if let Some((current, latest)) = &updating {
+                            app.overlay = Some(Overlay::Notice {
+                                title: " update ".to_owned(),
+                                body: update_progress_message(current, latest, progress),
+                                ok: false,
+                            });
+                        }
+                    }
                     UpdateEvent::Installed(result) => {
+                        update_in_flight = false;
+                        updating = None;
                         app.overlay = Some(Overlay::Notice {
                             title: " update ".to_owned(),
                             body: match result {
@@ -2299,6 +2409,14 @@ async fn event_loop(
                     dirty = true;
                 }
             }
+        }
+
+        // `/update` can arrive from a submitted prompt or from the command
+        // palette, which calls `handle_command` directly. Both only set the
+        // flag, so it is serviced here for either path.
+        if take_update_request(app, update_in_flight) {
+            update_in_flight = true;
+            spawn_update(&update_tx, true);
         }
 
         if let Some(instructions) = app.pending_compact.take() {
@@ -2876,6 +2994,87 @@ mod tests {
         let mut app = app();
         assert!(app.handle_command("/update"));
         assert!(app.update_check_requested);
+    }
+
+    #[test]
+    #[spec("TUI-014")]
+    fn spec_tui_014_selecting_update_from_the_palette_requests_a_check() {
+        let mut app = app();
+        assert_eq!(app.handle_key(key(KeyCode::Char('/'))), Action::None);
+        for character in "update".chars() {
+            app.handle_key(key(KeyCode::Char(character)));
+        }
+        let Some(Overlay::List(list)) = &app.overlay else {
+            panic!("expected the command palette");
+        };
+        assert_eq!(
+            list.current().map(|item| item.value.as_str()),
+            Some("update")
+        );
+
+        // Enter applies the palette row directly (no Action::Submit), so the
+        // request must survive as a flag for the event loop to service.
+        assert_eq!(app.handle_key(key(KeyCode::Enter)), Action::None);
+        assert!(app.overlay.is_none());
+        assert!(app.update_check_requested);
+    }
+
+    #[test]
+    fn update_requests_are_serviced_once_with_immediate_feedback() {
+        let mut app = app();
+        app.handle_key(key(KeyCode::Char('/')));
+        for character in "update".chars() {
+            app.handle_key(key(KeyCode::Char(character)));
+        }
+        app.handle_key(key(KeyCode::Enter));
+
+        assert!(take_update_request(&mut app, false));
+        assert!(!app.update_check_requested, "the request must be consumed");
+        let Some(Overlay::Notice { title, body, ok }) = &app.overlay else {
+            panic!("expected the checking notice");
+        };
+        assert_eq!(title, " update ");
+        assert_eq!(body, "Checking for updates…");
+        assert!(!ok);
+
+        // A second request is consumed but ignored while the first is in flight.
+        app.update_check_requested = true;
+        assert!(!take_update_request(&mut app, true));
+        assert!(
+            !app.update_check_requested,
+            "a duplicate request must be dropped, not queued"
+        );
+    }
+
+    #[test]
+    fn update_progress_renders_percentage_and_sizes() {
+        let progress = codie_ai::update::UpdateProgress {
+            downloaded: 5 * 1024 * 1024,
+            total: Some(10 * 1024 * 1024),
+        };
+        let message = update_progress_message("0.6.1", "0.7.0", progress);
+        assert!(
+            message.contains("Updating codie 0.6.1 → 0.7.0…"),
+            "{message}"
+        );
+        assert!(message.contains("50%"), "{message}");
+        assert!(message.contains("5.0 MB of 10.0 MB"), "{message}");
+        assert!(message.contains("████████████░░░░░░░░░░░░"), "{message}");
+
+        let unknown = codie_ai::update::UpdateProgress {
+            downloaded: 1536,
+            total: None,
+        };
+        let message = update_progress_message("0.6.1", "0.7.0", unknown);
+        assert!(message.contains("Downloaded 1.5 KB…"), "{message}");
+        assert!(!message.contains('%'), "{message}");
+
+        assert_eq!(format_bytes(512), "512 B");
+        assert_eq!(format_bytes(1024), "1.0 KB");
+        assert_eq!(format_bytes(10 * 1024 * 1024), "10.0 MB");
+        assert_eq!(progress_bar(0), "[░░░░░░░░░░░░░░░░░░░░░░░░]");
+        assert_eq!(progress_bar(100), "[████████████████████████]");
+        assert_eq!(progress_bar(200), "[████████████████████████]");
     }
 
     #[test]
