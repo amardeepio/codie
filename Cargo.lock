@@ -573,6 +573,7 @@ dependencies = [
  "regex",
  "reqwest",
  "serde_json",
+ "similar",
  "tempfile",
  "tokio",
  "tokio-util",

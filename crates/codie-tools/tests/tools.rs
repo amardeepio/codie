@@ -240,6 +240,33 @@ async fn edit_replaces_unique_text_and_reports_first_changed_line() {
 
 #[spec("TOOL-005")]
 #[tokio::test]
+async fn edit_reports_a_unified_diff_render_hint() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    std::fs::write(directory.path().join("file.txt"), "alpha\nbeta\ngamma").expect("write");
+    let context = context(directory.path());
+
+    let result = run(
+        &EditTool,
+        json!({
+            "path": "file.txt",
+            "edits": [{"oldText": "beta", "newText": "BETA"}]
+        }),
+        &context,
+    )
+    .await;
+    assert!(!result.is_error, "{}", text(&result));
+    let details = result.details.expect("details");
+    let render = &details["codie_render"];
+    assert_eq!(render["kind"], "diff");
+    assert_eq!(render["title"], "Edit file.txt");
+    let diff = render["text"].as_str().expect("diff text");
+    assert!(diff.contains("--- file.txt"), "{diff}");
+    assert!(diff.contains("-beta"), "{diff}");
+    assert!(diff.contains("+BETA"), "{diff}");
+}
+
+#[spec("TOOL-005")]
+#[tokio::test]
 async fn edit_applies_multiple_edits_against_the_original() {
     let directory = tempfile::tempdir().expect("temp dir");
     std::fs::write(directory.path().join("file.txt"), "one two three").expect("write");

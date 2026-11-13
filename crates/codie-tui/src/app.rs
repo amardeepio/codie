@@ -1,6 +1,7 @@
 //! Application state, key handling, and the interactive run loop.
 
-use std::collections::VecDeque;
+use std::cell::RefCell;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,13 +18,14 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{
     DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
-    MouseEventKind,
+    MouseButton, MouseEvent, MouseEventKind,
 };
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
+use ratatui::text::Line;
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 
@@ -108,6 +110,8 @@ pub enum ChoiceKind {
     Themes,
     /// Reasoning levels.
     Thinking,
+    /// Tool blocks in the transcript.
+    Tools,
 }
 
 /// A filterable, scrollable list overlay.
@@ -255,6 +259,74 @@ pub enum Status {
     Error,
 }
 
+/// A transcript element that responds to a mouse click.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HitTarget {
+    /// The reasoning header for one assistant entry.
+    Thinking(usize),
+    /// One tool block header, by transcript entry index.
+    Tool(usize),
+    /// One user-turn header, by transcript entry index.
+    Turn(usize),
+    /// The footer row.
+    Usage,
+}
+
+/// One clickable screen row recorded by the last frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Hit {
+    /// Absolute terminal row.
+    pub row: u16,
+    /// What the row toggles.
+    pub target: HitTarget,
+}
+
+/// Identity of one cached rich tool body.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct ToolViewKey {
+    /// Tool call identifier.
+    pub id: String,
+    /// Transcript width in columns.
+    pub width: u16,
+    /// Whether the full body is shown.
+    pub expanded: bool,
+    /// Bumped whenever the palette changes.
+    pub theme_revision: u64,
+}
+
+/// A rendered `edit` diff or `write` body.
+#[derive(Debug, Clone)]
+pub(crate) struct CachedToolView {
+    /// Styled rows.
+    pub lines: Vec<Line<'static>>,
+    /// True when the preview cap hid rows.
+    pub truncated: bool,
+}
+
+/// Identity of one fully laid-out transcript.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TranscriptCacheKey {
+    /// Transcript content revision.
+    pub revision: u64,
+    /// Transcript width in columns.
+    pub width: u16,
+    /// Palette revision.
+    pub theme_revision: u64,
+    /// Animation tick, or zero when no spinner is visible.
+    pub animation_tick: u64,
+}
+
+/// Pre-wrapped transcript rows and their click targets.
+#[derive(Debug, Clone)]
+pub(crate) struct CachedTranscript {
+    /// Cache identity.
+    pub key: TranscriptCacheKey,
+    /// Every laid-out row.
+    pub rows: Vec<Line<'static>>,
+    /// One optional target per row.
+    pub targets: Vec<Option<HitTarget>>,
+}
+
 /// One overlay on top of the transcript.
 pub enum Overlay {
     /// Slash-command help.
@@ -269,6 +341,8 @@ pub enum Overlay {
     Picker(Picker),
     /// A command, model, theme, or reasoning list.
     List(ChoiceList),
+    /// Token, cost, and context usage details.
+    Usage,
     /// A transient banner with an optional OK affordance.
     Notice {
         /// Banner title.
@@ -376,6 +450,8 @@ pub struct PermissionPrompt {
     pub tool: String,
     /// Parsed arguments.
     pub arguments: Value,
+    /// Structured preview for edit, write, and bash calls.
+    pub preview: Option<codie_protocol::ext::ExtRenderHint>,
     /// Reply channel.
     reply: Option<oneshot::Sender<Decision>>,
 }
@@ -391,8 +467,16 @@ pub struct Footer {
     pub model: String,
     /// Thinking level.
     pub thinking: String,
-    /// Total tokens in the current run.
+    /// Total tokens accumulated in this session.
     pub tokens: u64,
+    /// Uncached input tokens.
+    pub input_tokens: u64,
+    /// Output tokens.
+    pub output_tokens: u64,
+    /// Tokens served from the provider cache.
+    pub cache_read_tokens: u64,
+    /// Tokens written to the provider cache.
+    pub cache_write_tokens: u64,
     /// Total cost in nano-USD.
     pub cost: u64,
     /// Most recent or live tokens per second.
@@ -401,6 +485,8 @@ pub struct Footer {
     pub session: Option<String>,
     /// Estimated context usage percentage.
     pub context_percent: Option<u8>,
+    /// Estimated tokens currently in the context.
+    pub context_tokens: Option<u64>,
 }
 
 /// An action requested by a key press.
@@ -494,6 +580,16 @@ pub struct App {
     pub extension_commands: Vec<String>,
     /// True after `/new` starts a fresh session.
     pub extension_session_reset: bool,
+    /// True when the event loop should drop queued steering and follow-ups.
+    pub(crate) drop_queued: bool,
+    /// Clickable rows recorded by the last transcript draw.
+    pub(crate) hits: Vec<Hit>,
+    /// Rendered rich tool bodies, keyed by call, width, and theme.
+    pub(crate) tool_views: RefCell<HashMap<ToolViewKey, CachedToolView>>,
+    /// Fully laid-out transcript rows, reused while scrolling.
+    pub(crate) transcript_cache: RefCell<Option<CachedTranscript>>,
+    /// Incremented when the active palette changes.
+    pub(crate) theme_revision: u64,
 }
 
 impl App {
@@ -519,6 +615,18 @@ impl App {
             .is_file()
             .then(|| crate::theme::ThemeWatcher::new(&theme.name));
         let session_id = session.as_ref().map(|session| session.id().to_owned());
+        let context_tokens = history.iter().map(message_chars).sum::<u64>() / 4;
+        let context_percent = if context_window == 0 {
+            0
+        } else {
+            u8::try_from(
+                context_tokens
+                    .saturating_mul(100)
+                    .saturating_div(u64::from(context_window))
+                    .min(100),
+            )
+            .unwrap_or(100)
+        };
         Self {
             transcript: Transcript::new(),
             editor: Editor::new(),
@@ -529,6 +637,8 @@ impl App {
                 model: model.model.clone(),
                 thinking: thinking.as_str().to_owned(),
                 session: session_id,
+                context_percent: Some(context_percent),
+                context_tokens: Some(context_tokens),
                 ..Footer::default()
             },
             status: Status::Idle,
@@ -563,6 +673,11 @@ impl App {
             command_prompt: None,
             extension_commands: Vec::new(),
             extension_session_reset: false,
+            drop_queued: false,
+            hits: Vec::new(),
+            tool_views: RefCell::new(HashMap::new()),
+            transcript_cache: RefCell::new(None),
+            theme_revision: 0,
         }
     }
 
@@ -630,10 +745,38 @@ impl App {
                 Action::None
             }
             KeyCode::Esc => {
-                self.transcript.scroll_to_bottom();
+                if !self.transcript.collapse_thinking() {
+                    self.transcript.scroll_to_bottom();
+                }
                 Action::None
             }
             _ => Action::None,
+        }
+    }
+
+    /// Handles a left click at a terminal position.
+    ///
+    /// Returns true when the click toggled a transcript element.
+    pub fn handle_click(&mut self, _column: u16, row: u16) -> bool {
+        if self.overlay.is_some() {
+            return false;
+        }
+        let Some(target) = self
+            .hits
+            .iter()
+            .find(|hit| hit.row == row)
+            .map(|hit| hit.target)
+        else {
+            return false;
+        };
+        match target {
+            HitTarget::Thinking(index) => self.transcript.toggle_thinking(index),
+            HitTarget::Tool(index) => self.transcript.toggle_tool(index),
+            HitTarget::Turn(index) => self.transcript.toggle_turn(index),
+            HitTarget::Usage => {
+                self.overlay = Some(Overlay::Usage);
+                true
+            }
         }
     }
 
@@ -663,9 +806,34 @@ impl App {
                     Action::None
                 }
             }
+            ActionId::Stop => {
+                if self.transcript.collapse_thinking() {
+                    Action::None
+                } else if self.status == Status::Streaming
+                    || self.transcript.running_tool().is_some()
+                {
+                    self.status = Status::Waiting;
+                    Action::Cancel
+                } else {
+                    self.transcript.scroll_to_bottom();
+                    Action::None
+                }
+            }
             ActionId::Quit => Action::Quit,
             ActionId::ExpandTool => {
                 self.transcript.toggle_last_tool();
+                Action::None
+            }
+            ActionId::ToggleAllTools => {
+                self.transcript.toggle_all_tools();
+                Action::None
+            }
+            ActionId::ToolPicker => {
+                self.open_tools();
+                Action::None
+            }
+            ActionId::ToggleAllTurns => {
+                self.transcript.toggle_all_turns();
                 Action::None
             }
             ActionId::Undo => {
@@ -812,6 +980,11 @@ impl App {
                     self.handle_command(&format!("/{}", item.value));
                 }
             },
+            ChoiceKind::Tools => {
+                if let Ok(index) = item.value.parse::<usize>() {
+                    self.transcript.toggle_tool(index);
+                }
+            }
             ChoiceKind::Models => {
                 if let Some(choice) = self
                     .models
@@ -838,6 +1011,7 @@ impl App {
                         .is_file()
                         .then(|| crate::theme::ThemeWatcher::new(&theme.name));
                     self.theme = theme;
+                    self.theme_revision = self.theme_revision.wrapping_add(1);
                     self.transcript.push_info(format!("Theme: {}", item.value));
                 }
                 Err(error) => self
@@ -877,6 +1051,8 @@ impl App {
             ("copy", "Copy the last assistant message"),
             ("debug", "Print diagnostics"),
             ("compact", "Compact the context"),
+            ("usage", "Show token, cost, and context usage"),
+            ("stop", "Stop the active run"),
             ("update", "Install a newer release"),
             ("reload", "Reload skills, templates, and themes"),
             ("skill:", "Invoke a skill"),
@@ -908,6 +1084,45 @@ impl App {
             " commands ",
             items,
             "type to filter · ↑/↓ scroll · Enter select · Esc close",
+        )));
+    }
+
+    fn open_tools(&mut self) {
+        let items = self
+            .transcript
+            .entries()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                let Entry::Tool(block) = entry else {
+                    return None;
+                };
+                let marker = match block.status {
+                    crate::transcript::ToolStatus::Running => "…",
+                    crate::transcript::ToolStatus::Success => "✓",
+                    crate::transcript::ToolStatus::Error => "✗",
+                };
+                let state = if block.expanded {
+                    "expanded"
+                } else {
+                    "collapsed"
+                };
+                Some(ChoiceItem {
+                    label: format!("{marker} {}", block.summary()),
+                    detail: format!("{state} · {}", block.name),
+                    value: index.to_string(),
+                })
+            })
+            .collect::<Vec<_>>();
+        if items.is_empty() {
+            self.transcript.push_info("No tool calls yet.");
+            return;
+        }
+        self.overlay = Some(Overlay::List(ChoiceList::new(
+            ChoiceKind::Tools,
+            " tools ",
+            items,
+            "↑/↓ select · Enter expand/collapse · Esc close",
         )));
     }
 
@@ -1074,6 +1289,7 @@ impl App {
     fn refresh_context(&mut self) {
         let tokens = self.history.iter().map(message_chars).sum::<u64>() / 4;
         let percent = tokens.saturating_mul(100) / u64::from(self.context_window.max(1));
+        self.footer.context_tokens = Some(tokens);
         self.footer.context_percent = Some(u8::try_from(percent.min(100)).unwrap_or(100));
     }
 
@@ -1160,7 +1376,7 @@ impl App {
                                 .name()
                                 .map_or_else(|| session.id().to_owned(), str::to_owned);
                             self.history = session.projection();
-                            self.transcript.clear();
+                            self.reset_transcript();
                             self.transcript
                                 .push_info(format!("Resumed session {label}."));
                             self.footer.session = Some(session.id().to_owned());
@@ -1227,6 +1443,20 @@ impl App {
             Command::Help => self.overlay = Some(Overlay::Help),
             Command::Hotkeys => self.overlay = Some(Overlay::Hotkeys),
             Command::Quit => self.should_quit = true,
+            Command::Stop => {
+                if self.status == Status::Streaming || self.transcript.running_tool().is_some() {
+                    self.status = Status::Waiting;
+                    self.cancel.cancel();
+                    self.drop_queued = true;
+                    self.transcript.push_info("Stopping the current run…");
+                } else if self.status == Status::Waiting {
+                    self.cancel.cancel();
+                    self.drop_queued = true;
+                    self.transcript.push_info("Already stopping…");
+                } else {
+                    self.transcript.push_info("Nothing is running.");
+                }
+            }
             Command::New => {
                 self.new_session();
                 self.extension_session_reset = true;
@@ -1300,6 +1530,7 @@ impl App {
                                 .is_file()
                                 .then(|| crate::theme::ThemeWatcher::new(&theme.name));
                             self.theme = theme;
+                            self.theme_revision = self.theme_revision.wrapping_add(1);
                             self.transcript.push_info(format!("Theme: {name}"));
                         }
                         Err(error) => self
@@ -1364,6 +1595,7 @@ impl App {
                     self.transcript.push_info("No session is being persisted.");
                 }
             }
+            Command::Usage => self.overlay = Some(Overlay::Usage),
             Command::Skill(name, arguments) => {
                 if self.status == Status::Streaming {
                     self.transcript
@@ -1418,9 +1650,11 @@ impl App {
 
     /// Adds a permission prompt, showing it when no other prompt is active.
     pub fn push_permission(&mut self, request: PermissionRequest) {
+        let preview = permission_preview(&self.cwd, &request.tool, &request.arguments);
         self.permissions.push_back(PermissionPrompt {
             tool: request.tool,
             arguments: request.arguments,
+            preview,
             reply: Some(request.reply),
         });
         self.show_next_permission();
@@ -1448,12 +1682,17 @@ impl App {
         }
     }
 
+    fn reset_transcript(&mut self) {
+        self.transcript.clear();
+        self.tool_views.borrow_mut().clear();
+    }
+
     fn new_session(&mut self) {
         match Session::create(self.footer.cwd.clone(), &self.session_dir) {
             Ok(session) => {
                 self.session = Some(session);
                 self.history.clear();
-                self.transcript.clear();
+                self.reset_transcript();
                 self.footer.session = self.session.as_ref().map(|session| session.id().to_owned());
                 self.transcript.push_info("Started a new session.");
             }
@@ -1475,7 +1714,7 @@ impl App {
         match result {
             Ok((history, id)) => {
                 self.history = history;
-                self.transcript.clear();
+                self.reset_transcript();
                 self.footer.session = Some(id);
                 self.refresh_context();
                 self.transcript
@@ -1498,7 +1737,7 @@ impl App {
                 let id = session.id().to_owned();
                 self.history = session.projection();
                 self.session = Some(session);
-                self.transcript.clear();
+                self.reset_transcript();
                 self.footer.session = Some(id);
                 self.transcript.push_info("Cloned the session.");
             }
@@ -1677,6 +1916,16 @@ impl App {
     /// Updates footer usage from the latest message.
     pub fn update_usage(&mut self, usage: &Usage, duration_ms: Option<u64>) {
         self.footer.tokens = self.footer.tokens.saturating_add(usage.total_tokens);
+        self.footer.input_tokens = self.footer.input_tokens.saturating_add(usage.input);
+        self.footer.output_tokens = self.footer.output_tokens.saturating_add(usage.output);
+        self.footer.cache_read_tokens = self
+            .footer
+            .cache_read_tokens
+            .saturating_add(usage.cache_read);
+        self.footer.cache_write_tokens = self
+            .footer
+            .cache_write_tokens
+            .saturating_add(usage.cache_write);
         self.footer.cost = self.footer.cost.saturating_add(usage.cost.total);
         if usage.output > 0
             && let Some(ms) = duration_ms
@@ -1848,7 +2097,7 @@ fn install_panic_hook() {
 #[derive(Debug)]
 enum Input {
     Key(KeyEvent),
-    Mouse(MouseEventKind),
+    Mouse(MouseEvent),
     Paste(String),
     Signal(i32),
 }
@@ -2020,7 +2269,7 @@ fn spawn_input() -> mpsc::UnboundedReceiver<Input> {
                         }
                     }
                     Ok(Event::Mouse(mouse)) => {
-                        if sender.send(Input::Mouse(mouse.kind)).is_err() {
+                        if sender.send(Input::Mouse(mouse)).is_err() {
                             break;
                         }
                     }
@@ -2171,7 +2420,8 @@ async fn event_loop(
                             }
                             Action::Cancel => {
                                 app.cancel.cancel();
-                                app.transcript.push_info("Cancelling…");
+                                app.transcript.push_info("Stopping…");
+                                clear_queued_messages(app, &agent);
                             }
                             Action::Submit(text) => {
                                 let extension_candidate = text.trim_start().starts_with("/ext:")
@@ -2252,7 +2502,7 @@ async fn event_loop(
                                 {
                                     if app.status == Status::Streaming {
                                         agent.steer(Message::user(text.clone()));
-                                        app.transcript.push_user(text);
+                                        app.transcript.push_steering(text);
                                     } else {
                                         submit_prompt(
                                             app, &agent, &options, &event_tx, &compact_tx, text,
@@ -2270,18 +2520,19 @@ async fn event_loop(
                                     .await
                                 {
                                     agent.follow_up(Message::user(text.clone()));
-                                    app.transcript.push_user(text);
+                                    app.transcript.push_steering(text);
                                 }
                             }
                         }
                     }
-                    Input::Mouse(MouseEventKind::ScrollUp) => {
-                        app.transcript.scroll_up(3);
-                    }
-                    Input::Mouse(MouseEventKind::ScrollDown) => {
-                        app.transcript.scroll_down(3);
-                    }
-                    Input::Mouse(_) => {}
+                    Input::Mouse(mouse) => match mouse.kind {
+                        MouseEventKind::ScrollUp => app.transcript.scroll_up(3),
+                        MouseEventKind::ScrollDown => app.transcript.scroll_down(3),
+                        MouseEventKind::Down(MouseButton::Left) => {
+                            app.handle_click(mouse.column, mouse.row);
+                        }
+                        _ => {}
+                    },
                     Input::Paste(text) => app.editor.paste(&text),
                     Input::Signal(code) => {
                         signal_code = code;
@@ -2403,6 +2654,7 @@ async fn event_loop(
                         .and_then(crate::theme::ThemeWatcher::poll)
                 {
                     app.theme = theme;
+                    app.theme_revision = app.theme_revision.wrapping_add(1);
                     dirty = true;
                 }
                 if app.status == Status::Streaming {
@@ -2429,6 +2681,10 @@ async fn event_loop(
             }
         }
 
+        if std::mem::take(&mut app.drop_queued) {
+            clear_queued_messages(app, &agent);
+        }
+
         if app.should_quit {
             break;
         }
@@ -2439,6 +2695,110 @@ async fn event_loop(
     }
     let _ = toolbox;
     Ok(u8::try_from(signal_code).unwrap_or(0))
+}
+
+/// Builds the rich preview shown in a permission prompt.
+fn permission_preview(
+    cwd: &std::path::Path,
+    tool: &str,
+    arguments: &Value,
+) -> Option<codie_protocol::ext::ExtRenderHint> {
+    let path = arguments
+        .get("path")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let resolved = if std::path::Path::new(path).is_absolute() {
+        std::path::PathBuf::from(path)
+    } else {
+        cwd.join(path)
+    };
+    match tool {
+        "edit" => {
+            if std::fs::metadata(&resolved).is_ok_and(|meta| meta.len() > 2 * 1024 * 1024) {
+                return None;
+            }
+            let old = std::fs::read_to_string(&resolved).ok()?;
+            let mut new = old.clone();
+            if let Some(edits) = arguments.get("edits").and_then(Value::as_array) {
+                for edit in edits {
+                    let Some(old_text) = edit.get("oldText").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let new_text = edit
+                        .get("newText")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    if !old_text.is_empty() && new.contains(old_text) {
+                        new = new.replacen(old_text, new_text, 1);
+                    }
+                }
+            }
+            if new == old {
+                return None;
+            }
+            diff_preview(path, &old, &new, "Edit")
+        }
+        "write" => {
+            let content = arguments.get("content").and_then(Value::as_str)?;
+            let can_diff =
+                std::fs::metadata(&resolved).is_ok_and(|meta| meta.len() <= 2 * 1024 * 1024);
+            if can_diff
+                && let Ok(old) = std::fs::read_to_string(&resolved)
+                && old != content
+                && let Some(preview) = diff_preview(path, &old, content, "Write")
+            {
+                return Some(preview);
+            }
+            Some(codie_protocol::ext::ExtRenderHint {
+                kind: codie_protocol::ext::ExtRenderKind::Code,
+                title: Some(format!("Write {path}")),
+                text: content.to_owned(),
+            })
+        }
+        "bash" => {
+            let command = arguments.get("command").and_then(Value::as_str)?;
+            Some(codie_protocol::ext::ExtRenderHint {
+                kind: codie_protocol::ext::ExtRenderKind::Code,
+                title: Some("Command".to_owned()),
+                text: command.to_owned(),
+            })
+        }
+        _ => None,
+    }
+}
+
+fn diff_preview(
+    path: &str,
+    old: &str,
+    new: &str,
+    verb: &str,
+) -> Option<codie_protocol::ext::ExtRenderHint> {
+    const MAX_LINES: usize = 600;
+    if old.lines().count() > 20_000 || new.lines().count() > 20_000 {
+        return None;
+    }
+    let diff = similar::TextDiff::from_lines(old, new);
+    let mut unified = diff.unified_diff();
+    unified.context_radius(3).header(path, path);
+    let text = unified.to_string();
+    if text.lines().count() > MAX_LINES {
+        return None;
+    }
+    Some(codie_protocol::ext::ExtRenderHint {
+        kind: codie_protocol::ext::ExtRenderKind::Diff,
+        title: Some(format!("{verb} {path}")),
+        text,
+    })
+}
+
+/// Drops queued steering and follow-up messages after a stop.
+fn clear_queued_messages(app: &mut App, agent: &Agent) {
+    let (steering, follow_up) = agent.clear_queues();
+    let dropped = steering.len() + follow_up.len();
+    if dropped > 0 {
+        app.transcript
+            .push_info(format!("Dropped {dropped} queued message(s)."));
+    }
 }
 
 fn submit_prompt(
@@ -2608,7 +2968,7 @@ fn maybe_recover_overflow(app: &mut App) -> bool {
 }
 
 fn start_compaction(
-    app: &App,
+    app: &mut App,
     options: &TuiOptions,
     sender: &mpsc::UnboundedSender<(
         Option<String>,
@@ -2623,12 +2983,14 @@ fn start_compaction(
     let session_id = app.session.as_ref().map(|session| session.id().to_owned());
     let context_window = app.context_window;
     let sender = sender.clone();
+    app.cancel = tokio_util::sync::CancellationToken::new();
+    let cancel = app.cancel.clone();
     tokio::spawn(async move {
         let custom = (!instructions.trim().is_empty()).then_some(instructions.as_str());
         let input_limit = u64::from(context_window)
             .saturating_sub(crate::compaction::DEFAULT_RESERVE_TOKENS)
             .clamp(4_000, 200_000);
-        let result = crate::compaction::summarize(
+        let result = crate::compaction::summarize_with_cancel(
             client,
             model,
             thinking,
@@ -2636,6 +2998,7 @@ fn start_compaction(
             custom,
             session_id,
             input_limit,
+            cancel,
         )
         .await;
         let _ = sender.send((
@@ -2656,6 +3019,7 @@ fn apply_compaction(
     }
 
     let window = app.context_window;
+    let stopped = app.cancel.is_cancelled();
     let applied = {
         let Some(session) = app.session.as_mut() else {
             app.status = Status::Error;
@@ -2686,17 +3050,28 @@ fn apply_compaction(
     match applied {
         Applied::Done(history, percent, first_line) => {
             app.history = history;
+            app.refresh_context();
             app.footer.context_percent = Some(percent);
             app.status = Status::Idle;
             app.transcript
                 .push_info(format!("Compacted the context: {first_line}"));
+            if stopped {
+                app.pending_prompt = None;
+                app.pending_retry = false;
+                app.transcript.push_info("Stopped.");
+            }
         }
         Applied::Failed(error) => {
             app.pending_prompt = None;
             app.pending_retry = false;
-            app.status = Status::Error;
-            app.transcript
-                .push_error(format!("Compaction failed: {error}"));
+            if stopped {
+                app.status = Status::Idle;
+                app.transcript.push_info("Stopped.");
+            } else {
+                app.status = Status::Error;
+                app.transcript
+                    .push_error(format!("Compaction failed: {error}"));
+            }
         }
     }
 }
@@ -2782,12 +3157,14 @@ fn handle_agent_event(app: &mut App, event: AgentEvent) {
         AgentEvent::TurnEnd { .. } | AgentEvent::TurnStart => {}
         AgentEvent::AgentEnd { messages, status } => {
             app.history = messages;
-            app.status = if status == RunStatus::Completed {
-                Status::Idle
-            } else {
-                Status::Error
+            app.status = match status {
+                RunStatus::Completed | RunStatus::Aborted => Status::Idle,
+                RunStatus::TurnLimit | RunStatus::Error => Status::Error,
             };
             app.transcript.scroll_to_bottom();
+            if status == RunStatus::Aborted {
+                app.transcript.push_info("Stopped.");
+            }
             if status == RunStatus::TurnLimit {
                 app.transcript
                     .push_error("Turn limit reached. Send another prompt to continue.");
@@ -2932,6 +3309,76 @@ mod tests {
             app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
             Action::Quit
         );
+    }
+
+    #[test]
+    #[spec("TUI-023")]
+    fn escape_stops_a_running_turn() {
+        let mut app = app();
+        app.status = Status::Streaming;
+        assert_eq!(app.handle_key(key(KeyCode::Esc)), Action::Cancel);
+        assert_eq!(app.status, Status::Waiting);
+    }
+
+    #[test]
+    #[spec("TUI-023")]
+    fn escape_collapses_reasoning_before_stopping() {
+        let mut app = app();
+        app.status = Status::Streaming;
+        app.transcript.start_assistant();
+        app.transcript.set_thinking("weighing options".into());
+        assert!(app.transcript.toggle_thinking(0));
+
+        assert_eq!(app.handle_key(key(KeyCode::Esc)), Action::None);
+        assert_eq!(app.status, Status::Streaming);
+        assert!(matches!(
+            &app.transcript.entries()[0],
+            Entry::Assistant(assistant) if !assistant.thinking_expanded
+        ));
+
+        assert_eq!(app.handle_key(key(KeyCode::Esc)), Action::Cancel);
+    }
+
+    #[test]
+    #[spec("TUI-023")]
+    fn slash_stop_cancels_the_active_run() {
+        let mut app = app();
+        app.status = Status::Streaming;
+        assert!(app.handle_command("/stop"));
+        assert_eq!(app.status, Status::Waiting);
+        assert!(app.cancel.is_cancelled());
+        assert!(app.drop_queued);
+    }
+
+    #[test]
+    #[spec("TUI-023")]
+    fn slash_stop_reports_when_nothing_is_running() {
+        let mut app = app();
+        assert!(app.handle_command("/stop"));
+        assert!(!app.cancel.is_cancelled());
+        assert!(matches!(
+            app.transcript.entries().last(),
+            Some(Entry::Info(text)) if text == "Nothing is running."
+        ));
+    }
+
+    #[test]
+    #[spec("TUI-023")]
+    fn aborted_runs_return_to_idle() {
+        let mut app = app();
+        app.status = Status::Streaming;
+        handle_agent_event(
+            &mut app,
+            AgentEvent::AgentEnd {
+                messages: Vec::new(),
+                status: RunStatus::Aborted,
+            },
+        );
+        assert_eq!(app.status, Status::Idle);
+        assert!(matches!(
+            app.transcript.entries().last(),
+            Some(Entry::Info(text)) if text == "Stopped."
+        ));
     }
 
     #[test]

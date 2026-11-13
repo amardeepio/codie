@@ -137,7 +137,8 @@ snake_case so failures are readable without the macro.
 | [`SPEC-TUI-002`](tui/0002-session-controls.md) — Session controls and picker | `TUI-011`..`TUI-013` | implemented | 3 |
 | [`SPEC-TUI-003`](tui/0003-command-palette.md) — Command palette and live pickers | `TUI-014`..`TUI-017` | implemented | 3 |
 | [`SPEC-TUI-004`](tui/0004-permission-mode.md) — Permission choices and full access | `TUI-018`, `TUI-019` | implemented | 3 |
-| [`SPEC-TUI-005`](tui/0005-running-indicators.md) — Running indicators and scrolling | `TUI-020`, `TUI-021` | implemented | 4 |
+| [`SPEC-TUI-005`](tui/0005-running-indicators.md) — Running indicators, reasoning, stopping, and scrolling | `TUI-020`..`TUI-023` | implemented | 4 |
+| [`SPEC-TUI-006`](tui/0006-navigation-and-details.md) — Context, permissions, tool navigation, turns, and session preview | `TUI-024`..`TUI-028` | implemented | 4 |
 
 `SEC-007`/`SEC-008` (project trust and approval prompts) are canonical in `specs/security/0002-trust.md`. The
 full planned index is in `PLAN.MD` Appendix D.

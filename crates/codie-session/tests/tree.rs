@@ -234,6 +234,8 @@ fn spec_sess_015_list_reports_newest_first() {
     assert_eq!(summaries[0].message_count, 1);
     assert_eq!(summaries[2].id, oldest_id);
     assert_eq!(summaries[2].name.as_deref(), Some("oldest"));
+    assert_eq!(summaries[2].last_user.as_deref(), Some("old"));
+    assert!(summaries[2].tokens > 0);
 
     let for_cwd = Session::list_for_cwd(&cwd, &session_dir).expect("list cwd");
     assert_eq!(for_cwd.len(), 3);

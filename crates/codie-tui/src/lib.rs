@@ -18,6 +18,7 @@ pub mod permissions;
 pub mod plain;
 pub mod render;
 pub mod theme;
+mod tool_view;
 pub mod transcript;
 
 pub use app::{App, TuiOptions, TuiRunMode, run};

@@ -108,22 +108,52 @@ impl Tool for EditTool {
         .await;
 
         match result {
-            Ok((count, first_changed_line)) => ToolResult::text(format!(
-                "Successfully replaced {count} block(s) in {raw_path}."
-            ))
-            .with_details(json!({ "first_changed_line": first_changed_line })),
+            Ok((count, first_changed_line, render)) => {
+                let mut details = json!({ "first_changed_line": first_changed_line });
+                if let Some(render) = render {
+                    details["codie_render"] = render;
+                }
+                ToolResult::text(format!(
+                    "Successfully replaced {count} block(s) in {raw_path}."
+                ))
+                .with_details(details)
+            }
             Err(message) => ToolResult::error(message),
         }
     }
 }
 
-/// Reads, edits, and writes the file. Returns the edit count and first changed line.
+/// Builds a compact host-only render hint for the transcript diff view.
+///
+/// The hint is omitted for unusually large diffs so a single edit cannot bloat
+/// the session or the renderer's work.
+fn render_hint(raw_path: &str, old: &str, new: &str) -> Option<Value> {
+    const CONTEXT: usize = 3;
+    const MAX_LINES: usize = 600;
+
+    let diff = similar::TextDiff::from_lines(old, new);
+    let mut unified = diff.unified_diff();
+    unified.context_radius(CONTEXT).header(raw_path, raw_path);
+    let text = unified.to_string();
+    if text.lines().count() > MAX_LINES {
+        return None;
+    }
+    Some(json!({
+        "kind": "diff",
+        "title": format!("Edit {raw_path}"),
+        "text": text,
+    }))
+}
+
+/// Reads, edits, and writes the file.
+///
+/// Returns the edit count, first changed line, and an optional render hint.
 fn edit_file(
     path: &std::path::Path,
     raw_path: &str,
     edits: &[ParsedEdit],
     cancelled: bool,
-) -> Result<(usize, usize), String> {
+) -> Result<(usize, usize, Option<Value>), String> {
     if cancelled {
         return Err("Operation aborted".to_owned());
     }
@@ -182,7 +212,9 @@ fn edit_file(
             .count()
             + 1
     });
-    Ok((edits.len(), first_changed_line))
+    let normalized_final = normalize_to_lf(&final_content);
+    let render = render_hint(raw_path, &normalized_content, &normalized_final);
+    Ok((edits.len(), first_changed_line, render))
 }
 
 /// Parses and validates the `edits` argument.

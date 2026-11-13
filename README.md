@@ -60,54 +60,81 @@ coding-model catalog with live `/provider` switching. See
 
 ```mermaid
 flowchart LR
-    P["Provider adapter<br/>OpenAI-compatible"] -->|"SSE deltas"| S["Assistant event stream"]
-    S --> L["Agent loop"]
-    L <-->|"append / projection"| DB["Session store<br/>append-only JSONL"]
-    L --> T["Tool execution<br/>read · write · edit · bash<br/>grep · find · ls<br/>extension tools"]
+    P["Provider adapter<br/>OpenAI-compatible<br/>DeepSeek · OpenRouter"] -->|"SSE deltas"| S["Assistant event stream"]
+    S --> L["Agent loop<br/>turns · steering · cancellation"]
+    L <-->|"append / projection"| DB["Session store<br/>append-only JSONL tree<br/>resume · fork · compact"]
+    L --> PM["Context assembly<br/>system prompt · skills · templates<br/>project instructions · @files"]
+    L --> T["Tool execution<br/>read · write · edit · bash<br/>grep · find · ls · web_fetch<br/>extension tools"]
+    T <-->|"permission broker"| A["Approval UI"]
     L <-->|"hooks / tools / commands"| X["codie-ext<br/>JSON-RPC over stdio"]
     L --> M["Interfaces"]
-    M --> I["Interactive TUI"]
-    M --> P1["Print"]
+    M --> I["Interactive TUI<br/>transcript · editor · overlays"]
+    M --> PL["Plain / print"]
     M --> J["JSON events"]
     M --> R["RPC"]
 ```
 
-Crate graph (solid = shipping, dashed = planned):
+Crate graph (all shipping; testkit is dev-only and spec-macro runs at build time):
 
 ```mermaid
 flowchart TD
-    CLI["codie-cli<br/>args · config · modes"]
+    CLI["codie-cli<br/>args · config · modes · exit codes"]
 
-    CORE["codie-core<br/>messages · events · loop"]
-    AI["codie-ai<br/>providers · SSE"]
+    CORE["codie-core<br/>messages · events · agent loop"]
+    AI["codie-ai<br/>providers · SSE · catalog · auth"]
     TOOLS["codie-tools<br/>read · write · edit · bash<br/>grep · find · ls · web_fetch"]
-    SESSION["codie-session<br/>JSONL store"]
-    PROMPT["codie-prompt<br/>system prompt"]
+    SESSION["codie-session<br/>JSONL tree · projection · export"]
+    PROMPT["codie-prompt<br/>system prompt · skills · templates · trust"]
+    EXT["codie-ext<br/>JSON-RPC extensions"]
 
-    TUI["codie-tui<br/>interactive"]
-    PROTO["codie-protocol<br/>RPC · schemas"]
-    CONTEXT["codie-context<br/>Phase 3"]
+    TUI["codie-tui<br/>interactive app · transcript · themes"]
+    PROTO["codie-protocol<br/>extension wire types · schemas"]
+    TUI --> EXT
+    TUI --> PROTO
 
     CLI --> CORE
     CLI --> AI
     CLI --> TOOLS
     CLI --> SESSION
     CLI --> PROMPT
+    CLI --> EXT
     CLI --> PROTO
+    CLI --> TUI
 
     AI --> CORE
     TOOLS --> CORE
     SESSION --> CORE
     PROMPT --> CORE
+    EXT --> PROTO
 
     TUI --> CORE
-    CONTEXT -.-> CORE
+    TUI --> AI
+    TUI --> TOOLS
+    TUI --> SESSION
+    TUI --> PROMPT
 
+    SPEC["codie-spec-macro<br/>requirement test annotations"] -.-> CORE
+    SPEC -.-> TUI
     TESTKIT["codie-testkit<br/>dev only"] -.-> CORE
 ```
 
-The loop has no HTTP client. The provider adapter knows nothing about tool implementations. Only the CLI reads
-environment variables and decides process exit codes. Details are in [`docs/src/architecture.md`](docs/src/architecture.md).
+The agent loop has no HTTP client and never links a provider implementation. The provider adapter knows
+nothing about tools. Tools execute only after the assistant message is final, and each tool implements a small
+contract (`name`, schema, execution mode, `execute`). The CLI is the only layer that reads environment
+variables, opens configuration, selects a provider, and decides the process exit code.
+
+The TUI is an event-driven consumer of `AgentEvent`, not part of the loop. It owns the alternate screen,
+transcript, editor, overlays, permission prompts, theme, and footer. Rendering is coalesced on a tick and cached
+by transcript revision, width, and theme, so scrolling a session with large diffs stays responsive. The same
+diff and numbered-code renderer powers edit results, write previews, and rich permission review. Escape and
+`/stop` cancel model requests and tool process groups; session compaction uses the same cancellation token.
+
+Sessions are append-only JSONL with a tree of entries. Resume, fork, clone, and compaction all operate on the
+file; the model-visible history is a deterministic projection. Context assembly and compaction share the same
+token estimator and reserve budget, which the footer exposes as a live context meter.
+
+Details are in [`docs/src/architecture.md`](docs/src/architecture.md), [`docs/src/tui.md`](docs/src/tui.md),
+and [`specs/README.md`](specs/README.md).
 
 ## Install
 

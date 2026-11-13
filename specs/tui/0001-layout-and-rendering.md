@@ -26,8 +26,8 @@ Verification: `crates/codie-tui/src/editor.rs::movement_is_grapheme_correct`
 **TUI-004 (MUST)** Markdown rendering supports headings, emphasis, lists, blockquotes, tables, fenced code blocks with keyword highlighting, links, and horizontal rules.
 Verification: `crates/codie-tui/src/markdown.rs::spec_tui_004_headings_lists_and_code_render`
 
-**TUI-005 (MUST)** Tool calls render as stateful blocks with running/success/error states, a compact summary, and expandable output (`Ctrl+O`); edit output colors added and removed lines.
-Verification: `crates/codie-tui/src/transcript.rs::tool_blocks_transition_and_expand`
+**TUI-005 (MUST)** Tool calls render as stateful blocks with running/success/error states and a compact summary. `edit` results show a side-by-side, line-numbered diff with added and removed rows tinted, and `write` results show the written file with line numbers and syntax highlighting. Rich bodies are visible by default, capped at a preview, and `Ctrl+O` toggles the full body.
+Verification: `crates/codie-tui/src/transcript.rs::tool_blocks_transition_and_expand`, `crates/codie-tui/src/render.rs::edit_results_render_a_side_by_side_diff`
 
 **TUI-006 (MUST)** The footer shows the working directory, git branch when present, model, thinking level, tokens, cost, context estimate, and session identifier.
 Verification: `crates/codie-tui/src/render.rs::empty_state_and_footer_render`

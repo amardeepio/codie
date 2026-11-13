@@ -11,6 +11,8 @@ pub enum Command {
     Hotkeys,
     /// Quit the interactive session.
     Quit,
+    /// Stop the active run.
+    Stop,
     /// Start a new session.
     New,
     /// Show the current session.
@@ -43,6 +45,8 @@ pub enum Command {
     Thinking(Option<String>),
     /// Manual compaction (Phase 3).
     Compact(Option<String>),
+    /// Show token, cost, and context usage.
+    Usage,
     /// Invoke a skill with arguments.
     Skill(String, String),
     /// Expand a prompt template with arguments.
@@ -85,6 +89,7 @@ pub fn parse(input: &str) -> Option<Command> {
         "help" | "?" => Command::Help,
         "hotkeys" => Command::Hotkeys,
         "quit" | "exit" | "q" => Command::Quit,
+        "stop" => Command::Stop,
         "new" => Command::New,
         "session" => Command::Session,
         "tree" => Command::Tree,
@@ -106,6 +111,7 @@ pub fn parse(input: &str) -> Option<Command> {
         "provider" => Command::Provider(argument),
         "thinking" => Command::Thinking(argument),
         "compact" => Command::Compact(argument),
+        "usage" => Command::Usage,
         "reload" => Command::Reload,
         other => Command::Unknown(other.to_owned()),
     })
@@ -124,6 +130,7 @@ pub fn names() -> &'static [&'static str] {
         "/help",
         "/hotkeys",
         "/quit",
+        "/stop",
         "/new",
         "/session",
         "/tree",
@@ -139,6 +146,7 @@ pub fn names() -> &'static [&'static str] {
         "/provider",
         "/thinking",
         "/compact",
+        "/usage",
         "/reload",
     ]
 }
@@ -161,6 +169,8 @@ mod tests {
     fn parses_commands_with_and_without_arguments() {
         assert_eq!(parse("/help"), Some(Command::Help));
         assert_eq!(parse("/quit now"), Some(Command::Quit));
+        assert_eq!(parse("/stop"), Some(Command::Stop));
+        assert_eq!(parse("/usage"), Some(Command::Usage));
         assert_eq!(
             parse("/model openrouter/auto"),
             Some(Command::Model(Some("openrouter/auto".to_owned())))
