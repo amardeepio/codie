@@ -11,6 +11,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub mod ext;
+
 /// Version of the RPC protocol implemented by this build.
 pub const RPC_PROTOCOL_VERSION: u32 = 1;
 
@@ -319,7 +321,7 @@ pub enum RpcServerRecord {
 #[cfg(feature = "schema")]
 #[must_use]
 pub fn schema_documents() -> Vec<(&'static str, serde_json::Value)> {
-    vec![
+    let mut documents = vec![
         (
             "rpc-commands.schema.json",
             serde_json::to_value(schemars::schema_for!(RpcRequest))
@@ -330,7 +332,9 @@ pub fn schema_documents() -> Vec<(&'static str, serde_json::Value)> {
             serde_json::to_value(schemars::schema_for!(RpcServerRecord))
                 .expect("RPC server schema serializes"),
         ),
-    ]
+    ];
+    documents.extend(ext::schema_documents());
+    documents
 }
 
 #[cfg(test)]

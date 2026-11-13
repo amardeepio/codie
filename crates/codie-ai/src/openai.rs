@@ -167,6 +167,17 @@ impl OpenAiProvider {
         self
     }
 
+    /// Returns a copy of this provider with a different selectable model list.
+    ///
+    /// The CLI uses this to install models merged from the cached OpenRouter
+    /// catalog, so selecting a catalog model resolves its real context window,
+    /// pricing, and reasoning levels.
+    #[must_use]
+    pub fn with_models(mut self, models: Vec<Model>) -> Self {
+        self.models = models;
+        self
+    }
+
     /// Builds the JSON request body for a transcript.
     ///
     /// This is exposed for diagnostics and request-conversion tests; the
@@ -1399,6 +1410,9 @@ fn effective_level(model: &Model, requested: ThinkingLevel) -> Option<ThinkingLe
 
 fn insert_thinking(body: &mut Map<String, Value>, model: &Model, requested: ThinkingLevel) {
     if !model.reasoning {
+        return;
+    }
+    if model.reasoning_mandatory && requested == ThinkingLevel::Off {
         return;
     }
 

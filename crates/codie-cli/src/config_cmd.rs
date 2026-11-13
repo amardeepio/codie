@@ -68,6 +68,7 @@ fn get(config: &Config, key: Option<&str>) -> Result<()> {
                     "max-turns": config.max_turns,
                     "allow": config.allow,
                     "base-url": config.base_url,
+                    "extensions-disabled": config.extensions_disabled,
                     "session-dir": config.session_dir.display().to_string(),
                     "data-dir": config.data_dir.display().to_string(),
                 }))?
@@ -79,10 +80,11 @@ fn get(config: &Config, key: Option<&str>) -> Result<()> {
         Some("max-turns") => println!("{}", config.max_turns),
         Some("allow") => println!("{}", config.allow.join(",")),
         Some("base-url") => println!("{}", config.base_url.clone().unwrap_or_default()),
+        Some("extensions-disabled") => println!("{}", config.extensions_disabled.join(",")),
         Some("session-dir") => println!("{}", config.session_dir.display()),
         Some("data-dir") => println!("{}", config.data_dir.display()),
         Some(other) => bail!(
-            "unknown configuration key `{other}`; expected provider, model, thinking, max-turns, allow, base-url, session-dir, or data-dir"
+            "unknown configuration key `{other}`; expected provider, model, thinking, max-turns, allow, base-url, extensions-disabled, session-dir, or data-dir"
         ),
     }
     Ok(())
@@ -156,8 +158,23 @@ fn apply(document: &mut toml::Value, key: &str, value: &str) -> Result<()> {
                 .context("permissions must be a table")?;
             permissions.insert("allow".to_owned(), toml::Value::Array(entries));
         }
+        "extensions-disabled" => {
+            let entries = value
+                .split(',')
+                .map(str::trim)
+                .filter(|entry| !entry.is_empty())
+                .map(|entry| toml::Value::String(entry.to_owned()))
+                .collect::<Vec<_>>();
+            let extensions = table
+                .entry("extensions".to_owned())
+                .or_insert_with(|| toml::Value::Table(Table::new()));
+            let extensions = extensions
+                .as_table_mut()
+                .context("extensions must be a table")?;
+            extensions.insert("disabled".to_owned(), toml::Value::Array(entries));
+        }
         other => bail!(
-            "unknown configuration key `{other}`; expected provider, model, thinking, max-turns, base-url, or allow"
+            "unknown configuration key `{other}`; expected provider, model, thinking, max-turns, base-url, allow, or extensions-disabled"
         ),
     }
     Ok(())
@@ -193,10 +210,12 @@ mod tests {
         apply(&mut document, "provider", "openrouter").unwrap();
         apply(&mut document, "max-turns", "10").unwrap();
         apply(&mut document, "allow", "write, bash").unwrap();
+        apply(&mut document, "extensions-disabled", "todo, plan-mode").unwrap();
 
         assert_eq!(document["default_provider"].as_str(), Some("openrouter"));
         assert_eq!(document["max_turns"].as_integer(), Some(10));
         assert_eq!(document["permissions"]["allow"][1].as_str(), Some("bash"));
+        assert_eq!(document["extensions"]["disabled"][0].as_str(), Some("todo"));
     }
 
     #[test]

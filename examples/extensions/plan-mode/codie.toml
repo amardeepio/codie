@@ -1,0 +1,10 @@
+name = "plan-mode"
+version = "0.1.0"
+protocol = 1
+description = "Example hook extension that blocks mutating tools while planning."
+entrypoint = ["node", "--no-warnings", "--experimental-strip-types", "plan_mode.ts"]
+capabilities = ["hooks", "commands", "renderers"]
+
+[limits]
+hook_timeout_ms = 2000
+tool_timeout_ms = 120000

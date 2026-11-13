@@ -18,6 +18,9 @@ Cargo.lock.bak
 .codie/
 codie-local/
 
+# Local design notes (not tracked)
+OPENCODE-MODELS.MD
+
 # Coverage and profiling
 lcov.info
 coverage/

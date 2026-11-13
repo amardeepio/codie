@@ -68,8 +68,12 @@ Pressing `/` in an empty editor opens the command palette. Type to filter, use `
 to scroll, and `Enter` to select. `Esc` closes it.
 
 `/help`, `/hotkeys`, `/new`, `/session`, `/tree`, `/fork [entry]`, `/clone`, `/name [text]`, `/export [path]`,
-`/export html [path]`, `/copy`, `/debug`, `/update`, `/theme [name]`, `/model [id]`, `/thinking [level]`,
-`/compact [instructions]`, `/quit`.
+`/export html [path]`, `/copy`, `/debug`, `/update`, `/theme [name]`, `/provider [id]`, `/model [id]`,
+`/thinking [level]`, `/compact [instructions]`, `/quit`.
+
+Extensions can add commands. Invoke one as `/ext:<extension>:<command> [arguments]`; a bare
+`/<command>` also works when it is unambiguous and does not collide with a built-in. Extension commands
+appear in the palette and completion list. See [Extensions](extensions.md).
 
 `/update` checks for a newer release, installs it when a prebuilt archive exists for the platform, and shows a
 banner with OK. When a tag has no published artifact, the banner explains how to reinstall with the installer
@@ -78,9 +82,12 @@ never installs automatically. Disable the background check with `CODIE_NO_UPDATE
 the last assistant message on the system clipboard. `/debug` prints version, model, cwd, session, and token
 diagnostics as a transcript line.
 
-`/theme`, `/model`, and `/thinking` without an argument open live pickers. Model selection updates the context
-window and is persisted; reasoning selection is persisted with the session. The footer shows context usage and
-tokens per second, with a live estimate while streaming.
+`/theme`, `/provider`, `/model`, and `/thinking` without an argument open live pickers. The model picker lists
+the coding models for the active provider; OpenRouter entries carry their real context window and price from the
+catalog cache. `/provider` switches between DeepSeek and OpenRouter in place, selects the new provider's default
+model, and refreshes the model list. Model selection updates the context window and is persisted; reasoning
+selection is persisted with the session. The footer shows context usage and tokens per second, with a live
+estimate while streaming.
 
 ## Permissions
 

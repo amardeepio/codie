@@ -68,6 +68,7 @@ impl TrustStore {
         let codie = project.join(".codie");
         codie.join("skills").is_dir()
             || codie.join("templates").is_dir()
+            || codie.join("extensions").is_dir()
             || codie.join("SYSTEM.md").is_file()
             || codie.join("APPEND_SYSTEM.md").is_file()
     }

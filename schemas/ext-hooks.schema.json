@@ -1,0 +1,180 @@
+{
+  "$defs": {
+    "ExtContent": {
+      "description": "One content block returned by an extension tool.",
+      "oneOf": [
+        {
+          "description": "Model-visible text.",
+          "properties": {
+            "text": {
+              "description": "Text payload.",
+              "type": "string"
+            },
+            "type": {
+              "const": "text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A base64-encoded image.",
+          "properties": {
+            "data": {
+              "description": "Base64 data.",
+              "type": "string"
+            },
+            "mime_type": {
+              "description": "MIME type.",
+              "type": "string"
+            },
+            "type": {
+              "const": "image",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data",
+            "mime_type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ExtRenderHint": {
+      "description": "Structured output for a host renderer.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ExtRenderKind",
+          "description": "Renderer kind."
+        },
+        "text": {
+          "description": "Renderer body.",
+          "type": "string"
+        },
+        "title": {
+          "description": "Optional title.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "text"
+      ],
+      "type": "object"
+    },
+    "ExtRenderKind": {
+      "description": "A structured render hint. ANSI escape sequences are not permitted.",
+      "oneOf": [
+        {
+          "const": "text",
+          "description": "Plain text.",
+          "type": "string"
+        },
+        {
+          "const": "markdown",
+          "description": "Markdown.",
+          "type": "string"
+        },
+        {
+          "const": "code",
+          "description": "Fenced code.",
+          "type": "string"
+        },
+        {
+          "const": "diff",
+          "description": "Unified diff.",
+          "type": "string"
+        }
+      ]
+    },
+    "ExtToolResult": {
+      "description": "Result of one extension tool call.",
+      "properties": {
+        "content": {
+          "default": [],
+          "description": "Model-visible content.",
+          "items": {
+            "$ref": "#/$defs/ExtContent"
+          },
+          "type": "array"
+        },
+        "details": {
+          "description": "Host-only structured details."
+        },
+        "is_error": {
+          "default": false,
+          "description": "True when the tool failed.",
+          "type": "boolean"
+        },
+        "render": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExtRenderHint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional structured render hint."
+        },
+        "terminate": {
+          "default": false,
+          "description": "Requests early termination of the batch.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Result returned by a hook request.",
+  "properties": {
+    "block": {
+      "description": "True when a hook wants to block an action.",
+      "type": "boolean"
+    },
+    "context": {
+      "description": "Extra context injected for the current request only.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "prompt": {
+      "description": "Replacement user prompt.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reason": {
+      "description": "Human-readable block reason.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "result": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExtToolResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Replacement tool result."
+    }
+  },
+  "title": "ExtHookResult",
+  "type": "object"
+}

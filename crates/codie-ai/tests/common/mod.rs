@@ -32,6 +32,7 @@ pub fn custom_model(id: &str, provider: &str, compat: Compat) -> Model {
         context_window: 128_000,
         max_output_tokens: 8192,
         reasoning: compat.thinking_format != codie_ai::ThinkingFormat::OpenAi,
+        reasoning_mandatory: false,
         thinking_levels: deepseek_model().thinking_levels,
         cost: Default::default(),
         compat,

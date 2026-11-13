@@ -1,6 +1,6 @@
 //! The `codie` run path: resolve config, stream a turn, persist the session.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -9,22 +9,25 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
 use codie_ai::{
-    AuthStore, OpenAiProvider, OpenRouterCatalog, builtin_models, fallback_model, find_model,
-    resolve_key,
+    AuthStore, Model, OpenAiProvider, OpenRouterCatalog, PROVIDER_OPENROUTER, builtin_models,
+    fallback_model, merge_models, provider_base_url, resolve_key,
 };
 use codie_core::{
     Agent, AgentConfig, AgentEvent, ChatClient, Message, ModelRef, RunStatus, StopReason,
     ThinkingLevel, Tool, Toolbox,
 };
+use codie_ext::{ExtensionSet, LoadOptions};
 use codie_prompt::{
     Customizations, PromptInput, TrustStore, build_system_message, expand_attachments,
     load_instructions, load_project_context,
 };
+use codie_protocol::ext::ExtSessionInfo;
 use codie_session::Session;
 use codie_tools::{
     BashTool, EditTool, FindTool, GrepTool, LsTool, Policy, PolicyToolbox, ReadTool, Registry,
     ToolName, WebFetchTool, WriteTool,
 };
+use codie_tui::app::{ProviderChoice, ProviderRuntime};
 use codie_tui::{TuiOptions, TuiRunMode};
 use tokio_util::sync::CancellationToken;
 
@@ -110,6 +113,14 @@ pub(crate) struct RunArgs {
     #[arg(long)]
     pub(crate) no_tools: bool,
 
+    /// Load an extension manifest or directory. Repeatable.
+    #[arg(long = "extension", value_name = "PATH", action = clap::ArgAction::Append)]
+    pub(crate) extension: Vec<PathBuf>,
+
+    /// Disable every extension.
+    #[arg(long)]
+    pub(crate) no_extensions: bool,
+
     /// Comma-separated mutating tools permitted in headless mode.
     #[arg(long)]
     pub(crate) allow: Option<String>,
@@ -174,7 +185,7 @@ pub(crate) struct RunArgs {
 }
 
 /// Runs the agent once and returns the process exit code.
-pub(crate) async fn run(args: RunArgs) -> Result<u8> {
+pub(crate) async fn run(args: RunArgs, deferred_flags: BTreeMap<String, String>) -> Result<u8> {
     if args.api_key.is_some() && args.model.is_none() {
         bail!("--api-key requires an explicit --model so the key cannot be paired with a default");
     }
@@ -222,20 +233,38 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
     for warning in customizations.warnings() {
         eprintln!("warning: {warning}");
     }
+    if let Some(theme) = args.theme.as_deref() {
+        // Declarative resources are validated before any extension process starts.
+        let _ = codie_tui::Theme::load(Some(theme))?;
+    }
+
+    let extensions = if args.no_extensions {
+        ExtensionSet::default()
+    } else {
+        ExtensionSet::load(LoadOptions {
+            config_dir: &config.config_dir,
+            project_root: project_root.as_deref(),
+            explicit: &args.extension,
+            disabled: &config.extensions_disabled,
+            cwd: &cwd,
+            session_id: None,
+            deferred_flags: &deferred_flags,
+        })
+        .await
+    };
+    for warning in extensions.warnings() {
+        eprintln!("warning: {warning}");
+    }
+    extensions
+        .validate_flags(&deferred_flags)
+        .map_err(anyhow::Error::msg)?;
+    let extensions = Arc::new(extensions);
 
     let provider_id = args
         .provider
         .clone()
         .unwrap_or_else(|| config.default_provider.clone());
     validate_provider(&provider_id)?;
-
-    let model_id = args
-        .model
-        .clone()
-        .or_else(|| config.default_model.clone())
-        .unwrap_or_else(|| default_model(&provider_id).to_owned());
-    let model = find_model(&provider_id, &model_id)
-        .unwrap_or_else(|| fallback_model(&provider_id, &model_id));
 
     let thinking = match args.thinking.as_deref() {
         Some(value) => ThinkingLevel::parse(value)
@@ -258,32 +287,168 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
     })?;
 
     let mut provider = match provider_id.as_str() {
-        "openrouter" => OpenAiProvider::openrouter(key),
+        PROVIDER_OPENROUTER => OpenAiProvider::openrouter(key),
         _ => OpenAiProvider::deepseek(key),
     };
     if let Some(base_url) = args.base_url.clone().or_else(|| config.base_url.clone()) {
         provider = provider.with_base_url(base_url);
     }
 
-    let catalog_endpoint = format!("{}/models", provider.base_url().trim_end_matches('/'));
-    let provider: Arc<dyn ChatClient> = Arc::new(provider);
+    let catalog = (provider_id == PROVIDER_OPENROUTER).then(|| {
+        Arc::new(
+            OpenRouterCatalog::new(config.cache_dir.join("openrouter-models.json")).with_endpoint(
+                format!("{}/models", provider.base_url().trim_end_matches('/')),
+            ),
+        )
+    });
+    let catalog_models = catalog
+        .as_ref()
+        .map(|catalog| catalog.cached_coding_models())
+        .unwrap_or_default();
+    let provider_models = merge_models(
+        builtin_models()
+            .into_iter()
+            .filter(|candidate| candidate.provider.as_ref() == provider_id)
+            .collect(),
+        catalog_models,
+    );
+    let provider = provider.with_models(provider_models.clone());
 
-    let registry = select_tools(args.tools.as_deref(), args.no_tools)?;
-    let allowed = allowed_tools(&config, args.allow.as_deref(), args.allow_all);
+    let switchable = Arc::new(SwitchableClient::new(Arc::new(provider)));
+
+    let configured_model = config
+        .default_model
+        .clone()
+        .filter(|id| provider_models.iter().any(|model| &model.id == id));
+    let model_id = args
+        .model
+        .clone()
+        .or(configured_model)
+        .unwrap_or_else(|| default_model(&provider_id).to_owned());
+    let model = provider_models
+        .iter()
+        .find(|candidate| candidate.id == model_id)
+        .cloned()
+        .unwrap_or_else(|| fallback_model(&provider_id, &model_id));
+
+    let provider: Arc<dyn ChatClient> = switchable.clone();
+
+    let extension_tool_names = extensions
+        .extensions()
+        .iter()
+        .flat_map(|extension| extension.tools.iter().map(|tool| tool.name.clone()))
+        .collect::<Vec<_>>();
+    let mut registry = select_tools(args.tools.as_deref(), args.no_tools, &extension_tool_names)?;
+    if !args.no_tools {
+        let requested = args.tools.as_deref().map(|spec| {
+            spec.split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .collect::<HashSet<_>>()
+        });
+        for tool in extensions.tools() {
+            if requested
+                .as_ref()
+                .is_none_or(|names| names.contains(tool.name()))
+            {
+                registry.register(tool);
+            }
+        }
+    }
+    let allowed = allowed_tools(
+        &config,
+        args.allow.as_deref(),
+        args.allow_all,
+        &extension_tool_names,
+    );
     let session_dir = config.session_dir_for(&cwd);
     let max_turns = args.max_turns.unwrap_or(config.max_turns);
-    let models = builtin_models()
-        .into_iter()
-        .filter(|candidate| candidate.provider.as_ref() == provider_id)
-        .map(|candidate| codie_tui::app::ModelChoice {
-            provider: candidate.provider.to_string(),
-            id: candidate.id,
-            name: candidate.name,
-            context_window: candidate.context_window,
-        })
-        .collect::<Vec<_>>();
+    let models = model_choices(&provider_models);
+    let models_loader = {
+        let cache_dir = config.cache_dir.clone();
+        let base_url = args.base_url.clone().or_else(|| config.base_url.clone());
+        let loader = move |provider: &str| -> Vec<codie_tui::app::ModelChoice> {
+            let curated = builtin_models()
+                .into_iter()
+                .filter(|candidate| candidate.provider.as_ref() == provider)
+                .collect::<Vec<_>>();
+            if provider == PROVIDER_OPENROUTER {
+                let base_url = base_url
+                    .clone()
+                    .unwrap_or_else(|| provider_base_url(PROVIDER_OPENROUTER).to_owned());
+                let catalog = OpenRouterCatalog::new(cache_dir.join("openrouter-models.json"))
+                    .with_endpoint(format!("{}/models", base_url.trim_end_matches('/')));
+                model_choices(&merge_models(curated, catalog.cached_coding_models()))
+            } else {
+                model_choices(&curated)
+            }
+        };
+        Some(Arc::new(loader)
+            as Arc<
+                dyn Fn(&str) -> Vec<codie_tui::app::ModelChoice> + Send + Sync,
+            >)
+    };
+
+    let providers = vec![
+        ProviderChoice {
+            id: "deepseek".to_owned(),
+            name: "DeepSeek".to_owned(),
+        },
+        ProviderChoice {
+            id: PROVIDER_OPENROUTER.to_owned(),
+            name: "OpenRouter".to_owned(),
+        },
+    ];
+    let switch_provider = {
+        let switchable = Arc::clone(&switchable);
+        let auth_path = config.auth_path();
+        let cache_dir = config.cache_dir.clone();
+        let api_key = args.api_key.clone();
+        let base_url = args.base_url.clone().or_else(|| config.base_url.clone());
+        let switch = move |provider: &str| -> Result<ProviderRuntime, String> {
+            validate_provider(provider).map_err(|error| format!("{error:#}"))?;
+            let store = AuthStore::new(&auth_path);
+            let key = resolve_key(api_key.as_deref(), &store, provider, env_var(provider))
+                .map_err(|error| format!("{error:#}"))?;
+            let mut client = match provider {
+                PROVIDER_OPENROUTER => OpenAiProvider::openrouter(key),
+                _ => OpenAiProvider::deepseek(key),
+            };
+            if let Some(base_url) = &base_url {
+                client = client.with_base_url(base_url.clone());
+            }
+            let mut models = builtin_models()
+                .into_iter()
+                .filter(|candidate| candidate.provider.as_ref() == provider)
+                .collect::<Vec<_>>();
+            if provider == PROVIDER_OPENROUTER {
+                let catalog =
+                    OpenRouterCatalog::new(cache_dir.join("openrouter-models.json")).with_endpoint(
+                        format!("{}/models", client.base_url().trim_end_matches('/')),
+                    );
+                let cached = catalog.cached_coding_models();
+                Arc::new(catalog).spawn_refresh();
+                models = merge_models(models, cached);
+            }
+            switchable.set(Arc::new(client.with_models(models.clone())));
+            Ok(ProviderRuntime {
+                default_model: default_model(provider).to_owned(),
+                models: model_choices(&models),
+            })
+        };
+        Some(Arc::new(switch)
+            as Arc<
+                dyn Fn(&str) -> Result<ProviderRuntime, String> + Send + Sync,
+            >)
+    };
     if max_turns == 0 {
         bail!("--max-turns must be greater than zero");
+    }
+
+    // Refresh the catalog for every mode. The task never blocks the run and
+    // never fails it (`PROV-021`).
+    if let Some(catalog) = &catalog {
+        Arc::clone(catalog).spawn_refresh();
     }
 
     let interactive = !args.print
@@ -308,6 +473,9 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
             },
             context_window: model.context_window,
             models,
+            models_loader,
+            providers,
+            switch_provider,
             thinking,
             max_turns,
             session,
@@ -324,6 +492,7 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
             preamble: preamble.clone(),
             append: append.clone(),
             customizations: customizations.clone(),
+            extensions: Arc::clone(&extensions),
         };
         return codie_tui::run(options).await;
     }
@@ -361,24 +530,76 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
             session,
             history,
             model: model_ref,
+            models: provider_models,
             context_window: u64::from(model.context_window),
             thinking,
             max_turns,
             preamble,
             append,
             customizations,
+            extensions: Arc::clone(&extensions),
         })
         .await;
     }
 
-    let text = read_prompt(&args)?;
+    let mut text = read_prompt(&args)?;
+    let mut session = open_session(&args, &cwd, &session_dir)?;
+    let session_id = session.as_ref().map(|session| session.id().to_owned());
+    extensions.set_session_id(session_id.clone());
+    let model_ref = ModelRef {
+        api: model.api.to_string(),
+        provider: provider_id.clone(),
+        model: model_id.clone(),
+    };
+    let session_info = ExtSessionInfo {
+        id: session_id.clone(),
+        cwd: cwd.display().to_string(),
+        model: Some(model_id.clone()),
+    };
+
+    if let Some(invocation) = extensions
+        .resolve_command(&text)
+        .map_err(anyhow::Error::msg)?
+    {
+        let result = extensions
+            .invoke_command(&invocation, &session_info)
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        if let Some(prompt) = result.prompt {
+            text = prompt;
+        } else {
+            if let Some(display) = result.display {
+                if !matches!(args.mode, OutputMode::Json) {
+                    if let Some(title) = display.title {
+                        println!("{title}");
+                    }
+                    println!("{}", display.text);
+                }
+            }
+            extensions.shutdown("command complete").await;
+            return Ok(0);
+        }
+    }
+
+    let submitted = extensions.user_submit(&session_info, &text).await;
+    if submitted.block {
+        bail!(
+            "{}",
+            submitted
+                .reason
+                .unwrap_or_else(|| "prompt blocked by an extension".to_owned())
+        );
+    }
+    if let Some(prompt) = submitted.prompt {
+        text = prompt;
+    }
+
     let expansion = expand_attachments(&text, &cwd);
     for error in &expansion.errors {
         eprintln!("warning: {error}");
     }
     let prompt_message = Message::user_with_content(expansion.content);
 
-    let mut session = open_session(&args, &cwd, &session_dir)?;
     let mut history = session
         .as_ref()
         .map(Session::projection)
@@ -393,15 +614,11 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
         append.as_deref(),
         &customizations,
     )?;
+    extensions.session_start(&session_info).await;
 
     let cancel = CancellationToken::new();
     let interrupted = install_signal_handlers(cancel.clone());
 
-    let model_ref = ModelRef {
-        api: model.api.to_string(),
-        provider: provider_id.clone(),
-        model: model_id.clone(),
-    };
     let mut agent_config =
         AgentConfig::new(model_ref.clone(), cwd.clone()).map_err(anyhow::Error::msg)?;
     agent_config.thinking = thinking;
@@ -409,7 +626,10 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
     agent_config.session_id = session.as_ref().map(|session| session.id().to_owned());
     agent_config.cancel = cancel.clone();
 
-    let agent = Agent::new(Arc::clone(&provider), Arc::clone(&toolbox));
+    let agent = match extensions.hooks() {
+        Some(hooks) => Agent::with_hooks(Arc::clone(&provider), Arc::clone(&toolbox), hooks),
+        None => Agent::new(Arc::clone(&provider), Arc::clone(&toolbox)),
+    };
 
     if matches!(args.mode, OutputMode::Json) {
         match session.as_ref() {
@@ -424,14 +644,6 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
                 })
             ),
         }
-    }
-
-    // Refresh the OpenRouter catalog after the first output is written. The
-    // task never blocks the run and never fails it (`PROV-021`).
-    if provider_id == "openrouter" {
-        let catalog = OpenRouterCatalog::new(config.cache_dir.join("openrouter-models.json"))
-            .with_endpoint(catalog_endpoint);
-        Arc::new(catalog).spawn_refresh();
     }
 
     let context_window = u64::from(model.context_window);
@@ -584,6 +796,7 @@ pub(crate) async fn run(args: RunArgs) -> Result<u8> {
         eprintln!("run ended with status: {status:?}");
     }
 
+    extensions.shutdown("run complete").await;
     Ok(exit_code(
         status,
         final_stop,
@@ -702,9 +915,61 @@ fn validate_provider(provider: &str) -> Result<()> {
 
 fn default_model(provider: &str) -> &'static str {
     match provider {
-        "openrouter" => "deepseek/deepseek-v4.1-flash-1017",
+        PROVIDER_OPENROUTER => "openrouter/auto",
         _ => "deepseek-flash",
     }
+}
+
+/// A chat client whose inner provider can be swapped at runtime.
+///
+/// The agent and tool registry keep one stable `Arc<dyn ChatClient>` for the
+/// whole session; `/provider` replaces the inner client instead of rebuilding
+/// them.
+struct SwitchableClient {
+    current: std::sync::RwLock<Arc<dyn ChatClient>>,
+}
+
+impl SwitchableClient {
+    fn new(client: Arc<dyn ChatClient>) -> Self {
+        Self {
+            current: std::sync::RwLock::new(client),
+        }
+    }
+
+    fn set(&self, client: Arc<dyn ChatClient>) {
+        *self
+            .current
+            .write()
+            .unwrap_or_else(|error| error.into_inner()) = client;
+    }
+}
+
+impl ChatClient for SwitchableClient {
+    fn stream(
+        &self,
+        context: &[Message],
+        options: &codie_core::StreamOptions,
+    ) -> codie_core::AssistantEventStream {
+        let client = self
+            .current
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        client.stream(context, options)
+    }
+}
+
+/// Converts adapter models into the picker entries the TUI consumes.
+fn model_choices(models: &[Model]) -> Vec<codie_tui::app::ModelChoice> {
+    models
+        .iter()
+        .map(|model| codie_tui::app::ModelChoice {
+            provider: model.provider.to_string(),
+            id: model.id.clone(),
+            name: model.name.clone(),
+            context_window: model.context_window,
+        })
+        .collect()
 }
 
 /// Asks the user whether to trust the project's `.codie/` resources.
@@ -749,7 +1014,11 @@ fn read_prompt(args: &RunArgs) -> Result<String> {
     Ok(text)
 }
 
-fn select_tools(spec: Option<&str>, no_tools: bool) -> Result<Registry> {
+fn select_tools(
+    spec: Option<&str>,
+    no_tools: bool,
+    extension_tools: &[String],
+) -> Result<Registry> {
     if no_tools {
         return Ok(Registry::new(Vec::new()));
     }
@@ -771,7 +1040,10 @@ fn select_tools(spec: Option<&str>, no_tools: bool) -> Result<Registry> {
 
     let unknown = names
         .iter()
-        .filter(|name| name.parse::<ToolName>().is_err())
+        .filter(|name| {
+            name.parse::<ToolName>().is_err()
+                && !extension_tools.iter().any(|extension| extension == **name)
+        })
         .copied()
         .collect::<Vec<_>>();
     if !unknown.is_empty() {
@@ -794,7 +1066,12 @@ fn tool_for(name: ToolName) -> Arc<dyn Tool> {
     }
 }
 
-fn allowed_tools(config: &Config, cli: Option<&str>, allow_all: bool) -> Vec<String> {
+fn allowed_tools(
+    config: &Config,
+    cli: Option<&str>,
+    allow_all: bool,
+    extension_tools: &[String],
+) -> Vec<String> {
     let mut allowed = config.allow.clone();
     if let Some(cli) = cli {
         allowed.extend(
@@ -810,6 +1087,7 @@ fn allowed_tools(config: &Config, cli: Option<&str>, allow_all: bool) -> Vec<Str
                 .into_iter()
                 .map(|tool| tool.as_str().to_owned()),
         );
+        allowed.extend(extension_tools.iter().cloned());
     }
     allowed
 }

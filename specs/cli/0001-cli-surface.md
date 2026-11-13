@@ -1,10 +1,10 @@
 ---
 id: SPEC-CLI-001
 title: CLI surface, configuration, and exit codes
-status: accepted
-version: 1.0.0
+status: implemented
+version: 1.1.0
 owners: ["@codie-maintainers"]
-requirements: ["CLI-001", "CLI-002", "CLI-003", "CLI-004", "CLI-005", "CLI-006", "CLI-007"]
+requirements: ["CLI-001", "CLI-002", "CLI-003", "CLI-004", "CLI-005", "CLI-006", "CLI-007", "CLI-008"]
 ---
 
 # Context
@@ -27,7 +27,7 @@ Verification: `crates/codie-cli/tests/e2e.rs::signals_map_to_documented_exit_cod
 **CLI-004 (MUST)** `--mode json` writes only JSONL records to stdout; diagnostics go to stderr.
 Verification: `crates/codie-cli/tests/e2e.rs::golden_path_end_to_end_with_a_fake_provider`
 
-**CLI-005 (MUST)** Unknown flags fail fast with a usage error and exit 1; extension flag deferral is Phase 6.
+**CLI-005 (MUST)** Unknown flags fail fast with a usage error and exit 1 when no loaded extension claims them.
 Verification: `crates/codie-cli/tests/cli.rs::spec_cli_005_unknown_flags_fail_fast`
 
 **CLI-006 (MUST)** `--api-key` requires an explicit `--model` and is never written to disk.
@@ -35,6 +35,9 @@ Verification: `crates/codie-cli/tests/cli.rs::spec_prov_034_api_key_is_ephemeral
 
 **CLI-007 (MUST)** Startup performs no network I/O before the first output. The OpenRouter catalog refresh is spawned after the session header and runs in the background.
 Verification: `crates/codie-cli/tests/cli.rs::spec_cli_007_startup_makes_no_network_call`
+
+**CLI-008 (MUST)** Unknown long flags are deferred until extensions load. A flag claimed by an extension is passed in the initialize handshake; an unclaimed long flag, an unknown short flag, or a value-shape mismatch exits 1. Management subcommands never defer flags.
+Verification: `crates/codie-cli/tests/extensions.rs::spec_ext_015_extension_flags_are_validated`
 
 # Exit-code table
 

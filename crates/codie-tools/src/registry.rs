@@ -274,6 +274,17 @@ mod tests {
     }
 
     #[test]
+    #[spec("EXT-010")]
+    fn spec_ext_010_extension_tools_use_host_policy() {
+        assert!(
+            Policy::headless(Vec::<String>::new())
+                .denial("todo_add")
+                .is_some()
+        );
+        assert!(Policy::headless(["todo_add"]).denial("todo_add").is_none());
+    }
+
+    #[test]
     fn policy_toolbox_delegates_lookup_and_declarations() {
         let toolbox = PolicyToolbox::new(Arc::new(Registry::builtin()), Policy::headless(["bash"]));
         assert!(toolbox.get("write").is_some());

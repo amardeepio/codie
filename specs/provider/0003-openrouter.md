@@ -22,6 +22,8 @@ requirement IDs; `PROV-018` (attribution), `PROV-020` (model selection), `PROV-0
 | Base URL | `https://openrouter.ai/api/v1` |
 | Default model | `openrouter/auto` |
 | Full model IDs | namespaced IDs such as `deepseek/deepseek-v4.1-flash-1017`, used verbatim |
+| Coding picker | `programming` category or coding index ≥ 70, with tool calling |
+| Switching | `/provider` in the TUI swaps the client and selects the provider default |
 | Wire API | `openai-completions` only |
 | Max-output field | `max_completion_tokens` unless the model overrides it |
 | Thinking encoding | `reasoning: { effort }`, with `off` mapped to `none` |
@@ -33,13 +35,22 @@ requirement IDs; `PROV-018` (attribution), `PROV-020` (model selection), `PROV-0
 
 # Catalog refresh
 
-- Endpoint: `/models` under the configured base URL.
+- Endpoints: `/models` under the configured base URL, plus `/models?category=programming` for the curated
+  coding list. The two responses are cached together with separate ETags.
 - Freshness: four hours; a fresh cache makes no request.
 - Conditional requests use the stored `ETag`; `304 Not Modified` extends freshness.
 - Timeout: four seconds.
 - Failures (transport, timeout, non-2xx, malformed JSON) are logged and the stale cache is served. A refresh
-  never fails a run and never blocks startup.
+  never fails a run and never blocks startup; it is spawned in interactive, print, JSON, and RPC modes.
 - Only text-in/text-out chat models are selectable; embedding and image-output models are excluded.
+- The picker narrows that set to coding models: tool calling plus either membership in the `programming`
+  category or a coding index of at least 70. `:batch` and `~` aliases are dropped and shared base IDs are
+  deduplicated. Unscored models in the category are still offered, so newly released models appear before
+  benchmarks exist.
+- Model metadata from the catalog carries the real context window, output limit, price, and reasoning efforts
+  into the adapter. A model that advertises mandatory reasoning never sends `reasoning: { effort: "none" }`.
+- Curated built-ins are always merged first, so `openrouter/auto` stays the default and an empty cache still
+  leaves a working picker.
 
 # Verification
 

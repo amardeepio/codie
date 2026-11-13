@@ -11,15 +11,34 @@ that major series, with migrations applied on read.
 
 ### Added
 
-- Nothing yet.
+- Out-of-process extensions (`codie-ext`): a versioned JSON-RPC 2.0 protocol over stdio with process
+  supervision, capability negotiation, hook and tool timeouts, and process-group termination.
+- Hook points `session_start`, `session_shutdown`, `before_agent_start`, `context`, `before_tool_call`,
+  `after_tool_call`, `turn_end`, and `user_submit`.
+- Custom extension tools, slash commands, deferred command-line flags, and structured render hints
+  (`text`, `markdown`, `code`, `diff`).
+- Extension discovery from user config, trusted project roots, and `--extension`; `--no-extensions` and
+  `[extensions] disabled` configuration.
+- Generated extension manifest, protocol, and hook schemas.
+- Python and TypeScript SDKs and `todo`, `plan-mode`, and `subagent-lite` examples.
+- OpenRouter model picker backed by the live catalog: coding models are filtered by the `programming` category
+  or a coding index of at least 70, carry their real context window, output limit, price, and reasoning efforts,
+  and refresh in the background.
+- `/provider` in the TUI switches between DeepSeek and OpenRouter in place, selects the provider default, and
+  keeps the session running.
 
 ### Changed
 
-- Nothing yet.
+- `codie models` lists the merged OpenRouter catalog from the local cache and warns when that cache is stale.
+- A configured `default_model` is only used when it belongs to the selected provider; otherwise codie falls
+  back to the provider default.
+- `codie config get` and `codie config set` understand `extensions-disabled`.
+- Project trust now covers `.codie/extensions`.
 
 ### Fixed
 
-- Nothing yet.
+- The interactive TUI now refreshes the OpenRouter catalog instead of only headless runs doing so.
+- The OpenRouter model picker no longer shows only `openrouter/auto`; it lists the merged coding catalog.
 
 ### Removed
 
@@ -27,7 +46,8 @@ that major series, with migrations applied on read.
 
 ### Security
 
-- Nothing yet.
+- Extension children inherit a sanitized environment with no provider API keys or `TOKEN` variables.
+- Extension tools go through the same headless deny and interactive ask policy as built-in mutating tools.
 
 ## [0.6.1] - 2026-11-12
 

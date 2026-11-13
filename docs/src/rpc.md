@@ -31,7 +31,7 @@ the same as [`--mode json`](../../schemas/json-events.schema.json).
 
 | Command | Fields | Result |
 |---|---|---|
-| `prompt` | `message` | Starts a run, or queues a follow-up while one is active |
+| `prompt` | `message` | Starts a run, or queues a follow-up while one is active. Extension commands such as `/ext:todo:todo` are expanded first. |
 | `steer` | `message` | Adds a steering message to the active run |
 | `follow_up` | `message` | Queues a message after the active run |
 | `abort` | — | Cancels the active run |

@@ -23,7 +23,10 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
     let (permission_tx, mut permission_rx) = mpsc::unbounded_channel();
     let broker = PermissionBroker::new(permission_tx, options.auto_allowed.clone());
     let toolbox: Arc<dyn Toolbox> = Arc::new(PermissionToolbox::new(registry.clone(), broker));
-    let agent = Arc::new(Agent::new(Arc::clone(&options.client), toolbox.clone()));
+    let agent = Arc::new(match options.extensions.hooks() {
+        Some(hooks) => Agent::with_hooks(Arc::clone(&options.client), toolbox.clone(), hooks),
+        None => Agent::new(Arc::clone(&options.client), toolbox.clone()),
+    });
 
     let mut history = options.history.clone();
     let mut last_assistant = String::new();
@@ -50,6 +53,14 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
         env!("CARGO_PKG_VERSION"),
         options.model.model
     );
+
+    let mut session_info = codie_protocol::ext::ExtSessionInfo {
+        id: session.as_ref().map(|session| session.id().to_owned()),
+        cwd: options.cwd.display().to_string(),
+        model: Some(options.model.model.clone()),
+    };
+    options.extensions.set_session_id(session_info.id.clone());
+    options.extensions.session_start(&session_info).await;
 
     let cancel = CancellationToken::new();
     let signal = cancel.clone();
@@ -96,16 +107,71 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
             continue;
         }
         if let Some(command) = parse_command(&line) {
+            if matches!(command, Command::Unknown(_)) {
+                match handle_extension_command(&options, &session, &line).await {
+                    Ok(Some(prompt)) => {
+                        run_prompt(
+                            &agent,
+                            &mut history,
+                            &mut session,
+                            &options,
+                            &cancel,
+                            &mut permission_rx,
+                            &mut last_assistant,
+                            prompt,
+                        )
+                        .await?;
+                        continue;
+                    }
+                    Ok(None) if line.trim_start().starts_with("/ext:") => continue,
+                    Ok(None) => {}
+                    Err(error) => {
+                        println!("{error}");
+                        continue;
+                    }
+                }
+            }
             match command {
                 Command::Quit => break,
                 Command::Help | Command::Hotkeys => {
                     println!(
-                        "/help /quit /new /session /tree /fork /clone /name /export [path] /export html [path] /copy /debug /update /theme /model [id] /thinking [level] /compact /skill:<name> /template:<name> /reload"
+                        "/help /quit /new /session /tree /fork /clone /name /export [path] /export html [path] /copy /debug /update /theme /provider [id] /model [id] /thinking [level] /compact /skill:<name> /template:<name> /reload"
                     )
                 }
                 Command::Theme(argument) => match argument {
                     Some(name) => println!("Theme: {name} (full mode only)"),
                     None => println!("Themes: system, dark, light"),
+                },
+                Command::Provider(argument) => match argument {
+                    Some(provider) => {
+                        let Some(switch) = options.switch_provider.clone() else {
+                            println!("Provider switching is unavailable in this mode.");
+                            continue;
+                        };
+                        match switch(&provider) {
+                            Ok(runtime) => {
+                                options.model.provider = provider.clone();
+                                options.model.model = runtime.default_model.clone();
+                                options.models = runtime.models;
+                                if let Some(session) = session.as_mut() {
+                                    session.append_model_change(
+                                        provider.clone(),
+                                        runtime.default_model.clone(),
+                                    )?;
+                                }
+                                session_info.model = Some(runtime.default_model.clone());
+                                println!("Provider: {provider} · model: {}", runtime.default_model);
+                            }
+                            Err(error) => println!("Cannot switch provider: {error}"),
+                        }
+                    }
+                    None => {
+                        let current = &options.model.provider;
+                        for provider in &options.providers {
+                            let marker = if &provider.id == current { "*" } else { " " };
+                            println!("{marker} {} ({})", provider.name, provider.id);
+                        }
+                    }
                 },
                 Command::Model(argument) => {
                     if let Some(model) = argument {
@@ -312,8 +378,12 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
                     Err(error) => println!("Update check failed: {error}"),
                 },
                 Command::New => {
+                    options.extensions.session_shutdown("new session").await;
                     session = Some(Session::create(&options.cwd, &options.session_dir)?);
                     history.clear();
+                    session_info.id = session.as_ref().map(|session| session.id().to_owned());
+                    options.extensions.set_session_id(session_info.id.clone());
+                    options.extensions.session_start(&session_info).await;
                     println!("Started a new session.");
                 }
                 Command::Compact(instructions) => {
@@ -398,6 +468,17 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
             continue;
         }
 
+        let submitted = options.extensions.user_submit(&session_info, &line).await;
+        if submitted.block {
+            println!(
+                "{}",
+                submitted
+                    .reason
+                    .unwrap_or_else(|| "prompt blocked by an extension".to_owned())
+            );
+            continue;
+        }
+        let line = submitted.prompt.unwrap_or(line);
         run_prompt(
             &agent,
             &mut history,
@@ -411,7 +492,49 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
         .await?;
     }
 
+    options.extensions.shutdown("plain exit").await;
     Ok(if cancel.is_cancelled() { 130 } else { 0 })
+}
+
+async fn handle_extension_command(
+    options: &TuiOptions,
+    session: &Option<Session>,
+    text: &str,
+) -> Result<Option<String>> {
+    let Some(invocation) = options
+        .extensions
+        .resolve_command(text)
+        .map_err(anyhow::Error::msg)?
+    else {
+        return Ok(None);
+    };
+    let session_info = codie_protocol::ext::ExtSessionInfo {
+        id: session.as_ref().map(|session| session.id().to_owned()),
+        cwd: options.cwd.display().to_string(),
+        model: Some(options.model.model.clone()),
+    };
+    match options
+        .extensions
+        .invoke_command(&invocation, &session_info)
+        .await
+    {
+        Ok(result) => {
+            if let Some(prompt) = result.prompt {
+                Ok(Some(prompt))
+            } else {
+                if let Some(display) = result.display {
+                    if let Some(title) = display.title {
+                        println!("{title}");
+                    }
+                    println!("{}", display.text);
+                } else {
+                    println!("Extension command handled.");
+                }
+                Ok(None)
+            }
+        }
+        Err(error) => Err(anyhow::anyhow!(error.to_string())),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

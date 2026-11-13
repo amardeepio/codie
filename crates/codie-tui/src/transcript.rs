@@ -28,6 +28,8 @@ pub struct ToolBlock {
     pub status: ToolStatus,
     /// Model-visible output, when finished.
     pub output: String,
+    /// Optional structured render hint from an extension.
+    pub render: Option<codie_protocol::ext::ExtRenderHint>,
     /// Whether the full output is visible.
     pub expanded: bool,
     /// When the call started, for the live elapsed indicator.
@@ -221,6 +223,7 @@ impl Transcript {
             arguments,
             status: ToolStatus::Running,
             output: String::new(),
+            render: None,
             expanded: false,
             started: Some(Instant::now()),
         }));
@@ -237,7 +240,13 @@ impl Transcript {
     }
 
     /// Finishes a tool block by id.
-    pub fn tool_end(&mut self, id: &str, output: String, is_error: bool) {
+    pub fn tool_end(
+        &mut self,
+        id: &str,
+        output: String,
+        is_error: bool,
+        render: Option<codie_protocol::ext::ExtRenderHint>,
+    ) {
         if let Some(block) = self.entries.iter_mut().rev().find_map(|entry| match entry {
             Entry::Tool(block) if block.id == id => Some(block),
             _ => None,
@@ -248,6 +257,7 @@ impl Transcript {
                 ToolStatus::Success
             };
             block.output = output;
+            block.render = render;
             self.follow = true;
         }
     }
@@ -356,7 +366,7 @@ mod tests {
         assert_eq!(running.name, "bash");
         assert!(running.elapsed_label().is_some());
 
-        transcript.tool_end("call_1", "ok".into(), false);
+        transcript.tool_end("call_1", "ok".into(), false, None);
         assert!(transcript.running_tool().is_none());
     }
 
@@ -369,7 +379,7 @@ mod tests {
             "edit".into(),
             json!({"path": "src/lib.rs"}),
         );
-        transcript.tool_end("call_1", "ok".into(), false);
+        transcript.tool_end("call_1", "ok".into(), false, None);
         assert!(matches!(
             &transcript.entries()[0],
             Entry::Tool(block)

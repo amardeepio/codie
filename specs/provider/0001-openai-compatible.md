@@ -97,10 +97,10 @@ Verification: `crates/codie-ai/tests/openrouter.rs::spec_prov_018_attribution_he
 **PROV-019 (MUST)** Request fields are emitted only when the selected model's `compat` declarations support them. Unsupported fields MUST be omitted rather than sent with `null` or a default value, and capability resolution MUST be per model, not per provider.
 Verification: `crates/codie-ai/tests/openai_compat.rs::spec_prov_019_request_field_gating`
 
-**PROV-020 (MUST)** OpenRouter model IDs are used verbatim (`anthropic/claude-...`, `deepseek/deepseek-...`). A model is selectable only when `architecture.input_modalities` includes `text` and the model is a chat model. Non-chat and non-text models are excluded from selection, not silently coerced.
-Verification: `crates/codie-ai/tests/openrouter.rs::spec_prov_020_model_id_and_filtering`
+**PROV-020 (MUST)** OpenRouter model IDs are used verbatim (`anthropic/claude-...`, `deepseek/deepseek-...`). A model is selectable only when `architecture.input_modalities` includes `text` and the model is a chat model. Non-chat and non-text models are excluded from selection, not silently coerced. The OpenRouter picker offers coding models only: tool-capable models that either appear in the `programming` use-case category or report an Artificial Analysis coding index of at least 70. Variant aliases (`:batch` and `~` prefixes) are excluded, and models sharing a base ID are deduplicated. Catalog prices are per-token USD strings, converted to USD per million tokens; negative (variable) prices become zero.
+Verification: `crates/codie-ai/tests/catalog.rs::spec_prov_020_model_id_and_filtering`, `crates/codie-ai/tests/catalog.rs::spec_prov_020_coding_models_filter_and_order`
 
-**PROV-021 (MUST)** Catalog refresh is best-effort: a 4-second timeout, ETag support, a 4-hour freshness window, and stale cache served on failure. Refresh never blocks startup and runs in the background after the first render. A refresh failure is logged and does not fail the run.
+**PROV-021 (MUST)** Catalog refresh is best-effort: a 4-second timeout, ETag support, a 4-hour freshness window, and stale cache served on failure. Refresh never blocks startup and runs in the background in every mode, including the interactive TUI. A refresh failure is logged and does not fail the run. The full model list and the `programming` category are refreshed together but cached independently.
 Verification: `crates/codie-ai/tests/catalog.rs::spec_prov_021_catalog_refresh_is_non_blocking`
 
 **PROV-022 (MUST)** OpenRouter is used only through its OpenAI-compatible endpoint in v1. Anthropic-native passthrough, provider-specific SDKs, and direct vendor adapters are out of scope and MUST NOT be selected by the router.
