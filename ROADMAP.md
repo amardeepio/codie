@@ -4,12 +4,14 @@ codie is built in gated phases. Each phase ends with a demoable, installable art
 No phase starts before the previous phase's exit criteria are met. Durations are planning bounds for one
 full-time engineer, not commitments; the exit criteria are the real gate.
 
-**Current status: Phase 6 (extensions) complete; release line at `0.8.0`.** `0.1.0` shipped the
+**Current status: release candidate `0.9.0-rc.1`; Phase 7 in progress.** `0.1.0` shipped the
 headless core, `0.2.0` the interactive app, `0.3.0` full-fidelity sessions, `0.4.0` customization and trust,
 `0.5.0` RPC and export, `0.6.0` the TUI refresh, and `0.7.0` the out-of-process extension protocol, hooks,
 manifests, custom tools and commands, and Python and TypeScript examples. `0.7.1` refined `/update`, and
-`0.8.0` adds rich edit/write previews, collapsed reasoning, `Esc`/`/stop` cancellation, a context meter and
+`0.8.0` added rich edit/write previews, collapsed reasoning, `Esc`/`/stop` cancellation, a context meter and
 `/usage`, permission review previews, tool navigation, folded turns, and session picker previews.
+`0.9.0-rc.1` adds a Windows x64 preview build, the `powershell` tool, the one-command PowerShell installer,
+and the release-candidate documentation set.
 
 ## Phase summary
 
@@ -22,7 +24,7 @@ manifests, custom tools and commands, and Python and TypeScript examples. `0.7.1
 | 4 | Customization and trust: skills, templates, `SYSTEM.md`, images | 2 weeks | 11 weeks | `0.4.0` — skills/templates/trust | Complete |
 | 5 | Protocols and polish: RPC, schemas, export, performance | 2 weeks | 13 weeks | `0.5.0` — RPC/export | Complete |
 | 6 | Extensions: JSON-RPC protocol, hooks, manifests, examples | 3 weeks | 16 weeks | `0.7.0` — extension protocol | Complete |
-| 7 | Release hardening: macOS matrix, signing, notarization, fuzzing | 2 weeks | 18 weeks | `1.0.0` | Planned |
+| 7 | Release hardening: macOS matrix, signing, notarization, fuzzing | 2 weeks | 18 weeks | `1.0.0` | In progress |
 
 ## Phase 0: Foundations
 
@@ -166,6 +168,9 @@ run against the same protocol; a hung extension is killed without hanging the ag
 ## Later phases
 
 - **Phase 7:** macOS terminal and packaging matrix, signing, notarization, fuzzing, SBOM, 1.0 release.
+  `0.9.0-rc.1` lands the Windows x64 preview, the PowerShell tool and installer, and the release-candidate
+  documentation; signing, notarization, SBOM, fuzzing, and the full terminal matrix remain for the `1.0.0`
+  gate.
 
 Full scope, tasks, and exit criteria are in [`PLAN.MD`](PLAN.MD) §8. Platform tiers are in
 [`docs/src/platforms.md`](docs/src/platforms.md). Scope changes require an RFC; phase changes require maintainer

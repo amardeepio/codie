@@ -128,6 +128,7 @@ snake_case so failures are readable without the macro.
 | [`SPEC-SKILL-001`](prompt/0002-skills.md) — Skills | `SKILL-001`..`SKILL-004` | implemented | 4 |
 | [`SPEC-TMPL-001`](prompt/0003-templates.md) — Prompt templates | `TMPL-001`..`TMPL-003` | implemented | 4 |
 | [`SPEC-CLI-001`](cli/0001-cli-surface.md) — CLI surface | `CLI-001`..`CLI-008` | implemented | 1, 6 |
+| [`SPEC-CLI-002`](cli/0002-windows-preview.md) — Windows x64 preview packaging and install | `CLI-009`..`CLI-011` | implemented | 7 |
 | [`SPEC-PROTO-001`](protocol/0001-json-events.md) — JSON events | `PROTO-001`, `PROTO-002`, `PROTO-004`, `PROTO-005` | accepted | 1 |
 | [`SPEC-PROTO-002`](protocol/0002-rpc.md) — RPC mode | `PROTO-003`, `PROTO-006` | implemented | 5 |
 | [`SPEC-SEC-001`](security/0001-permissions.md) — Permissions | `SEC-001`..`SEC-006` | accepted | 1 |

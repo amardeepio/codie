@@ -68,6 +68,7 @@ enum Commands {
 #[tokio::main]
 async fn main() -> ExitCode {
     install_crash_reporter();
+    codie_ai::update::cleanup_stale_update_backup();
     let raw = std::env::args_os().skip(1).collect();
     let (raw, deferred) = ext_flags::split(raw);
     let cli =
@@ -157,7 +158,9 @@ fn write_crash_report(info: &std::panic::PanicHookInfo<'_>) -> Option<PathBuf> {
     let base = std::env::var_os("CODIE_DATA_DIR")
         .map(PathBuf::from)
         .or_else(|| {
-            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share/codie"))
+            std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .map(|home| PathBuf::from(home).join(".local/share/codie"))
         })?;
     let directory = base.join("crashes");
     std::fs::create_dir_all(&directory).ok()?;

@@ -430,3 +430,20 @@ fn sessions_export_html_is_self_contained() {
     assert!(!html.contains("<script>"));
     assert!(!html.contains("<script "));
 }
+
+#[spec("CLI-010")]
+#[test]
+fn spec_cli_010_windows_installer_is_one_command() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script = std::fs::read_to_string(root.join("install.ps1")).expect("install.ps1");
+    assert!(
+        script.contains("irm https://raw.githubusercontent.com/amardeepio/codie/main/install.ps1")
+    );
+    assert!(script.contains("x86_64-pc-windows-msvc"));
+    assert!(script.contains("Get-FileHash -Algorithm SHA256"));
+    assert!(script.contains("Expand-Archive"));
+    assert!(script.contains("LOCALAPPDATA"));
+    assert!(script.contains("CODIE_VERSION"));
+    assert!(script.contains("CODIE_NO_PATH"));
+    assert!(script.contains("SetEnvironmentVariable('Path'"));
+}

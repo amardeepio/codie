@@ -1,9 +1,9 @@
 # Installation
 
-`codie` ships as a single binary. The install script supports macOS 13+ on arm64 and x64 (tier 1) and Linux
-glibc 2.31+ on arm64 and x64 (best effort).
+`codie` ships as a single binary. The install script supports macOS 13+ on arm64 and x64 (tier 1), Linux
+glibc 2.31+ on arm64 and x64 (best effort), and Windows 10 21H2+ / Windows 11 x64 (preview).
 
-## Install with curl
+## Install with curl (macOS and Linux)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh | sh
@@ -16,7 +16,7 @@ Pin a release or choose another directory:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh \
-  | sh -s -- --version 0.8.0
+  | sh -s -- --version 0.9.0-rc.1
 
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh \
   | sh -s -- --bin-dir "$HOME/bin"
@@ -31,6 +31,24 @@ curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh -o
 less install.sh
 sh install.sh
 ```
+
+## Install on Windows (preview)
+
+Open PowerShell and run:
+
+```powershell
+irm https://raw.githubusercontent.com/amardeepio/codie/main/install.ps1 | iex
+```
+
+The script installs to `%LOCALAPPDATA%\Programs\codie`, verifies the SHA-256 checksum, adds the directory to
+your user `PATH`, and runs `codie --version`. Pin the release candidate with:
+
+```powershell
+$env:CODIE_VERSION = "0.9.0-rc.1"
+irm https://raw.githubusercontent.com/amardeepio/codie/main/install.ps1 | iex
+```
+
+See [Windows (preview)](windows.md) for requirements, known gaps, and troubleshooting.
 
 ## What the installer does
 
@@ -53,10 +71,10 @@ temporary directory that is removed afterwards.
 | macOS 13+ arm64 | Tier 1 | Release-blocking. |
 | macOS 13+ x64 | Tier 1 | Release-blocking. |
 | Linux glibc 2.31+ | Tier 2 | Best effort; WSL works through the same target. |
-| Windows | Post-1.0 | Not supported by the installer. |
+| Windows 10 21H2+ / 11 x64 | Preview | Not release-blocking; `powershell` replaces `bash`. |
 
-`curl` is required. Building from source additionally needs `git` and Rust 1.88 or newer. See
-[Platforms](platforms.md) for the full support statement.
+`curl` is required on macOS and Linux. PowerShell 5.1+ is required on Windows. Building from source
+additionally needs `git` and Rust 1.88 or newer. See [Platforms](platforms.md) for the full support statement.
 
 ## Verify the install
 
@@ -67,12 +85,20 @@ codie auth login deepseek    # or: codie auth login openrouter
 codie auth status
 ```
 
+On Windows, use `Get-Command codie` instead of `command -v`.
+
 ## Upgrade
 
 Run the installer again. It replaces the existing binary in place.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh | sh
+```
+
+On Windows:
+
+```powershell
+irm https://raw.githubusercontent.com/amardeepio/codie/main/install.ps1 | iex
 ```
 
 Install a newer release from the published artifacts:
@@ -87,16 +113,29 @@ Check without installing anything:
 codie update --check
 ```
 
+Release candidates are pre-releases and are not offered by `codie update`; pin one with `CODIE_VERSION` and
+the platform installer.
+
 ## Uninstall
 
 ```bash
 rm ~/.local/bin/codie
 ```
 
+On Windows:
+
+```powershell
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\Programs\codie"
+```
+
 Remove `~/.local/share/codie` and `~/.config/codie` only if you also want to delete sessions, credentials, and
-configuration. The installer does not touch those directories.
+configuration. The installer does not touch those directories. On Windows the equivalent paths are under
+`%USERPROFILE%\.local\share\codie` and `%USERPROFILE%\.config\codie`.
 
 ## Troubleshooting
+
+See [Troubleshooting](troubleshooting.md) for the full list, including Windows PATH, SmartScreen, provider,
+terminal, and update issues.
 
 ### `codie: command not found`
 
@@ -115,9 +154,10 @@ Retry, and if the failure persists report it at <https://github.com/amardeepio/c
 
 ### Source build is slow
 
-Tagged releases publish prebuilt archives for macOS (arm64/x64) and Linux (arm64/x64). If the requested tag has
-no artifact, the script compiles from source with Rust 1.88, which takes a few minutes. Older tags (including
-`0.5.0` and `0.6.0`) predate the release workflow and always build from source.
+Tagged releases publish prebuilt archives for macOS (arm64/x64), Linux (arm64/x64), and Windows x64. If the
+requested tag has no artifact, the Unix script compiles from source with Rust 1.88, which takes a few minutes.
+Older tags (including `0.5.0` and `0.6.0`) predate the release workflow and always build from source. Windows
+requires a published `.zip`.
 
 ### Building from a checkout
 

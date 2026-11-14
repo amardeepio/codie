@@ -121,6 +121,7 @@ fn language_for(path: &str) -> &'static str {
         "js" | "mjs" | "cjs" | "jsx" => "javascript",
         "ts" | "mts" | "cts" | "tsx" => "typescript",
         "sh" | "bash" | "zsh" => "bash",
+        "ps1" | "powershell" => "powershell",
         _ => "",
     }
 }

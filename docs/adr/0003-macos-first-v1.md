@@ -61,3 +61,9 @@ Negative:
 
 - `PLAN.MD` §12.5 (platform tiers), §12.6 (post-1.0 platform roadmap), §13.2 (D-11).
 - `docs/src/platforms.md`.
+
+## Addendum: 0.9.0 release candidate
+
+`0.9.0-rc.1` publishes a Windows x64 preview: an MSVC build, a PowerShell installer, and a `powershell` tool.
+This does not promote Windows to tier 1. Job Objects, ConPTY tests, long/UNC paths, CRLF preservation, signing,
+and Windows ARM64 remain post-1.0 work. macOS remains the only release-blocking platform.

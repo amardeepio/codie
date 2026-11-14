@@ -7,7 +7,8 @@ offline once dependencies are cached; no live provider credentials are required 
 
 - Rust 1.88, installed through `rust-toolchain.toml` (rustup selects it automatically).
 - `rustfmt` and `clippy` components, also pinned by the toolchain file.
-- macOS 13+ for the primary development path. Linux works for portability work. Windows is post-1.0.
+- macOS 13+ for the primary development path. Linux works for portability work. Windows x64 is a preview;
+  see [Windows (preview)](windows.md).
 - No Node, Bun, or Python runtime is required to build or run codie.
 
 ## Setup
@@ -21,6 +22,15 @@ cargo run -- --help
 ```
 
 The binary is `target/debug/codie`. `cargo run -- --version` prints the workspace version.
+
+On Windows x64, build and test with:
+
+```powershell
+cargo build --workspace --all-targets
+cargo test -p codie-tools --test powershell
+```
+
+The `bash` tool is POSIX-only; Windows registers `powershell` in the same registry slot.
 
 ## Quality gates
 

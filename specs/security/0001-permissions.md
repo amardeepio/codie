@@ -17,7 +17,7 @@ Requirements `SEC-007` and `SEC-008` (project trust and approval prompts) are Ph
 
 # Requirements
 
-**SEC-001 (MUST)** Read-only tools are permitted by default; `write`, `edit`, and `bash` are denied in headless mode unless they appear in the allow list.
+**SEC-001 (MUST)** Read-only tools are permitted by default; `write`, `edit`, and the platform shell (`bash` on macOS/Linux, `powershell` on Windows) are denied in headless mode unless they appear in the allow list.
 Verification: `crates/codie-tools/src/registry.rs::read_is_always_allowed`
 
 **SEC-002 (MUST)** An explicit deny wins over an allow for the same tool.

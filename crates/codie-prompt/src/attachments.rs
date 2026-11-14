@@ -158,7 +158,7 @@ fn find_token(text: &str) -> Option<usize> {
 /// Resolves `~`, absolute, and relative attachment paths.
 fn resolve(raw: &str, cwd: &Path) -> PathBuf {
     if let Some(rest) = raw.strip_prefix("~/")
-        && let Some(home) = std::env::var_os("HOME")
+        && let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
     {
         return PathBuf::from(home).join(rest);
     }

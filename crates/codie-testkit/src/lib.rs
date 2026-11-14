@@ -27,7 +27,14 @@ impl TempHome {
     /// Creates an isolated home with config, data, cache, and session folders.
     pub fn new() -> std::io::Result<Self> {
         let root = tempfile::tempdir()?;
-        for dir in ["config", "data", "cache", "sessions"] {
+        for dir in [
+            "config",
+            "data",
+            "cache",
+            "sessions",
+            "appdata",
+            "localappdata",
+        ] {
             std::fs::create_dir_all(root.path().join(dir))?;
         }
         Ok(Self { root })
@@ -68,6 +75,12 @@ impl TempHome {
     pub fn envs(&self) -> Vec<(String, PathBuf)> {
         vec![
             ("HOME".to_owned(), self.root.path().to_path_buf()),
+            ("USERPROFILE".to_owned(), self.root.path().to_path_buf()),
+            ("APPDATA".to_owned(), self.root.path().join("appdata")),
+            (
+                "LOCALAPPDATA".to_owned(),
+                self.root.path().join("localappdata"),
+            ),
             ("CODIE_CONFIG_DIR".to_owned(), self.config_dir()),
             ("CODIE_DATA_DIR".to_owned(), self.data_dir()),
             ("CODIE_CACHE_DIR".to_owned(), self.cache_dir()),
@@ -341,7 +354,7 @@ mod tests {
         assert!(home.data_dir().is_dir());
         assert!(home.cache_dir().is_dir());
         assert!(home.session_dir().is_dir());
-        assert_eq!(home.envs().len(), 5);
+        assert_eq!(home.envs().len(), 8);
     }
 
     #[test]

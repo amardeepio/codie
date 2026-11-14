@@ -143,9 +143,49 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  windows:
+    name: Windows ${{ matrix.target }}
+    needs: validate
+    runs-on: windows-2022
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --locked -p codie-cli --bin codie --target ${{ matrix.target }}
+      - name: Package
+        shell: pwsh
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $asset = "codie-v$env:VERSION-$env:TARGET.zip"
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          Compress-Archive -Path "target/$env:TARGET/release/codie.exe" -DestinationPath "dist/$asset" -Force
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath "dist/$asset").Hash.ToLower()
+          Set-Content -LiteralPath "dist/$asset.sha256" -Value "$hash  $asset" -Encoding ascii
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codie-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
   publish:
     name: publish release
-    needs: [validate, macos, linux]
+    needs: [validate, macos, linux, windows]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4
@@ -156,13 +196,13 @@ jobs:
         run: |
           set -eu
           cd dist
-          archives=$(ls ./*.tar.gz | wc -l)
-          if [ "$archives" -ne 4 ]; then
-            echo "expected 4 release archives, found $archives" >&2
+          archives=$(ls ./*.tar.gz ./*.zip | wc -l)
+          if [ "$archives" -ne 5 ]; then
+            echo "expected 5 release archives, found $archives" >&2
             ls -la >&2
             exit 1
           fi
-          sha256sum ./*.tar.gz | sed 's#\./##' | tee sha256.sum
+          sha256sum ./*.tar.gz ./*.zip | sed 's#\./##' | tee sha256.sum
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -170,9 +210,13 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -eu
+          prerelease=()
+          case "$TAG" in
+            *-rc.*|*-rc|*-beta.*|*-alpha.*) prerelease=(--prerelease) ;;
+          esac
           if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/* --repo "$REPO" --clobber
           else
             gh release create "$TAG" dist/* --repo "$REPO" \
-              --title "codie ${TAG#v}" --generate-notes
+              --title "codie ${TAG#v}" "${prerelease[@]}" --generate-notes
           fi

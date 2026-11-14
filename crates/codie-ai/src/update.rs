@@ -26,6 +26,11 @@ pub const INSTALL_TIMEOUT: Duration = Duration::from_secs(180);
 /// Base URL for release artifacts.
 pub const RELEASE_DOWNLOAD: &str = "https://github.com/amardeepio/codie/releases/download";
 /// Installer command used when no prebuilt archive is published.
+#[cfg(windows)]
+pub const INSTALLER_COMMAND: &str =
+    "irm https://raw.githubusercontent.com/amardeepio/codie/main/install.ps1 | iex";
+/// Installer command used when no prebuilt archive is published.
+#[cfg(not(windows))]
 pub const INSTALLER_COMMAND: &str =
     "curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh | sh";
 
@@ -143,7 +148,7 @@ async fn asset_available_with(client: &reqwest::Client, base: &str, version: &st
         return Ok(false);
     };
 
-    for extension in ["tar.gz", "tar.xz"] {
+    for extension in release_extensions() {
         let name = asset_name(version, target, extension);
         let url = format!("{base}/v{version}/{name}");
         let response = client
@@ -205,23 +210,85 @@ pub fn latest_from_payload(value: &Value) -> Option<String> {
     })
 }
 
-/// Compares dotted numeric versions, ignoring pre-release suffixes.
+/// Compares dotted versions, including semantic pre-release ordering.
+///
+/// Build metadata after `+` is ignored. A release (`0.9.0`) sorts after its
+/// pre-releases (`0.9.0-rc.1`), and numeric pre-release identifiers compare
+/// numerically (`rc.2 < rc.10`).
 #[must_use]
 pub fn compare_versions(left: &str, right: &str) -> Option<Ordering> {
-    Some(parse_version(left)?.cmp(&parse_version(right)?))
+    Some(compare_parsed(
+        &parse_version(left)?,
+        &parse_version(right)?,
+    ))
 }
 
 fn normalize_version(version: &str) -> String {
     version.trim().trim_start_matches('v').to_owned()
 }
 
-fn parse_version(version: &str) -> Option<(u64, u64, u64)> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedVersion {
+    major: u64,
+    minor: u64,
+    patch: u64,
+    prerelease: Vec<String>,
+}
+
+fn parse_version(version: &str) -> Option<ParsedVersion> {
     let version = normalize_version(version);
-    let mut parts = version.split(['.', '-', '+']);
+    let version = version.split('+').next().unwrap_or(&version);
+    let (core, prerelease) = match version.split_once('-') {
+        Some((core, prerelease)) => (core, prerelease),
+        None => (version, ""),
+    };
+    let mut parts = core.split('.');
     let major = parts.next()?.parse().ok()?;
     let minor = parts.next().unwrap_or("0").parse().ok()?;
     let patch = parts.next().unwrap_or("0").parse().ok()?;
-    Some((major, minor, patch))
+    let prerelease = if prerelease.is_empty() {
+        Vec::new()
+    } else {
+        prerelease.split('.').map(str::to_owned).collect()
+    };
+    Some(ParsedVersion {
+        major,
+        minor,
+        patch,
+        prerelease,
+    })
+}
+
+fn compare_parsed(left: &ParsedVersion, right: &ParsedVersion) -> Ordering {
+    left.major
+        .cmp(&right.major)
+        .then_with(|| left.minor.cmp(&right.minor))
+        .then_with(|| left.patch.cmp(&right.patch))
+        .then_with(|| compare_prerelease(&left.prerelease, &right.prerelease))
+}
+
+fn compare_prerelease(left: &[String], right: &[String]) -> Ordering {
+    match (left.is_empty(), right.is_empty()) {
+        (true, true) => Ordering::Equal,
+        (true, false) => Ordering::Greater,
+        (false, true) => Ordering::Less,
+        (false, false) => {
+            for (left, right) in left.iter().zip(right) {
+                let left_number = left.parse::<u64>().ok();
+                let right_number = right.parse::<u64>().ok();
+                let ordering = match (left_number, right_number) {
+                    (Some(left), Some(right)) => left.cmp(&right),
+                    (Some(_), None) => Ordering::Less,
+                    (None, Some(_)) => Ordering::Greater,
+                    (None, None) => left.cmp(right),
+                };
+                if ordering != Ordering::Equal {
+                    return ordering;
+                }
+            }
+            left.len().cmp(&right.len())
+        }
+    }
 }
 
 /// Returns the release target triple for this build.
@@ -232,6 +299,7 @@ pub fn release_target() -> Option<&'static str> {
         ("macos", "x86_64") => Some("x86_64-apple-darwin"),
         ("linux", "aarch64") => Some("aarch64-unknown-linux-gnu"),
         ("linux", "x86_64") => Some("x86_64-unknown-linux-gnu"),
+        ("windows", "x86_64") => Some("x86_64-pc-windows-msvc"),
         _ => None,
     }
 }
@@ -240,6 +308,18 @@ pub fn release_target() -> Option<&'static str> {
 #[must_use]
 pub fn asset_name(version: &str, target: &str, extension: &str) -> String {
     format!("codie-v{version}-{target}.{extension}")
+}
+
+/// Archive extensions published for this platform, in preference order.
+fn release_extensions() -> &'static [&'static str] {
+    #[cfg(windows)]
+    {
+        &["zip"]
+    }
+    #[cfg(not(windows))]
+    {
+        &["tar.gz", "tar.xz"]
+    }
 }
 
 /// Downloads and installs a release, replacing the running executable.
@@ -275,7 +355,7 @@ pub async fn install_with_progress(
         .map_err(|error| Error::provider(format!("cannot create an update directory: {error}")))?;
     let _cleanup = Cleanup(directory.clone());
 
-    for extension in ["tar.gz", "tar.xz"] {
+    for extension in release_extensions() {
         let name = asset_name(version, target, extension);
         let url = format!("{RELEASE_DOWNLOAD}/v{version}/{name}");
         let Some(bytes) = download_optional_with_progress(&client, &url, &mut on_progress).await?
@@ -394,18 +474,42 @@ fn extract(archive: &Path, directory: &Path) -> Result<()> {
         .arg(archive)
         .arg("-C")
         .arg(directory)
-        .status()
-        .map_err(|error| Error::provider(format!("cannot run tar: {error}")))?;
-    if !status.success() {
-        return Err(Error::provider(format!(
+        .status();
+    if matches!(&status, Ok(status) if status.success()) {
+        return Ok(());
+    }
+
+    #[cfg(windows)]
+    {
+        // Windows 10+ ships bsdtar, which handles zip. Fall back to PowerShell
+        // when tar is missing or refuses the archive.
+        let script = format!(
+            "Expand-Archive -LiteralPath '{}' -DestinationPath '{}' -Force",
+            archive.display(),
+            directory.display()
+        );
+        let status = Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .status();
+        if matches!(status, Ok(status) if status.success()) {
+            return Ok(());
+        }
+    }
+
+    match status {
+        Ok(_) => Err(Error::provider(format!(
             "cannot extract {}",
             archive.display()
-        )));
+        ))),
+        Err(error) => Err(Error::provider(format!(
+            "cannot extract {}: {error}",
+            archive.display()
+        ))),
     }
-    Ok(())
 }
 
 fn find_binary(directory: &Path) -> Option<PathBuf> {
+    let expected = format!("codie{}", std::env::consts::EXE_SUFFIX);
     let mut pending = vec![directory.to_path_buf()];
     while let Some(directory) = pending.pop() {
         let Ok(entries) = std::fs::read_dir(&directory) else {
@@ -417,7 +521,7 @@ fn find_binary(directory: &Path) -> Option<PathBuf> {
                 pending.push(path);
             } else if path
                 .file_name()
-                .is_some_and(|name| name == std::ffi::OsStr::new("codie"))
+                .is_some_and(|name| name == std::ffi::OsStr::new(&expected))
             {
                 return Some(path);
             }
@@ -426,6 +530,7 @@ fn find_binary(directory: &Path) -> Option<PathBuf> {
     None
 }
 
+#[cfg(unix)]
 fn replace_running_binary(source: &Path) -> Result<()> {
     let current = std::env::current_exe()
         .map_err(|error| Error::provider(format!("cannot locate the running binary: {error}")))?;
@@ -437,7 +542,6 @@ fn replace_running_binary(source: &Path) -> Result<()> {
             staged.display()
         ))
     })?;
-    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755)).map_err(
@@ -451,6 +555,49 @@ fn replace_running_binary(source: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
+fn replace_running_binary(source: &Path) -> Result<()> {
+    let current = std::env::current_exe()
+        .map_err(|error| Error::provider(format!("cannot locate the running binary: {error}")))?;
+    let backup = current.with_file_name(format!(".codie-update-{}.old", std::process::id()));
+
+    // Windows allows renaming the mapped executable, but not writing over it.
+    std::fs::rename(&current, &backup).map_err(|error| {
+        Error::provider(format!(
+            "cannot replace {} while it is running: {error}\nreinstall with:\n{INSTALLER_COMMAND}",
+            current.display()
+        ))
+    })?;
+    if let Err(error) = std::fs::copy(source, &current) {
+        let _ = std::fs::rename(&backup, &current);
+        return Err(Error::provider(format!(
+            "cannot install the update at {}: {error}",
+            current.display()
+        )));
+    }
+    Ok(())
+}
+
+/// Removes stale binaries left behind by a Windows in-place update.
+///
+/// The running image cannot be deleted, so the previous executable is renamed
+/// and removed on the next start.
+pub fn cleanup_stale_update_backup() {
+    #[cfg(windows)]
+    if let Ok(current) = std::env::current_exe()
+        && let Some(directory) = current.parent()
+        && let Ok(entries) = std::fs::read_dir(directory)
+    {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with(".codie-update-") && name.ends_with(".old") {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+}
+
 struct Cleanup(PathBuf);
 
 impl Drop for Cleanup {
@@ -462,12 +609,37 @@ impl Drop for Cleanup {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codie_testkit::spec;
 
     #[test]
     fn versions_compare_numerically() {
         assert_eq!(compare_versions("0.4.0", "0.5.0"), Some(Ordering::Less));
         assert_eq!(compare_versions("v0.5.0", "0.5.0"), Some(Ordering::Equal));
         assert_eq!(compare_versions("1.0.0", "0.9.9"), Some(Ordering::Greater));
+    }
+
+    #[test]
+    fn prereleases_sort_before_their_release() {
+        assert_eq!(
+            compare_versions("0.9.0-rc.1", "0.9.0"),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            compare_versions("0.9.0", "0.9.0-rc.1"),
+            Some(Ordering::Greater)
+        );
+        assert_eq!(
+            compare_versions("0.9.0-rc.1", "0.9.0-rc.2"),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            compare_versions("0.9.0-rc.2", "0.9.0-rc.10"),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            compare_versions("0.9.0+build.7", "0.9.0"),
+            Some(Ordering::Equal)
+        );
     }
 
     #[test]
@@ -479,10 +651,15 @@ mod tests {
     }
 
     #[test]
+    #[spec("CLI-009")]
     fn release_assets_follow_the_installer_naming() {
         assert_eq!(
             asset_name("0.5.0", "aarch64-apple-darwin", "tar.gz"),
             "codie-v0.5.0-aarch64-apple-darwin.tar.gz"
+        );
+        assert_eq!(
+            asset_name("0.9.0-rc.1", "x86_64-pc-windows-msvc", "zip"),
+            "codie-v0.9.0-rc.1-x86_64-pc-windows-msvc.zip"
         );
         #[cfg(target_os = "macos")]
         assert_eq!(
@@ -493,6 +670,38 @@ mod tests {
                 "x86_64-apple-darwin"
             })
         );
+        #[cfg(windows)]
+        assert_eq!(release_target(), Some("x86_64-pc-windows-msvc"));
+    }
+
+    #[test]
+    fn the_platform_archive_extension_is_supported() {
+        let extensions = release_extensions();
+        if cfg!(windows) {
+            assert_eq!(extensions, &["zip"]);
+        } else {
+            assert_eq!(extensions, &["tar.gz", "tar.xz"]);
+        }
+    }
+
+    #[test]
+    #[spec("CLI-011")]
+    fn the_installer_command_matches_the_platform() {
+        if cfg!(windows) {
+            assert!(INSTALLER_COMMAND.contains("install.ps1"));
+            assert!(INSTALLER_COMMAND.contains("irm "));
+        } else {
+            assert!(INSTALLER_COMMAND.contains("install.sh"));
+        }
+    }
+
+    #[test]
+    fn finds_the_platform_binary_name() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let name = format!("codie{}", std::env::consts::EXE_SUFFIX);
+        let path = directory.path().join(&name);
+        std::fs::write(&path, b"binary").expect("write");
+        assert_eq!(find_binary(directory.path()), Some(path));
     }
 
     #[test]

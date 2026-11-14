@@ -27,8 +27,8 @@ pub use theme::{Theme, ThemeWatcher};
 
 /// Copies text to the system clipboard.
 ///
-/// macOS uses `pbcopy`; Linux tries `wl-copy` and then `xclip`. Other platforms
-/// return an unsupported error.
+/// macOS uses `pbcopy`, Linux tries `wl-copy` and then `xclip`, and Windows
+/// uses `clip`. Other platforms return an unsupported error.
 pub fn copy_to_clipboard(text: &str) -> std::io::Result<()> {
     use std::io::Write as _;
     use std::process::{Command, Stdio};
@@ -37,7 +37,9 @@ pub fn copy_to_clipboard(text: &str) -> std::io::Result<()> {
     let candidates: &[&[&str]] = &[&["pbcopy"]];
     #[cfg(target_os = "linux")]
     let candidates: &[&[&str]] = &[&["wl-copy"], &["xclip", "-selection", "clipboard"]];
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(target_os = "windows")]
+    let candidates: &[&[&str]] = &[&["clip"]];
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     let candidates: &[&[&str]] = &[];
 
     let mut last_error = std::io::Error::new(

@@ -8,8 +8,8 @@ project-local resources are untrusted until approved.
 
 The confirmed default (D-6) is:
 
-- **Interactive:** read-only tools (`read`, `grep`, `find`, `ls`) are allowed; `write`, `edit`, `bash`, and
-  `web_fetch` ask.
+- **Interactive:** read-only tools (`read`, `grep`, `find`, `ls`) are allowed; `write`, `edit`, the platform
+  shell (`bash` or `powershell`), and `web_fetch` ask.
 - **Headless, print, and JSON modes:** read-only tools are allowed; mutating and network tools are denied unless
   `--allow` or configuration explicitly permits them. `web_fetch` is network egress and requires
   `--allow web_fetch` or `--allow-all`.
@@ -29,7 +29,8 @@ isolation should run codie in a container or VM, and the documentation provides 
 - API keys are resolved from `--api-key`, the stored credential, or the provider environment variable.
 - `auth.json` is mode `0600`, written atomically (temp, fsync, rename), and never committed.
 - Keys are redacted from logs, error messages, JSON events, exports, and child environments.
-- `bash` children do not inherit `*_API_KEY` or `CODIE_*TOKEN*` variables unless the user opts in.
+- `bash` and `powershell` children do not inherit `*_API_KEY` or `CODIE_*TOKEN*` variables unless the user
+  opts in.
 - Provider request and response bodies are logged only at `trace` level with `Authorization` redacted.
 - Recorded fixtures require an explicit `--record` feature and environment opt-in; CI never records.
 

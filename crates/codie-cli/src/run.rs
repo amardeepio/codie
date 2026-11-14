@@ -24,8 +24,8 @@ use codie_prompt::{
 use codie_protocol::ext::ExtSessionInfo;
 use codie_session::Session;
 use codie_tools::{
-    BashTool, EditTool, FindTool, GrepTool, LsTool, Policy, PolicyToolbox, ReadTool, Registry,
-    ToolName, WebFetchTool, WriteTool,
+    BashTool, EditTool, FindTool, GrepTool, LsTool, Policy, PolicyToolbox, PowerShellTool,
+    ReadTool, Registry, ToolName, WebFetchTool, WriteTool,
 };
 use codie_tui::app::{ProviderChoice, ProviderRuntime};
 use codie_tui::{TuiOptions, TuiRunMode};
@@ -1059,6 +1059,7 @@ fn tool_for(name: ToolName) -> Arc<dyn Tool> {
         ToolName::Write => Arc::new(WriteTool),
         ToolName::Edit => Arc::new(EditTool),
         ToolName::Bash => Arc::new(BashTool),
+        ToolName::PowerShell => Arc::new(PowerShellTool),
         ToolName::Grep => Arc::new(GrepTool),
         ToolName::Find => Arc::new(FindTool),
         ToolName::Ls => Arc::new(LsTool),

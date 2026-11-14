@@ -66,12 +66,13 @@ snake-case requirement ID so failures are readable.
 | [DeepSeek profile](../../specs/provider/0002-deepseek.md) | none (profile) | accepted | 1 |
 | [OpenRouter profile](../../specs/provider/0003-openrouter.md) | none (profile) | accepted | 1 |
 | [Authentication](../../specs/provider/0004-auth.md) | `PROV-030`..`PROV-034` | accepted | 1 |
-| [Tool contract](../../specs/tools/0001-tool-contract.md) | `TOOL-001`..`TOOL-008` | accepted | 1 |
+| [Tool contract](../../specs/tools/0001-tool-contract.md) | `TOOL-001`..`TOOL-008`, `TOOL-030` | accepted | 1 |
 | [Session JSONL v1](../../specs/session/0001-jsonl-format.md) | `SESS-001`..`SESS-009` | accepted | 1 |
 | [Session tree operations](../../specs/session/0002-tree-operations.md) | `SESS-010`..`SESS-025` | implemented | 3 |
 | [Context compaction](../../specs/context/0001-compaction.md) | `CTX-001`..`CTX-007` | implemented | 3 |
 | [System prompt](../../specs/prompt/0001-system-prompt.md) | `PRMPT-001`..`PRMPT-008` | accepted | 1 |
 | [CLI surface](../../specs/cli/0001-cli-surface.md) | `CLI-001`..`CLI-008` | implemented | 1, 6 |
+| [Windows x64 preview](../../specs/cli/0002-windows-preview.md) | `CLI-009`..`CLI-011` | implemented | 7 |
 | [Out-of-process extensions](../../specs/extensions/0001-jsonrpc-hooks.md) | `EXT-001`..`EXT-016` | implemented | 6 |
 | [JSON events](../../specs/protocol/0001-json-events.md) | `PROTO-001`, `PROTO-002`, `PROTO-004`, `PROTO-005` | accepted | 1 |
 | [Permissions](../../specs/security/0001-permissions.md) | `SEC-001`..`SEC-006` | accepted | 1 |

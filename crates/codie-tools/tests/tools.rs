@@ -1,10 +1,14 @@
 //! Integration tests for the Phase 1 built-in tools.
 
-use std::{path::Path, time::Duration};
+use std::path::Path;
+#[cfg(unix)]
+use std::time::Duration;
 
 use codie_core::{Tool, ToolCall, ToolContext, ToolResult};
 use codie_testkit::spec;
-use codie_tools::{BashTool, EditTool, ReadTool, WriteTool};
+#[cfg(unix)]
+use codie_tools::BashTool;
+use codie_tools::{EditTool, ReadTool, WriteTool};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
@@ -503,6 +507,7 @@ async fn edit_uses_crlf_for_new_lines_in_a_crlf_file() {
 }
 
 #[spec("TOOL-006")]
+#[cfg(unix)]
 #[tokio::test]
 async fn bash_returns_output_and_exit_details() {
     let directory = tempfile::tempdir().expect("temp dir");
@@ -517,6 +522,7 @@ async fn bash_returns_output_and_exit_details() {
     assert!(details["wall_time_seconds"].as_f64().is_some());
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn bash_marks_non_zero_exit_as_error() {
     let directory = tempfile::tempdir().expect("temp dir");
@@ -535,6 +541,7 @@ async fn bash_marks_non_zero_exit_as_error() {
     assert_eq!(result.details.expect("details")["exit_code"], 3);
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn bash_reports_no_output() {
     let directory = tempfile::tempdir().expect("temp dir");
@@ -546,6 +553,7 @@ async fn bash_reports_no_output() {
 }
 
 #[spec("TOOL-006")]
+#[cfg(unix)]
 #[tokio::test]
 async fn bash_times_out_and_kills_the_child() {
     let directory = tempfile::tempdir().expect("temp dir");
@@ -566,6 +574,7 @@ async fn bash_times_out_and_kills_the_child() {
     assert_eq!(result.details.expect("details")["exit_code"], -1);
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn bash_rejects_invalid_timeouts() {
     let directory = tempfile::tempdir().expect("temp dir");
@@ -583,8 +592,10 @@ async fn bash_rejects_invalid_timeouts() {
     }
 }
 
+#[cfg(unix)]
 const MAX_TIMEOUT_PLUS_ONE: f64 = 2_147_483.648;
 
+#[cfg(unix)]
 #[tokio::test]
 async fn bash_supports_abort() {
     let directory = tempfile::tempdir().expect("temp dir");
@@ -604,6 +615,7 @@ async fn bash_supports_abort() {
 }
 
 #[spec("TOOL-006")]
+#[cfg(unix)]
 #[tokio::test]
 async fn bash_truncates_the_tail_and_keeps_the_end_of_output() {
     let directory = tempfile::tempdir().expect("temp dir");
@@ -624,6 +636,7 @@ async fn bash_truncates_the_tail_and_keeps_the_end_of_output() {
 }
 
 #[spec("TOOL-006")]
+#[cfg(unix)]
 #[tokio::test]
 async fn bash_returns_when_a_background_child_holds_the_pipe_open() {
     let directory = tempfile::tempdir().expect("temp dir");

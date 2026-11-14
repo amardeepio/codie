@@ -79,23 +79,28 @@ helper used by the test attribute. `xtask` is repository automation, not a shipp
 - Cancellation uses `tokio_util::sync::CancellationToken` at every I/O boundary.
 - Blocking work stays off the reactor; filesystem operations use `tokio::fs` and shell commands use
   `tokio::process`.
-- Process-group termination on abort/timeout is Phase 7 hardening; Phase 1 kills the direct child.
+- Process-group termination on abort/timeout kills the whole tree: POSIX process groups on macOS/Linux and
+  `taskkill /T /F` on Windows. Windows Job Objects remain post-1.0 work.
 
 ## Built-in tools
 
-`codie-tools` exposes seven wire-stable tools. `read`, `grep`, `find`, and `ls` are read-only; `write`, `edit`,
-and `bash` mutate or execute and are gated by the permission policy.
+`codie-tools` exposes eight wire-stable tools. `read`, `grep`, `find`, and `ls` are read-only; `write`, `edit`,
+and the platform shell mutate or execute and are gated by the permission policy.
 
 | Tool | Purpose | Notes |
 |---|---|---|
 | `read` | Read a UTF-8 file | `offset`/`limit`; 2,000-line and 50 KiB caps |
 | `write` | Create or overwrite a file | Creates parent directories; per-path lock |
 | `edit` | Exact-text replacements | Rejects missing, duplicate, overlapping, and no-op edits |
-| `bash` | Run a shell command | Optional timeout; output tail truncation |
+| `bash` | Run a POSIX shell command | macOS/Linux; optional timeout; output tail truncation |
+| `powershell` | Run a PowerShell command | Windows; prefers `pwsh.exe`, falls back to 5.1 |
 | `grep` | Regex content search | `path`, `glob`, `case_sensitive`, `max_results`; skips binaries |
 | `find` | Glob path search | Patterns without `/` match base names at any depth |
 | `ls` | One directory listing | `path`, `all`; sizes, symlink targets |
 | `web_fetch` | Fetch one HTTP(S) URL | Not read-only; blocks private addresses and caps bytes/time |
+
+The registry always has exactly one shell in the `bash`/`powershell` slot, so the declaration count stays eight
+(`SPEC-TOOL-001`). Both shells share the same timeout, output, and truncation implementation.
 
 `grep` and `find` share an `ignore`-based walker, so `.gitignore`, git excludes, and hidden entries behave the
 same way in both. Tool output is bounded by `max_results` and the shared truncation caps (`SPEC-TOOL-002`).
