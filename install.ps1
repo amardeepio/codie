@@ -12,7 +12,7 @@
   directory to the user PATH.
 
   Environment variables:
-    CODIE_VERSION       Version to install (for example 0.9.0-rc.1).
+    CODIE_VERSION       Version to install (for example 0.9.0).
                         Defaults to the newest published release.
     CODIE_INSTALL_DIR   Install directory. Defaults to
                         %LOCALAPPDATA%\Programs\codie.

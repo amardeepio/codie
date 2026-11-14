@@ -19,11 +19,7 @@ that major series, with migrations applied on read.
 
 ### Fixed
 
-- Windows session directories are now built from a filesystem-safe key: the verbatim `\\?\` prefix from
-  `canonicalize` is stripped, characters Windows forbids in file names are percent-encoded, and overlong keys
-  are truncated with a stable hash. `codie` and `codie sessions` normalize the working directory the same way.
-- Session listings break timestamp ties by session id, so the order is deterministic even when files are
-  written within the same Windows clock tick.
+- Nothing yet.
 
 ### Removed
 
@@ -32,6 +28,16 @@ that major series, with migrations applied on read.
 ### Security
 
 - Nothing yet.
+
+## [0.9.0] - 2026-11-14
+
+### Fixed
+
+- Windows session directories are now built from a filesystem-safe key: the verbatim `\\?\` prefix from
+  `canonicalize` is stripped, characters Windows forbids in file names are percent-encoded, and overlong keys
+  are truncated with a stable hash. `codie` and `codie sessions` normalize the working directory the same way.
+- Session listings break timestamp ties by session id, so the order is deterministic even when files are
+  written within the same Windows clock tick.
 
 ## [0.9.0-rc.1] - 2026-11-14
 

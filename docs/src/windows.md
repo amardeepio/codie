@@ -1,6 +1,6 @@
 # Windows (preview)
 
-`0.9.0-rc.1` ships a Windows x64 preview. It is not a tier-1 platform yet, but the core agent works and the
+`0.9.0` ships a Windows x64 preview. It is not a tier-1 platform yet, but the core agent works and the
 binary installs with one PowerShell command.
 
 ## Requirements
@@ -30,7 +30,7 @@ It never asks for administrator rights and never writes machine-wide settings.
 ### Pin a version
 
 ```powershell
-$env:CODIE_VERSION = "0.9.0-rc.1"
+$env:CODIE_VERSION = "0.9.0"
 irm https://raw.githubusercontent.com/amardeepio/codie/main/install.ps1 | iex
 ```
 
@@ -109,7 +109,7 @@ $env:Path = "$env:LOCALAPPDATA\Programs\codie;$env:Path"
 
 ### SmartScreen or antivirus blocks the download
 
-The release candidate is not code-signed yet. If your organization blocks unsigned binaries, install from
+The `0.9.0` release is not code-signed yet. If your organization blocks unsigned binaries, install from
 source with a Rust 1.88 toolchain, or wait for the signed `1.0` release. Do not disable security controls
 globally.
 

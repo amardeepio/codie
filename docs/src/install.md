@@ -16,7 +16,7 @@ Pin a release or choose another directory:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh \
-  | sh -s -- --version 0.9.0-rc.1
+  | sh -s -- --version 0.9.0
 
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh \
   | sh -s -- --bin-dir "$HOME/bin"
@@ -41,10 +41,10 @@ irm https://raw.githubusercontent.com/amardeepio/codie/main/install.ps1 | iex
 ```
 
 The script installs to `%LOCALAPPDATA%\Programs\codie`, verifies the SHA-256 checksum, adds the directory to
-your user `PATH`, and runs `codie --version`. Pin the release candidate with:
+your user `PATH`, and runs `codie --version`. Pin a specific version with:
 
 ```powershell
-$env:CODIE_VERSION = "0.9.0-rc.1"
+$env:CODIE_VERSION = "0.9.0"
 irm https://raw.githubusercontent.com/amardeepio/codie/main/install.ps1 | iex
 ```
 

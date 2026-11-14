@@ -25,7 +25,7 @@ v1.0 is macOS-first. The tier-1 scope includes:
 - Clipboard through `pbcopy`/`pbpaste`, with an OSC 52 fallback over SSH.
 - PTY-based integration tests, terminal restore on panic and signals, and documented quarantine behavior.
 
-The `0.9.0` release candidate does not satisfy all of these yet: signing, notarization, the full terminal
+The `0.9.0` release does not satisfy all of these yet: signing, notarization, the full terminal
 matrix, APFS/NFC coverage, and OSC 52 remain open. They are tracked in [Releases](release.md).
 
 Every release builds both macOS targets, Linux, and Windows in CI. A red `check`, `linux`, or `windows` job
@@ -41,7 +41,7 @@ tier 1 when that runner and a terminal matrix exist.
 
 ## Windows (x64 preview)
 
-`0.9.0-rc.1` publishes a Windows x64 preview. It builds and the core tools work, but it is not release-blocking
+`0.9.0` publishes a Windows x64 preview. It builds and the core tools work, but it is not release-blocking
 and it is not tier 1.
 
 What the preview provides:
