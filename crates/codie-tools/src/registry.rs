@@ -4,8 +4,12 @@ use std::{collections::HashSet, fmt, sync::Arc};
 
 use codie_core::{Tool, ToolDecl, Toolbox};
 
+#[cfg(not(windows))]
+use crate::bash::BashTool;
+#[cfg(windows)]
+use crate::powershell::PowerShellTool;
 use crate::{
-    bash::BashTool, edit::EditTool, find::FindTool, grep::GrepTool, ls::LsTool, read::ReadTool,
+    edit::EditTool, find::FindTool, grep::GrepTool, ls::LsTool, read::ReadTool,
     validate::ValidatedTool, web_fetch::WebFetchTool, write::WriteTool,
 };
 
@@ -36,7 +40,7 @@ impl Registry {
             Arc::new(ReadTool),
             Arc::new(WriteTool),
             Arc::new(EditTool),
-            Arc::new(BashTool),
+            platform_shell(),
             Arc::new(GrepTool),
             Arc::new(FindTool),
             Arc::new(LsTool),
@@ -48,6 +52,18 @@ impl Registry {
     pub fn register(&mut self, tool: Arc<dyn Tool>) {
         self.tools.push(Arc::new(ValidatedTool::new(tool)));
     }
+}
+
+/// Returns the shell tool for the current platform.
+#[cfg(windows)]
+fn platform_shell() -> Arc<dyn Tool> {
+    Arc::new(PowerShellTool)
+}
+
+/// Returns the shell tool for the current platform.
+#[cfg(not(windows))]
+fn platform_shell() -> Arc<dyn Tool> {
+    Arc::new(BashTool)
 }
 
 impl fmt::Debug for Registry {
@@ -109,7 +125,8 @@ impl Policy {
     /// Creates a headless policy that permits only the named mutating tools.
     ///
     /// `read` (and other read-only tools) is always permitted; `write`, `edit`,
-    /// and `bash` require their name to appear in `allowed`.
+    /// and the platform shell (`bash` or `powershell`) require their name to
+    /// appear in `allowed`.
     #[must_use]
     pub fn headless<I, S>(allowed: I) -> Self
     where
@@ -223,6 +240,8 @@ mod tests {
     use super::*;
     use codie_testkit::spec;
 
+    const SHELL: &str = if cfg!(windows) { "powershell" } else { "bash" };
+
     #[spec("TOOL-001")]
     #[test]
     fn registry_declares_builtins_in_order() {
@@ -238,7 +257,7 @@ mod tests {
                 "read",
                 "write",
                 "edit",
-                "bash",
+                SHELL,
                 "grep",
                 "find",
                 "ls",
@@ -263,7 +282,7 @@ mod tests {
         assert!(policy.denial("read").is_none());
         assert!(policy.denial("edit").is_none());
         assert!(policy.denial("write").is_some());
-        assert!(policy.denial("bash").is_some());
+        assert!(policy.denial(SHELL).is_some());
     }
 
     #[spec("SEC-002")]
@@ -286,11 +305,11 @@ mod tests {
 
     #[test]
     fn policy_toolbox_delegates_lookup_and_declarations() {
-        let toolbox = PolicyToolbox::new(Arc::new(Registry::builtin()), Policy::headless(["bash"]));
+        let toolbox = PolicyToolbox::new(Arc::new(Registry::builtin()), Policy::headless([SHELL]));
         assert!(toolbox.get("write").is_some());
         assert_eq!(toolbox.declarations().len(), 8);
         assert!(toolbox.denial("write").is_some());
-        assert!(toolbox.denial("bash").is_none());
+        assert!(toolbox.denial(SHELL).is_none());
         assert!(toolbox.denial("read").is_none());
     }
 }

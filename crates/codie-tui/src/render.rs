@@ -1192,10 +1192,10 @@ fn draw_permission_overlay(
                 }
             }
             codie_protocol::ext::ExtRenderKind::Code => {
-                let language_path = if prompt.tool == "bash" {
-                    "command.sh"
-                } else {
-                    path
+                let language_path = match prompt.tool.as_str() {
+                    "bash" => "command.sh",
+                    "powershell" => "command.ps1",
+                    _ => path,
                 };
                 let (lines, truncated) = tool_view::render_code(
                     &preview.text,

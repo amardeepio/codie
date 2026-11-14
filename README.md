@@ -7,8 +7,9 @@
 <p align="center">
   <a href="https://www.rust-lang.org/"><img alt="Rust 1.88" src="https://img.shields.io/badge/Rust-1.88-000000?style=flat-square&logo=rust&logoColor=white"></a>
   <img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-6E4AFF?style=flat-square">
-  <img alt="Status: pre-alpha" src="https://img.shields.io/badge/status-pre--alpha-F59E0B?style=flat-square">
-  <img alt="Platform: macOS 13+" src="https://img.shields.io/badge/platform-macOS%2013%2B-111827?style=flat-square&logo=apple&logoColor=white">
+  <img alt="Status: release candidate" src="https://img.shields.io/badge/status-release%20candidate-F59E0B?style=flat-square">
+  <img alt="Platform: macOS 13+, Linux, Windows preview" src="https://img.shields.io/badge/platform-macOS%2013%2B%20%C2%B7%20Linux%20%C2%B7%20Windows%20preview-111827?style=flat-square&logo=apple&logoColor=white">
+  <img alt="Windows x64 preview" src="https://img.shields.io/badge/Windows-x64%20preview-0078D4?style=flat-square&logo=windows&logoColor=white">
 </p>
 
 <p align="center">A fast, extensible, spec-driven coding agent for the terminal, written in Rust.</p>
@@ -19,15 +20,16 @@ implementation language, the safety posture, and the provider scope.
 
 The command is `codie`.
 
-**Status: Phase 6 complete (`0.8.0`), pre-alpha.** The one-shot agent, the interactive app,
+**Status: release candidate (`0.9.0-rc.1`).** The one-shot agent, the interactive app,
 full-fidelity sessions, customization, automation, and out-of-process extensions all work end to end:
 streaming transcript, editor dock, OpenCode-inspired themes, the startup banner, slash commands, steering,
 permission prompts, plain mode, resume/fork/compact, search tools, skills, prompt templates, project trust,
 system instructions, `@file` and image inputs, guarded `web_fetch`, RPC mode, generated JSON schemas, HTML
 transcript export, `codie update --check`, extension hooks, tools, commands, and examples, and an OpenRouter
-coding-model catalog with live `/provider` switching. The `0.8.0` release adds rich edit/write previews,
+coding-model catalog with live `/provider` switching. The `0.8.0` release added rich edit/write previews,
 collapsed reasoning, `Esc`/`/stop` cancellation, a context meter with `/usage`, permission review previews,
-tool navigation, folded turns, and session picker previews. See
+tool navigation, folded turns, and session picker previews. `0.9.0-rc.1` adds a Windows x64 preview build, the
+`powershell` tool, a one-command PowerShell installer, and the release-candidate documentation set. See
 [`docs/src/configuration.md`](docs/src/configuration.md), [`docs/src/rpc.md`](docs/src/rpc.md), and
 [`ROADMAP.md`](ROADMAP.md).
 
@@ -66,7 +68,7 @@ flowchart LR
     S --> L["Agent loop<br/>turns · steering · cancellation"]
     L <-->|"append / projection"| DB["Session store<br/>append-only JSONL tree<br/>resume · fork · compact"]
     L --> PM["Context assembly<br/>system prompt · skills · templates<br/>project instructions · @files"]
-    L --> T["Tool execution<br/>read · write · edit · bash<br/>grep · find · ls · web_fetch<br/>extension tools"]
+    L --> T["Tool execution<br/>read · write · edit · bash / powershell<br/>grep · find · ls · web_fetch<br/>extension tools"]
     T <-->|"permission broker"| A["Approval UI"]
     L <-->|"hooks / tools / commands"| X["codie-ext<br/>JSON-RPC over stdio"]
     L --> M["Interfaces"]
@@ -84,7 +86,7 @@ flowchart TD
 
     CORE["codie-core<br/>messages · events · agent loop"]
     AI["codie-ai<br/>providers · SSE · catalog · auth"]
-    TOOLS["codie-tools<br/>read · write · edit · bash<br/>grep · find · ls · web_fetch"]
+    TOOLS["codie-tools<br/>read · write · edit · bash / powershell<br/>grep · find · ls · web_fetch"]
     SESSION["codie-session<br/>JSONL tree · projection · export"]
     PROMPT["codie-prompt<br/>system prompt · skills · templates · trust"]
     EXT["codie-ext<br/>JSON-RPC extensions"]
@@ -140,25 +142,37 @@ and [`specs/README.md`](specs/README.md).
 
 ## Install
 
-macOS 13+ on arm64 or x64 is tier 1; Linux glibc 2.31+ is best effort.
+macOS 13+ on arm64 or x64 is tier 1; Linux glibc 2.31+ is best effort; Windows 10 21H2+ / 11 x64 is a preview.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh | sh
 ```
 
-The installer places `codie` in `~/.local/bin`, verifies checksums when a prebuilt release exists, and prints
-the `PATH` line to add if that directory is not already on your path. Tagged releases publish prebuilt archives
-for macOS and Linux; when a tag has no artifact, it builds from source and installs Rust 1.88 through rustup
-when necessary. Pass `--no-rust-install` to disable that.
+On Windows, open PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/amardeepio/codie/main/install.ps1 | iex
+```
+
+The Unix installer places `codie` in `~/.local/bin`, verifies checksums when a prebuilt release exists, and
+prints the `PATH` line to add if that directory is not already on your path. The PowerShell installer places
+`codie.exe` in `%LOCALAPPDATA%\Programs\codie` and updates your user `PATH`. Tagged releases publish prebuilt
+archives for macOS, Linux, and Windows; when a tag has no artifact, the Unix installer builds from source and
+installs Rust 1.88 through rustup when necessary. Pass `--no-rust-install` to disable that.
 
 Pin a version or pick another directory:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh \
-  | sh -s -- --version 0.8.0
+  | sh -s -- --version 0.9.0-rc.1
 
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh \
   | sh -s -- --bin-dir "$HOME/bin"
+```
+
+```powershell
+$env:CODIE_VERSION = "0.9.0-rc.1"
+irm https://raw.githubusercontent.com/amardeepio/codie/main/install.ps1 | iex
 ```
 
 Prefer to read the script before running it:
@@ -170,13 +184,12 @@ sh install.sh
 ```
 
 Uninstall with `rm ~/.local/bin/codie`. Full options and troubleshooting are in
-[`docs/src/install.md`](docs/src/install.md).
+[`docs/src/install.md`](docs/src/install.md) and [`docs/src/windows.md`](docs/src/windows.md).
 
 ## Quickstart
 
 Requirements: Rust 1.88, installed through `rust-toolchain.toml`. macOS 13+ is the tier-1 platform. The
 [install](#install) section above is the fastest path; build from source as follows for development.
-
 ```bash
 git clone https://github.com/amardeepio/codie
 cd codie
@@ -247,18 +260,23 @@ additional vendors are out of scope for v1.0. See [`docs/src/providers.md`](docs
 
 ## Platforms
 
-- **Tier 1:** macOS 13+ on arm64 and x64. Signed, notarized binaries; full CI suite; release-blocking.
+- **Tier 1:** macOS 13+ on arm64 and x64. Release-blocking; Developer ID signing and notarization are required
+  before the 1.0 gate.
 - **Tier 2:** Linux glibc 2.31+ and WSL. Builds and core paths work; best-effort fixes.
-- **Post-1.0:** Windows 10 21H2+ and other Unixes. No guarantees at 1.0.
+- **Preview:** Windows 10 21H2+ / 11 x64. MSVC build, one-command PowerShell installer, `powershell` tool;
+  no `bash`, no Job Objects, no ConPTY matrix, unsigned.
+- **Post-1.0:** Windows ARM64 and other Unixes.
 
-Support claims and the macOS terminal matrix are in [`docs/src/platforms.md`](docs/src/platforms.md).
+Support claims and the terminal matrix are in [`docs/src/platforms.md`](docs/src/platforms.md) and
+[`docs/src/terminals.md`](docs/src/terminals.md).
 
 ## Documentation
 
 - [`PLAN.MD`](PLAN.MD) — scope, architecture, phases, decision log.
 - [`specs/`](specs/) — normative requirements and the specification process.
-- [`docs/src/`](docs/src/) — mdBook: introduction, architecture, development, configuration, interactive
-  terminal, RPC, extensions, specs, providers, platforms, security, roadmap.
+- [`docs/src/`](docs/src/) — mdBook: quickstart, installation, Windows preview, architecture, development,
+  configuration, interactive terminal, terminal compatibility, sessions, RPC, extensions, specs, providers,
+  platforms, Gatekeeper, troubleshooting, security, releases, roadmap.
 - [`examples/extensions/`](examples/extensions/) — Python and TypeScript extensions plus minimal SDKs.
 - [`docs/adr/`](docs/adr/) — architecture decision records.
 - [`docs/rfc/`](docs/rfc/) — change proposals for accepted or released behavior.

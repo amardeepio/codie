@@ -164,7 +164,9 @@ fn env_string(name: &str) -> Option<String> {
 }
 
 fn home_dir() -> PathBuf {
-    std::env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from)
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map_or_else(|| PathBuf::from("."), PathBuf::from)
 }
 
 #[cfg(test)]

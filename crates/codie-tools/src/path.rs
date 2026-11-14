@@ -46,7 +46,14 @@ pub fn resolve_path(raw: &str, cwd: impl AsRef<Path>) -> PathBuf {
 
 /// Returns the current user's home directory from the environment.
 fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
+    home_from(|key| std::env::var_os(key))
+}
+
+/// Resolves the home directory from `HOME` or, on Windows, `USERPROFILE`.
+fn home_from(mut variable: impl FnMut(&str) -> Option<std::ffi::OsString>) -> Option<PathBuf> {
+    variable("HOME")
+        .or_else(|| variable("USERPROFILE"))
+        .map(PathBuf::from)
 }
 
 /// Replaces Unicode space variants with an ASCII space.
@@ -156,5 +163,14 @@ mod tests {
             assert_eq!(resolve_path("~/notes.txt", "/tmp"), home.join("notes.txt"));
             assert_eq!(resolve_path("~", "/tmp"), home);
         }
+    }
+
+    #[test]
+    fn userprofile_is_used_when_home_is_absent() {
+        let home = home_from(|key| match key {
+            "USERPROFILE" => Some(std::ffi::OsString::from("C:\\Users\\me")),
+            _ => None,
+        });
+        assert_eq!(home, Some(PathBuf::from("C:\\Users\\me")));
     }
 }

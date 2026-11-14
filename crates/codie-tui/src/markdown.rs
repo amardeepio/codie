@@ -609,7 +609,18 @@ pub fn highlight_code(line: &str, language: &str, palette: &Palette) -> Line<'st
     let language = language.to_ascii_lowercase();
     if !matches!(
         language.as_str(),
-        "rust" | "rs" | "python" | "py" | "javascript" | "js" | "typescript" | "ts" | "bash" | "sh"
+        "rust"
+            | "rs"
+            | "python"
+            | "py"
+            | "javascript"
+            | "js"
+            | "typescript"
+            | "ts"
+            | "bash"
+            | "sh"
+            | "powershell"
+            | "ps1"
     ) {
         return Line::from(Span::styled(
             line.to_owned(),
@@ -617,7 +628,10 @@ pub fn highlight_code(line: &str, language: &str, palette: &Palette) -> Line<'st
         ));
     }
 
-    let hash_comments = matches!(language.as_str(), "python" | "py" | "bash" | "sh");
+    let hash_comments = matches!(
+        language.as_str(),
+        "python" | "py" | "bash" | "sh" | "powershell" | "ps1"
+    );
     let tokens = token_regex(hash_comments);
 
     let mut spans = Vec::new();

@@ -44,7 +44,7 @@ Usage:
   install.sh [--version VERSION] [--bin-dir DIR] [--no-rust-install]
 
 Options:
-  --version VERSION  Install a specific release (for example 0.4.0 or v0.4.0).
+  --version VERSION  Install a specific release (for example 0.9.0-rc.1 or v0.9.0-rc.1).
                      Defaults to the latest tag. Use "main" to build from source.
   --bin-dir DIR      Directory for the codie binary. Default: ~/.local/bin.
   --no-rust-install  Do not install Rust automatically; fail if it is missing.
@@ -58,7 +58,7 @@ Environment:
 Examples:
   curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh | sh
   curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh \
-    | sh -s -- --version 0.4.0 --bin-dir "$HOME/bin"
+    | sh -s -- --version 0.9.0-rc.1 --bin-dir "$HOME/bin"
 EOF
 }
 
@@ -117,7 +117,11 @@ ARCH=$(uname -m)
 case "$OS" in
     Darwin) TARGET_OS="apple-darwin" ;;
     Linux) TARGET_OS="unknown-linux-gnu" ;;
-    *) die "unsupported operating system: $OS. codie supports macOS 13+ and Linux at 0.4.0." ;;
+    MINGW*|MSYS*|CYGWIN*)
+        die "use the PowerShell installer on Windows:
+  irm https://raw.githubusercontent.com/amardeepio/codie/main/install.ps1 | iex"
+        ;;
+    *) die "unsupported operating system: $OS. codie supports macOS 13+, Linux, and Windows x64." ;;
 esac
 
 case "$ARCH" in
@@ -147,7 +151,7 @@ resolve_latest_tag() {
         | grep -o '"name"[[:space:]]*:[[:space:]]*"v[0-9][^"]*"' \
         | sed 's/.*"\(v[0-9][^"]*\)"$/\1/' \
         | sed 's/^v//' \
-        | sort -t. -k1,1n -k2,2n -k3,3n \
+        | sort -V \
         | tail -n 1 \
         | sed 's/^/v/' || true
 }

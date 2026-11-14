@@ -443,9 +443,32 @@ fn safe_environment<I>(environment: I) -> Vec<(String, String)>
 where
     I: IntoIterator<Item = (String, String)>,
 {
-    const SAFE: [&str; 12] = [
-        "PATH", "HOME", "TMPDIR", "TMP", "LANG", "LC_ALL", "LC_CTYPE", "USER", "LOGNAME", "SHELL",
-        "TERM", "PWD",
+    const SAFE: [&str; 24] = [
+        "PATH",
+        "HOME",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "USER",
+        "USERNAME",
+        "LOGNAME",
+        "SHELL",
+        "TERM",
+        "PWD",
+        // Windows: extensions such as Python and Node need these to start.
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "PROGRAMDATA",
+        "SystemRoot",
+        "SYSTEMROOT",
+        "COMSPEC",
+        "PATHEXT",
+        "WINDIR",
+        "PROGRAMFILES",
     ];
     environment
         .into_iter()
@@ -465,7 +488,16 @@ async fn kill_group(pid: Option<u32>) {
             .status()
             .await;
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    if let Some(pid) = pid {
+        // Taskkill walks the whole tree, including grandchildren.
+        let _ = tokio::process::Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &pid.to_string()])
+            .kill_on_drop(true)
+            .status()
+            .await;
+    }
+    #[cfg(not(any(unix, windows)))]
     let _ = pid;
 }
 

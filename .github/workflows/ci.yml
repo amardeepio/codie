@@ -54,3 +54,32 @@ jobs:
 
       - name: Build
         run: cargo build --workspace --all-targets --locked
+
+  # Windows x64 ships as a preview, so keep a build signal for the platform.
+  windows:
+    name: windows
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust 1.88
+        uses: dtolnay/rust-toolchain@1.88.0
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows
+
+      - name: Build
+        run: cargo build --workspace --all-targets --locked
+
+      - name: Check the installer syntax
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          [scriptblock]::Create((Get-Content -Raw install.ps1)) | Out-Null
+
+      - name: Test the PowerShell tool
+        run: cargo test -p codie-tools --test powershell

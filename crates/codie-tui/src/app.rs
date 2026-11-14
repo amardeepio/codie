@@ -2755,7 +2755,7 @@ fn permission_preview(
                 text: content.to_owned(),
             })
         }
-        "bash" => {
+        "bash" | "powershell" => {
             let command = arguments.get("command").and_then(Value::as_str)?;
             Some(codie_protocol::ext::ExtRenderHint {
                 kind: codie_protocol::ext::ExtRenderKind::Code,

@@ -1,7 +1,8 @@
 # Interactive terminal
 
 Phase 2 adds the primary human experience. Running `codie` with a terminal attached (and without `-p`,
-`--mode json`, or piped input) starts the interactive interface.
+`--mode json`, or piped input) starts the interactive interface. Per-terminal behavior and manual checks are in
+[Terminal compatibility](terminals.md).
 
 ## Modes
 
@@ -83,7 +84,7 @@ An empty list unbinds the action; unknown actions and keys are rejected at start
 
 ## Stopping work
 
-Press `Esc` or run `/stop` to stop the active model request or tool call. A running `bash` command is killed
+Press `Esc` or run `/stop` to stop the active model request or tool call. A running shell command is killed
 together with its process group. Open reasoning is closed by the first `Esc`; pressing it again stops the run.
 When nothing is running, `/stop` reports that there is nothing to stop and `Esc` returns the transcript to the
 bottom. Stopping also drops steering and follow-up messages that have not reached the model yet.
@@ -134,8 +135,9 @@ estimate while streaming.
 
 ## Permissions
 
-Read-only tools run without prompting. `write`, `edit`, and `bash` ask before executing. The prompt previews the
-operation: edits show a diff, new files show numbered code, and bash shows the command.
+Read-only tools run without prompting. `write`, `edit`, and the platform shell (`bash` on macOS/Linux,
+`powershell` on Windows) ask before executing. The prompt previews the operation: edits show a diff, new files
+show numbered code, and shell commands show the command.
 
 ```text
 [y] allow once   [A] always allow   [n] deny   [Enter] allow   [Esc] deny   [Shift+Tab] full access
@@ -145,7 +147,8 @@ operation: edits show a diff, new files show numbered code, and bash shows the c
 `Shift+Tab` toggles full-access mode; the footer shows `FULL ACCESS` while it is on, and turning it on allows a
 visible prompt immediately.
 
-`--allow edit,bash` (or `CODIE_ALLOW`) pre-approves tools for the run. A denial becomes an error tool result and
+`--allow edit,bash` (or `CODIE_ALLOW`) pre-approves tools for the run. On Windows use `powershell` instead of
+`bash`. A denial becomes an error tool result and
 the model can recover.
 
 ## Footer

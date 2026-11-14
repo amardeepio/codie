@@ -4,7 +4,7 @@ title: Tool contract and built-in tools
 status: accepted
 version: 1.0.0
 owners: ["@codie-maintainers"]
-requirements: ["TOOL-001", "TOOL-002", "TOOL-003", "TOOL-004", "TOOL-005", "TOOL-006", "TOOL-007", "TOOL-008"]
+requirements: ["TOOL-001", "TOOL-002", "TOOL-003", "TOOL-004", "TOOL-005", "TOOL-006", "TOOL-007", "TOOL-008", "TOOL-030"]
 ---
 
 # Context
@@ -15,7 +15,7 @@ loop failures. Phase 1 ships `read`, `write`, `edit`, and `bash`.
 
 # Requirements
 
-**TOOL-001 (MUST)** The registry declares `read`, `write`, `edit`, `bash`, `grep`, `find`, and `ls` in that order, each with an object schema; unknown names resolve to no tool.
+**TOOL-001 (MUST)** The registry declares `read`, `write`, `edit`, the platform shell, `grep`, `find`, `ls`, and `web_fetch` in that order, each with an object schema; unknown names resolve to no tool. The platform shell is `bash` on macOS and Linux and `powershell` on Windows.
 Verification: `crates/codie-tools/tests/schema_validation.rs::spec_tool_001_registry_declares_schemas`
 
 **TOOL-002 (MUST)** Arguments are validated against the tool's JSON Schema before execution. Invalid arguments produce an error result and the tool is not invoked.
@@ -38,6 +38,9 @@ Verification: `crates/codie-core/tests/agent_loop.rs::spec_tool_007_failures_are
 
 **TOOL-008 (MUST)** Mutations to one path are serialized by a per-path lock so two concurrent writes or edits cannot interleave.
 Verification: `crates/codie-tools/tests/tools.rs::write_serializes_concurrent_updates_to_one_file`
+
+**TOOL-030 (MUST)** On Windows, the registry exposes `powershell` in the shell slot. It runs `pwsh.exe` when present and otherwise `powershell.exe`, forces UTF-8 output, uses the same 120-second default timeout and tail truncation as `bash`, and terminates the process tree with `taskkill /T /F /PID` on timeout or abort.
+Verification: `crates/codie-tools/tests/powershell.rs::powershell_times_out`
 
 # Failure modes
 

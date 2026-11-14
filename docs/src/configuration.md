@@ -17,7 +17,7 @@ codie reads configuration from three layers. Later layers do not override earlie
 | `CODIE_MODEL` | Default model id, used verbatim. |
 | `CODIE_THINKING` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. |
 | `CODIE_MAX_TURNS` | Maximum assistant requests per run. Must be greater than zero. |
-| `CODIE_ALLOW` | Comma-separated mutating tools allowed in headless mode. |
+| `CODIE_ALLOW` | Comma-separated mutating tools allowed in headless mode (`write`, `edit`, `bash`, or `powershell`). |
 | `CODIE_BASE_URL` | Provider base URL override (proxy or local test endpoint). |
 | `CODIE_CONFIG_DIR` | Config directory (default `~/.config/codie`). |
 | `CODIE_DATA_DIR` | Data directory (default `~/.local/share/codie`). |
@@ -29,6 +29,10 @@ codie reads configuration from three layers. Later layers do not override earlie
 | `CODIE_FIXTURE_DIR` | Directory for recorded fixtures (default `target/fixtures`). |
 
 CLI flags override environment values. For example, `--thinking high` wins over `CODIE_THINKING=low`.
+
+On Windows the defaults expand under `%USERPROFILE%`: `\.config\codie`, `\.local\share\codie`,
+`\.local\share\codie\cache`, and `\.local\share\codie\sessions`. Set the `CODIE_*_DIR` variables to relocate
+them.
 
 Inspect the effective values with `codie config get`, or one key with `codie config get provider`. Change a
 value with `codie config set provider openrouter`, print the file path with `codie config path`, and open it in
@@ -90,7 +94,7 @@ thinking = "medium"
 max_turns = 200
 
 [permissions]
-allow = ["edit", "bash"]
+allow = ["edit", "bash"]   # use "powershell" on Windows
 
 [extensions]
 disabled = []

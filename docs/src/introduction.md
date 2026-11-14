@@ -7,23 +7,25 @@ with a Rust core, a stricter safety posture, and a deliberately narrow provider 
 
 ## Status
 
-**Pre-alpha (`0.8.0`).** The workspace, the error model, the test harness, and the
+**Release candidate (`0.9.0-rc.1`).** The workspace, the error model, the test harness, and the
 documentation and specification baseline are in place, and the agent runs end to end. Phase 1 added the headless
 core (`codie -p "..."`, `--mode json`), Phase 2 the interactive terminal app, Phase 3 full-fidelity sessions,
 Phase 4 customization and trust, Phase 5 RPC mode, generated schemas, HTML export, update checks, and the
 performance gate, and Phase 6 out-of-process extensions with hooks, custom tools and commands, and generated
 schemas. The `0.6.0` release refreshed the terminal UI, `0.7.0` added the extension protocol plus an
-OpenRouter coding-model catalog and in-session `/provider` switching, and `0.8.0` adds rich edit/write previews,
+OpenRouter coding-model catalog and in-session `/provider` switching, `0.8.0` added rich edit/write previews,
 collapsed reasoning, `Esc`/`/stop` cancellation, a context meter and `/usage`, permission review previews, tool
-navigation, folded turns, and session picker previews. See the [roadmap](roadmap.md), [RPC mode](rpc.md),
-[configuration](configuration.md), and [`ROADMAP.md`](../../ROADMAP.md).
+navigation, folded turns, and session picker previews, and `0.9.0-rc.1` adds Windows x64 preview packaging, a
+PowerShell tool, the one-command Windows installer, and the release-candidate documentation set. See the
+[roadmap](roadmap.md), [RPC mode](rpc.md), [configuration](configuration.md), and
+[`ROADMAP.md`](../../ROADMAP.md).
 
 ## What it will do
 
 - Run headless with `codie -p "..."` for scripts and CI, or interactively in a terminal UI.
 - Use OpenRouter or DeepSeek through one OpenAI-compatible adapter with per-provider compatibility flags.
-- Execute a small, well-specified tool set: `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, and
-  `web_fetch`.
+- Execute a small, well-specified tool set: `read`, `write`, `edit`, `bash` (or `powershell` on Windows),
+  `grep`, `find`, `ls`, and `web_fetch`.
 - Persist sessions as an append-only JSONL tree that supports resume, fork, and compaction.
 - Stream assistant output as events so the UI and the session store consume the same source of truth.
 - Support out-of-process extensions over JSON-RPC without loading foreign code into the core.

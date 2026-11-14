@@ -29,6 +29,35 @@ that major series, with migrations applied on read.
 
 - Nothing yet.
 
+## [0.9.0-rc.1] - 2026-11-14
+
+### Added
+
+- Windows x64 preview build, packaged as `codie-v<version>-x86_64-pc-windows-msvc.zip` with a per-asset
+  checksum and an entry in `sha256.sum`.
+- One-command PowerShell installer, `install.ps1`, with checksum verification, `%LOCALAPPDATA%` installation,
+  user `PATH` updates, and a pinned-version path through `CODIE_VERSION`.
+- `powershell` tool for Windows, preferring PowerShell 7 and falling back to Windows PowerShell 5.1, with
+  UTF-8 output, timeouts, cancellation, tail truncation, and `taskkill` process-tree termination.
+- Windows clipboard copy through `clip`.
+- Windows home-directory resolution through `USERPROFILE`.
+- Windows-safe extension environments and process-tree termination.
+- Prerelease-aware version comparison for `codie update`.
+- Documentation: quickstart, Windows preview, terminal compatibility, Gatekeeper/quarantine, troubleshooting,
+  and release checklist pages.
+
+### Changed
+
+- The tool registry exposes `bash` on macOS/Linux and `powershell` on Windows in the same slot; the declaration
+  count remains eight.
+- Windows is now documented as a tier-2 preview rather than post-1.0 only.
+- Linux and Windows build jobs were added to CI; the release workflow publishes five archives.
+
+### Security
+
+- The Windows shell and extension processes terminate their process trees with `taskkill /T /F /PID` on
+  timeout or abort.
+
 ## [0.8.0] - 2026-11-13
 
 ### Added
