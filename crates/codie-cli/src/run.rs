@@ -32,7 +32,7 @@ use codie_tui::{TuiOptions, TuiRunMode};
 use tokio_util::sync::CancellationToken;
 
 use crate::auth_cmd::env_var;
-use crate::config::Config;
+use crate::config::{self, Config};
 
 /// Interactive rendering mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -195,7 +195,7 @@ pub(crate) async fn run(args: RunArgs, deferred_flags: BTreeMap<String, String>)
         Some(cwd) => cwd,
         None => std::env::current_dir().context("cannot determine the working directory")?,
     };
-    let cwd = cwd.canonicalize().unwrap_or(cwd);
+    let cwd = config::normalize_cwd(&cwd);
 
     // Project trust decides whether `.codie/` resources are visible. The prompt
     // runs before any terminal setup, so it cannot corrupt the TUI state.

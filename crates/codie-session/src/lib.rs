@@ -15,11 +15,13 @@
 
 mod entry;
 mod html;
+mod key;
 mod migration;
 mod session;
 mod time;
 
 pub use entry::{Entry, HeaderType, SESSION_FORMAT_VERSION, SessionHeader};
+pub use key::session_dir_key;
 pub use migration::{
     MIGRATIONS, MIN_SUPPORTED_VERSION, Migration, is_supported, migrate_value, validate_table,
 };
