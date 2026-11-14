@@ -7,7 +7,7 @@ with a Rust core, a stricter safety posture, and a deliberately narrow provider 
 
 ## Status
 
-**Release candidate (`0.9.0-rc.1`).** The workspace, the error model, the test harness, and the
+**Current release (`0.9.0`).** The workspace, the error model, the test harness, and the
 documentation and specification baseline are in place, and the agent runs end to end. Phase 1 added the headless
 core (`codie -p "..."`, `--mode json`), Phase 2 the interactive terminal app, Phase 3 full-fidelity sessions,
 Phase 4 customization and trust, Phase 5 RPC mode, generated schemas, HTML export, update checks, and the
@@ -15,8 +15,8 @@ performance gate, and Phase 6 out-of-process extensions with hooks, custom tools
 schemas. The `0.6.0` release refreshed the terminal UI, `0.7.0` added the extension protocol plus an
 OpenRouter coding-model catalog and in-session `/provider` switching, `0.8.0` added rich edit/write previews,
 collapsed reasoning, `Esc`/`/stop` cancellation, a context meter and `/usage`, permission review previews, tool
-navigation, folded turns, and session picker previews, and `0.9.0-rc.1` adds Windows x64 preview packaging, a
-PowerShell tool, the one-command Windows installer, and the release-candidate documentation set. See the
+navigation, folded turns, and session picker previews, and `0.9.0` adds Windows x64 preview packaging, a
+PowerShell tool, the one-command Windows installer, and the Windows preview documentation set. See the
 [roadmap](roadmap.md), [RPC mode](rpc.md), [configuration](configuration.md), and
 [`ROADMAP.md`](../../ROADMAP.md).
 

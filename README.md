@@ -7,7 +7,7 @@
 <p align="center">
   <a href="https://www.rust-lang.org/"><img alt="Rust 1.88" src="https://img.shields.io/badge/Rust-1.88-000000?style=flat-square&logo=rust&logoColor=white"></a>
   <img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-6E4AFF?style=flat-square">
-  <img alt="Status: release candidate" src="https://img.shields.io/badge/status-release%20candidate-F59E0B?style=flat-square">
+  <img alt="Status: stable" src="https://img.shields.io/badge/status-stable-2EA043?style=flat-square">
   <img alt="Platform: macOS 13+, Linux, Windows preview" src="https://img.shields.io/badge/platform-macOS%2013%2B%20%C2%B7%20Linux%20%C2%B7%20Windows%20preview-111827?style=flat-square&logo=apple&logoColor=white">
   <img alt="Windows x64 preview" src="https://img.shields.io/badge/Windows-x64%20preview-0078D4?style=flat-square&logo=windows&logoColor=white">
 </p>
@@ -20,7 +20,7 @@ implementation language, the safety posture, and the provider scope.
 
 The command is `codie`.
 
-**Status: release candidate (`0.9.0-rc.1`).** The one-shot agent, the interactive app,
+**Status: stable release (`0.9.0`).** The one-shot agent, the interactive app,
 full-fidelity sessions, customization, automation, and out-of-process extensions all work end to end:
 streaming transcript, editor dock, OpenCode-inspired themes, the startup banner, slash commands, steering,
 permission prompts, plain mode, resume/fork/compact, search tools, skills, prompt templates, project trust,
@@ -28,8 +28,8 @@ system instructions, `@file` and image inputs, guarded `web_fetch`, RPC mode, ge
 transcript export, `codie update --check`, extension hooks, tools, commands, and examples, and an OpenRouter
 coding-model catalog with live `/provider` switching. The `0.8.0` release added rich edit/write previews,
 collapsed reasoning, `Esc`/`/stop` cancellation, a context meter with `/usage`, permission review previews,
-tool navigation, folded turns, and session picker previews. `0.9.0-rc.1` adds a Windows x64 preview build, the
-`powershell` tool, a one-command PowerShell installer, and the release-candidate documentation set. See
+tool navigation, folded turns, and session picker previews. `0.9.0` adds a Windows x64 preview build, the
+`powershell` tool, a one-command PowerShell installer, and the Windows preview documentation set. See
 [`docs/src/configuration.md`](docs/src/configuration.md), [`docs/src/rpc.md`](docs/src/rpc.md), and
 [`ROADMAP.md`](ROADMAP.md).
 
@@ -164,14 +164,14 @@ Pin a version or pick another directory:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh \
-  | sh -s -- --version 0.9.0-rc.1
+  | sh -s -- --version 0.9.0
 
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh \
   | sh -s -- --bin-dir "$HOME/bin"
 ```
 
 ```powershell
-$env:CODIE_VERSION = "0.9.0-rc.1"
+$env:CODIE_VERSION = "0.9.0"
 irm https://raw.githubusercontent.com/amardeepio/codie/main/install.ps1 | iex
 ```
 

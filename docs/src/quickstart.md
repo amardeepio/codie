@@ -18,10 +18,10 @@ Open PowerShell and run:
 irm https://raw.githubusercontent.com/amardeepio/codie/main/install.ps1 | iex
 ```
 
-Pin the release candidate explicitly:
+Pin a specific version explicitly:
 
 ```powershell
-$env:CODIE_VERSION = "0.9.0-rc.1"
+$env:CODIE_VERSION = "0.9.0"
 irm https://raw.githubusercontent.com/amardeepio/codie/main/install.ps1 | iex
 ```
 

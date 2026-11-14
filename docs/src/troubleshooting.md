@@ -119,10 +119,10 @@ The picker only lists sessions for the current working directory. Run it from th
 
 ## Updates
 
-### `codie update --check` does not offer the release candidate
+### `codie update --check` does not offer a pre-release
 
-Release candidates are marked as pre-releases, so GitHub's “latest release” endpoint excludes them. Install a
-candidate explicitly with `CODIE_VERSION` or the platform installer.
+Pre-releases are marked as such, so GitHub's “latest release” endpoint excludes them. Install a pre-release
+explicitly with `CODIE_VERSION` or the platform installer.
 
 ### Update fails while codie is running
 

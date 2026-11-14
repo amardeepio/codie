@@ -17,8 +17,8 @@ not commitments; the exit criteria are the real gate.
 | 6 | Extensions: JSON-RPC protocol, hooks, manifests, examples | 3 wk | 16 wk | `0.7.0` — extension protocol | Complete |
 | 7 | Release hardening: macOS matrix, signing, notarization, fuzzing | 2 wk | 18 wk | `1.0.0` | In progress |
 
-`0.9.0-rc.1` is the Phase 7 release candidate. It adds a Windows x64 preview build, the `powershell` tool, the
-one-command PowerShell installer, and the release-candidate documentation set. Signing, notarization, SBOM,
+`0.9.0` is the Phase 7 release. It adds a Windows x64 preview build, the `powershell` tool, the
+one-command PowerShell installer, and the Windows preview documentation set. Signing, notarization, SBOM,
 fuzzing, and the full terminal matrix remain for the `1.0.0` gate.
 
 ## Phase 0 exit criteria (met 2026-11-11)
