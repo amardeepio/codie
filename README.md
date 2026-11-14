@@ -142,7 +142,7 @@ and [`specs/README.md`](specs/README.md).
 
 ## Install
 
-macOS 13+ on arm64 or x64 is tier 1; Linux glibc 2.31+ is best effort; Windows 10 21H2+ / 11 x64 is a preview.
+macOS 13+ on arm64 and x64 is tier 1 (x64 installs from source); Linux glibc 2.31+ is best effort; Windows 10 21H2+ / 11 x64 is a preview.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh | sh
@@ -260,8 +260,8 @@ additional vendors are out of scope for v1.0. See [`docs/src/providers.md`](docs
 
 ## Platforms
 
-- **Tier 1:** macOS 13+ on arm64 and x64. Release-blocking; Developer ID signing and notarization are required
-  before the 1.0 gate.
+- **Tier 1:** macOS 13+ on arm64 and x64 (x64 installs from source). Release-blocking; Developer ID signing
+  and notarization are required before the 1.0 gate.
 - **Tier 2:** Linux glibc 2.31+ and WSL. Builds and core paths work; best-effort fixes.
 - **Preview:** Windows 10 21H2+ / 11 x64. MSVC build, one-command PowerShell installer, `powershell` tool;
   no `bash`, no Job Objects, no ConPTY matrix, unsigned.

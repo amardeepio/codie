@@ -32,8 +32,9 @@ Retry; if it persists, report the URL and the expected/actual hash.
 
 ### The installer cannot find an archive for the version
 
-Tagged releases publish archives for macOS arm64/x64, Linux arm64/x64, and Windows x64. A tag without artifacts
-falls back to a source build on macOS and Linux. Windows requires a published `.zip`; pin a version that has one.
+Tagged releases publish archives for macOS arm64, Linux arm64/x64, and Windows x64. A tag without artifacts
+falls back to a source build on macOS and Linux; macOS x64 always builds from source. Windows requires a
+published `.zip`; pin a version that has one.
 
 ## Authentication and providers
 

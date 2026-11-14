@@ -1,7 +1,7 @@
 # Installation
 
-`codie` ships as a single binary. The install script supports macOS 13+ on arm64 and x64 (tier 1), Linux
-glibc 2.31+ on arm64 and x64 (best effort), and Windows 10 21H2+ / Windows 11 x64 (preview).
+`codie` ships as a single binary. The install script supports macOS 13+ on arm64 and x64 (tier 1; x64 builds
+from source), Linux glibc 2.31+ on arm64 and x64 (best effort), and Windows 10 21H2+ / Windows 11 x64 (preview).
 
 ## Install with curl (macOS and Linux)
 
@@ -69,7 +69,7 @@ temporary directory that is removed afterwards.
 | Platform | Status | Notes |
 |---|---|---|
 | macOS 13+ arm64 | Tier 1 | Release-blocking. |
-| macOS 13+ x64 | Tier 1 | Release-blocking. |
+| macOS 13+ x64 | Tier 1 | Source installs only; no prebuilt archive. |
 | Linux glibc 2.31+ | Tier 2 | Best effort; WSL works through the same target. |
 | Windows 10 21H2+ / 11 x64 | Preview | Not release-blocking; `powershell` replaces `bash`. |
 
@@ -154,8 +154,9 @@ Retry, and if the failure persists report it at <https://github.com/amardeepio/c
 
 ### Source build is slow
 
-Tagged releases publish prebuilt archives for macOS (arm64/x64), Linux (arm64/x64), and Windows x64. If the
-requested tag has no artifact, the Unix script compiles from source with Rust 1.88, which takes a few minutes.
+Tagged releases publish prebuilt archives for macOS arm64, Linux (arm64/x64), and Windows x64. macOS x64 builds
+from source. If the requested tag has no artifact, the Unix script compiles from source with Rust 1.88, which
+takes a few minutes.
 Older tags (including `0.5.0` and `0.6.0`) predate the release workflow and always build from source. Windows
 requires a published `.zip`.
 

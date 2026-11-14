@@ -37,17 +37,18 @@ and the later `1.0.0` gate.
    git tag -a v0.9.0 -m "codie 0.9.0"
    git push origin v0.9.0
    ```
-2. The release workflow builds macOS arm64/x64, Linux arm64/x64, and Windows x64 archives, verifies the tag,
+2. The release workflow builds macOS arm64, Linux arm64/x64, and Windows x64 archives, verifies the tag,
    and publishes checksums.
 3. Release candidates are created as GitHub pre-releases. They do not appear in `/releases/latest`, so
    `codie update` will not offer them without an explicit version.
 4. Verify the release page has:
    - `codie-v<version>-aarch64-apple-darwin.tar.gz` and `.sha256`
-   - `codie-v<version>-x86_64-apple-darwin.tar.gz` and `.sha256`
    - `codie-v<version>-aarch64-unknown-linux-gnu.tar.gz` and `.sha256`
    - `codie-v<version>-x86_64-unknown-linux-gnu.tar.gz` and `.sha256`
    - `codie-v<version>-x86_64-pc-windows-msvc.zip` and `.sha256`
    - `sha256.sum`
+
+   macOS x64 is not published as a prebuilt archive; Intel Macs install from source.
 
 ## Post-release verification
 
