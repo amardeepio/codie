@@ -31,6 +31,10 @@ that major series, with migrations applied on read.
 
 ## [0.9.0] - 2026-11-14
 
+### Changed
+
+- Prebuilt macOS x86_64 archives are no longer published. Intel Macs install from source with `install.sh`.
+
 ### Fixed
 
 - Windows session directories are now built from a filesystem-safe key: the verbatim `\\?\` prefix from

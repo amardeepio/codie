@@ -5,7 +5,7 @@ happens to compile somewhere.
 
 | Tier | Meaning | Release-blocking | Platform |
 |---|---|---|---|
-| 1 | Fully supported. Full CI suite on real hardware; P0/P1 bugs block release; documented behavior is guaranteed. | Yes | macOS 13+ (arm64 and x64) |
+| 1 | Fully supported. Full CI suite on real hardware; P0/P1 bugs block release; documented behavior is guaranteed. | Yes | macOS 13+ (arm64 and x64; x64 installs from source) |
 | 2 | Builds and core paths work; fixes are best-effort; known gaps are documented. | No | Linux glibc 2.31+ (x64/arm64), WSL; Windows 10 21H2+ / 11 x64 (preview) |
 | 3 | Community-supported; no guarantees; post-1.0 roadmap. | No | Windows ARM64, other Unixes |
 
@@ -13,8 +13,8 @@ happens to compile somewhere.
 
 v1.0 is macOS-first. The tier-1 scope includes:
 
-- Native arm64 and x64 binaries, or one universal2 binary, signed with a Developer ID and notarized so
-  Gatekeeper opens it without workarounds.
+- Native arm64 binaries (x64 builds from source), or one universal2 binary, signed with a Developer ID and
+  notarized so Gatekeeper opens it without workarounds.
 - Print, JSON, RPC, and interactive TUI modes in Terminal.app, iTerm2, Ghostty, kitty, WezTerm, and the VS Code
   integrated terminal.
 - Raw mode, bracketed paste, truecolor and 256-color fallback, resize handling, and Option-as-Meta. Cmd is left
@@ -28,7 +28,7 @@ v1.0 is macOS-first. The tier-1 scope includes:
 The `0.9.0` release does not satisfy all of these yet: signing, notarization, the full terminal
 matrix, APFS/NFC coverage, and OSC 52 remain open. They are tracked in [Releases](release.md).
 
-Every release builds both macOS targets, Linux, and Windows in CI. A red `check`, `linux`, or `windows` job
+Every release builds the macOS arm64, Linux, and Windows targets in CI. A red `check`, `linux`, or `windows` job
 blocks merges, and the release workflow revalidates the tag and version before publishing.
 Terminal coverage is tracked in [Terminal compatibility](terminals.md).
 
@@ -78,7 +78,7 @@ not require rewriting the session, provider, or agent layers.
 
 Tagged releases are built by `.github/workflows/release.yml`, which publishes:
 
-- `codie-v<version>-<target>.tar.gz` archives for macOS arm64/x64 and Linux arm64/x64.
+- `codie-v<version>-<target>.tar.gz` archives for macOS arm64 and Linux arm64/x64.
 - `codie-v<version>-x86_64-pc-windows-msvc.zip`.
 - A per-asset `.sha256` and a combined `sha256.sum`.
 

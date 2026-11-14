@@ -64,8 +64,6 @@ jobs:
         include:
           - target: aarch64-apple-darwin
             os: macos-15
-          - target: x86_64-apple-darwin
-            os: macos-15-intel
     steps:
       - uses: actions/checkout@v4
         with:
@@ -197,8 +195,8 @@ jobs:
           set -eu
           cd dist
           archives=$(ls ./*.tar.gz ./*.zip | wc -l)
-          if [ "$archives" -ne 5 ]; then
-            echo "expected 5 release archives, found $archives" >&2
+          if [ "$archives" -ne 4 ]; then
+            echo "expected 4 release archives, found $archives" >&2
             ls -la >&2
             exit 1
           fi
