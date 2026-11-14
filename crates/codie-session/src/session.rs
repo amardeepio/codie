@@ -341,12 +341,7 @@ impl Session {
                 last_assistant,
             });
         }
-        summaries.sort_by(|left, right| {
-            right
-                .updated_at
-                .cmp(&left.updated_at)
-                .then_with(|| right.created_at.cmp(&left.created_at))
-        });
+        sort_summaries(&mut summaries);
         Ok(summaries)
     }
 
@@ -1251,6 +1246,23 @@ fn message_chars(content: &[Content]) -> u64 {
         .sum()
 }
 
+/// Orders summaries newest first, breaking timestamp ties by session identifier.
+///
+/// File modification times can be equal when two sessions are written within
+/// the same filesystem clock tick (Windows rounds to roughly 16 ms), and header
+/// timestamps only carry millisecond precision. Identifiers embed nanoseconds,
+/// so they give a stable final order instead of falling back to `read_dir`
+/// order.
+fn sort_summaries(summaries: &mut [SessionSummary]) {
+    summaries.sort_by(|left, right| {
+        right
+            .updated_at
+            .cmp(&left.updated_at)
+            .then_with(|| right.created_at.cmp(&left.created_at))
+            .then_with(|| right.id.cmp(&left.id))
+    });
+}
+
 /// Truncates a 64-bit mixed value to an identifier-sized value.
 const fn mix(mut value: u64) -> u64 {
     value = value.wrapping_add(0x9E37_79B9_7F4A_7C15);
@@ -1309,10 +1321,50 @@ fn cwd_matches(stored: &str, cwd: &Path) -> bool {
 mod tests {
     use super::*;
 
+    fn summary(id: &str, updated_at: SystemTime) -> SessionSummary {
+        SessionSummary {
+            path: PathBuf::from(format!("{id}.jsonl")),
+            id: id.to_owned(),
+            name: None,
+            cwd: ".".to_owned(),
+            created_at: "2026-01-01T00:00:00.000Z".to_owned(),
+            updated_at,
+            message_count: 0,
+            parent_session: None,
+            model: None,
+            tokens: 0,
+            cost: 0,
+            last_user: None,
+            last_assistant: None,
+        }
+    }
+
     #[test]
     fn mixing_produces_distinct_values() {
         assert_ne!(mix(1), mix(2));
         assert_ne!(mix(0), 0);
+    }
+
+    #[test]
+    fn tied_summaries_are_ordered_newest_id_first() {
+        let stamp = SystemTime::UNIX_EPOCH;
+        let mut summaries = vec![
+            summary("18e7e4771d107fc4-000e", stamp),
+            summary("18e7e4771cf00000-0001", stamp),
+            summary("18e7e4771d1a7df8-000f", stamp),
+        ];
+        sort_summaries(&mut summaries);
+        assert_eq!(
+            summaries
+                .iter()
+                .map(|summary| summary.id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "18e7e4771d1a7df8-000f",
+                "18e7e4771d107fc4-000e",
+                "18e7e4771cf00000-0001",
+            ]
+        );
     }
 
     #[test]

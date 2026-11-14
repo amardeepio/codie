@@ -83,3 +83,9 @@ jobs:
 
       - name: Test the PowerShell tool
         run: cargo test -p codie-tools --test powershell
+
+      - name: Test session path encoding
+        run: cargo test -p codie-session
+
+      - name: Test CLI unit tests
+        run: cargo test -p codie-cli --bin codie

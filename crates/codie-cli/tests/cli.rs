@@ -253,11 +253,10 @@ fn sessions_list_show_and_export_are_read_only() {
     let project = home.path().join("project");
     std::fs::create_dir_all(&project).expect("project");
     let project = project.canonicalize().expect("canonical project");
-    let encoded = project
-        .to_string_lossy()
-        .trim_start_matches('/')
-        .replace(['/', '\\', ':'], "-");
-    let session_dir = home.path().join("sessions").join(format!("--{encoded}--"));
+    let session_dir = home.path().join("sessions").join(format!(
+        "--{}--",
+        codie_session::session_dir_key(&project.to_string_lossy())
+    ));
 
     let mut session = Session::create(&project, &session_dir).expect("session");
     session.set_name("demo session").expect("name");
@@ -389,12 +388,14 @@ fn sessions_export_html_is_self_contained() {
     use codie_session::Session;
 
     let (mut command, home) = codie();
-    let cwd = std::env::current_dir().expect("cwd");
-    let encoded = cwd
-        .to_string_lossy()
-        .trim_start_matches('/')
-        .replace(['/', '\\', ':'], "-");
-    let sessions = home.path().join("sessions").join(format!("--{encoded}--"));
+    let cwd = std::env::current_dir()
+        .expect("cwd")
+        .canonicalize()
+        .expect("canonical cwd");
+    let sessions = home.path().join("sessions").join(format!(
+        "--{}--",
+        codie_session::session_dir_key(&cwd.to_string_lossy())
+    ));
     std::fs::create_dir_all(&sessions).expect("sessions dir");
 
     let mut session = Session::create(&cwd, &sessions).expect("session");

@@ -132,11 +132,25 @@ impl Config {
     /// Returns the per-project session directory.
     #[must_use]
     pub(crate) fn session_dir_for(&self, cwd: &Path) -> PathBuf {
-        let encoded = cwd
-            .to_string_lossy()
-            .trim_start_matches('/')
-            .replace(['/', '\\', ':'], "-");
-        self.session_dir.join(format!("--{encoded}--"))
+        let key = codie_session::session_dir_key(&cwd.to_string_lossy());
+        self.session_dir.join(format!("--{key}--"))
+    }
+}
+
+/// Canonicalizes a working directory and removes a Windows verbatim prefix.
+///
+/// `Path::canonicalize` yields `\\?\C:\...` on Windows. That prefix is legal in
+/// Win32 API calls but invalid in a directory name, so normalize it once before
+/// the path is used for sessions, trust, prompts, or display.
+pub(crate) fn normalize_cwd(cwd: &Path) -> PathBuf {
+    let canonical = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+    let text = canonical.to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{rest}"))
+    } else if let Some(rest) = text.strip_prefix(r"\\?\") {
+        PathBuf::from(rest)
+    } else {
+        canonical
     }
 }
 
@@ -173,13 +187,12 @@ fn home_dir() -> PathBuf {
 mod tests {
     use super::*;
 
-    #[test]
-    fn session_directory_encodes_the_working_directory() {
-        let config = Config {
+    fn test_config(session_dir: PathBuf) -> Config {
+        Config {
             data_dir: PathBuf::from("/tmp/d"),
             config_dir: PathBuf::from("/tmp/cfg"),
             cache_dir: PathBuf::from("/tmp/c"),
-            session_dir: PathBuf::from("/tmp/s"),
+            session_dir,
             default_provider: "deepseek".into(),
             default_model: None,
             thinking: ThinkingLevel::Medium,
@@ -187,8 +200,54 @@ mod tests {
             base_url: None,
             allow: Vec::new(),
             extensions_disabled: Vec::new(),
-        };
+        }
+    }
+
+    #[test]
+    fn session_directory_encodes_the_working_directory() {
+        let config = test_config(PathBuf::from("/tmp/s"));
         let directory = config.session_dir_for(Path::new("/Users/me/project"));
         assert!(directory.ends_with("--Users-me-project--"));
+    }
+
+    #[test]
+    fn session_directory_copes_with_windows_verbatim_paths() {
+        let config = test_config(PathBuf::from("/tmp/s"));
+        let directory = config.session_dir_for(Path::new(r"\\?\C:\Users\amard"));
+        assert!(directory.ends_with("--C--Users-amard--"));
+
+        let name = directory
+            .file_name()
+            .expect("session directory name")
+            .to_string_lossy();
+        for character in ['<', '>', ':', '"', '/', '\\', '|', '?', '*'] {
+            assert!(
+                !name.contains(character),
+                "{character:?} survived in {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_cwd_strips_windows_verbatim_prefixes() {
+        assert_eq!(
+            normalize_cwd(Path::new(r"\\?\C:\Users\amard")),
+            PathBuf::from(r"C:\Users\amard")
+        );
+        assert_eq!(
+            normalize_cwd(Path::new(r"\\?\UNC\server\share\project")),
+            PathBuf::from(r"\\server\share\project")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn session_directory_for_the_process_cwd_can_be_created() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let config = test_config(root.path().to_path_buf());
+        let cwd = normalize_cwd(&std::env::current_dir().expect("cwd"));
+        let directory = config.session_dir_for(&cwd);
+        std::fs::create_dir_all(&directory).expect("session directory must be creatable");
+        assert!(directory.is_dir());
     }
 }

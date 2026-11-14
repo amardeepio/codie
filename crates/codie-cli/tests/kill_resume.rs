@@ -21,11 +21,10 @@ use codie_testkit::spec;
 const PROMPT: &str = "hello from kill test";
 
 fn session_dir(home: &Path, project: &Path) -> PathBuf {
-    let encoded = project
-        .to_string_lossy()
-        .trim_start_matches('/')
-        .replace(['/', '\\', ':'], "-");
-    home.join("sessions").join(format!("--{encoded}--"))
+    home.join("sessions").join(format!(
+        "--{}--",
+        codie_session::session_dir_key(&project.to_string_lossy())
+    ))
 }
 
 fn session_files(dir: &Path) -> Vec<PathBuf> {

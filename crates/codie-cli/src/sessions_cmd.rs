@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
 use codie_session::Session;
 
-use crate::config::Config;
+use crate::config::{Config, normalize_cwd};
 
 /// Arguments for `codie sessions`.
 #[derive(Debug, Args)]
@@ -68,6 +68,7 @@ enum ExportFormat {
 /// Runs one session command.
 pub(crate) fn run(args: SessionsArgs, config: &Config) -> Result<u8> {
     let cwd = std::env::current_dir().context("cannot determine the working directory")?;
+    let cwd = normalize_cwd(&cwd);
     let session_dir = config.session_dir_for(&cwd);
 
     match args.command {
