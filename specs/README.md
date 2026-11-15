@@ -117,6 +117,7 @@ snake_case so failures are readable without the macro.
 | [`SPEC-PROV-002`](provider/0002-deepseek.md) — DeepSeek profile | none (profile) | accepted | 1 |
 | [`SPEC-PROV-003`](provider/0003-openrouter.md) — OpenRouter profile | none (profile) | accepted | 1 |
 | [`SPEC-PROV-004`](provider/0004-auth.md) — Authentication | `PROV-030`..`PROV-034` | accepted | 1 |
+| [`SPEC-PROV-005`](provider/0005-gemini.md) — Google Gemini profile | none (profile) | accepted | — |
 | [`SPEC-TOOL-001`](tools/0001-tool-contract.md) — Tool contract | `TOOL-001`..`TOOL-008` | accepted | 1 |
 | [`SPEC-TOOL-002`](tools/0002-search-tools.md) — Read-only search tools | `TOOL-010`..`TOOL-014` | implemented | 4 |
 | [`SPEC-TOOL-003`](tools/0003-web-fetch.md) — Web fetch | `TOOL-020`..`TOOL-022` | implemented | 4 |

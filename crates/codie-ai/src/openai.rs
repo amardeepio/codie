@@ -19,8 +19,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::model::{
     Compat, DEFAULT_HTTP_REFERER, DEFAULT_X_TITLE, HeaderMap, MaxTokensField, Model, ModelCost,
-    PROVIDER_DEEPSEEK, PROVIDER_OPENROUTER, ThinkingFormat, builtin_models, fallback_model,
-    provider_base_url,
+    PROVIDER_DEEPSEEK, PROVIDER_GEMINI, PROVIDER_OPENROUTER, ThinkingFormat, builtin_models,
+    fallback_model, provider_base_url,
 };
 use crate::record::Recorder;
 use crate::redact::{redact_text, redacted_headers};
@@ -40,8 +40,9 @@ const CHANNEL_CAPACITY: usize = 256;
 /// An OpenAI-compatible provider for DeepSeek and OpenRouter.
 ///
 /// Construct one with [`OpenAiProvider::deepseek`],
-/// [`OpenAiProvider::openrouter`], or [`OpenAiProvider::new`]. The provider is
-/// cheap to clone and is usually wrapped in an [`std::sync::Arc`] by the agent.
+/// [`OpenAiProvider::openrouter`], [`OpenAiProvider::gemini`], or
+/// [`OpenAiProvider::new`]. The provider is cheap to clone and is usually
+/// wrapped in an [`std::sync::Arc`] by the agent.
 #[derive(Clone)]
 pub struct OpenAiProvider {
     provider_id: String,
@@ -108,6 +109,26 @@ impl OpenAiProvider {
             models,
             Compat::openrouter(),
             headers,
+        )
+    }
+
+    /// Creates a Google Gemini provider with the bundled model catalog.
+    ///
+    /// Gemini is served through its OpenAI-compatible endpoint, so the same
+    /// adapter handles SSE framing, retries, tool calls, and usage.
+    #[must_use]
+    pub fn gemini(api_key: impl Into<String>) -> Self {
+        let models = builtin_models()
+            .into_iter()
+            .filter(|model| model.provider == PROVIDER_GEMINI)
+            .collect();
+        Self::new(
+            PROVIDER_GEMINI,
+            provider_base_url(PROVIDER_GEMINI),
+            api_key,
+            models,
+            Compat::gemini(),
+            HeaderMap::new(),
         )
     }
 
@@ -505,6 +526,7 @@ struct PendingCall {
     id: String,
     name: String,
     arguments: String,
+    thought_signature: Option<String>,
 }
 
 struct StreamState {
@@ -696,10 +718,9 @@ impl StreamState {
         call: &Value,
         sender: &AssistantStreamSender,
     ) -> Result<(), ConsumeError> {
-        let provider_index =
-            usize::try_from(call.get("index").and_then(json_u64).unwrap_or(0)).unwrap_or(0);
+        let call_key = self.call_key(call);
 
-        if !self.calls.contains_key(&provider_index) {
+        if !self.calls.contains_key(&call_key) {
             let content_index = self.partial.content.len();
             self.partial.content.push(Content::ToolCall {
                 id: String::new(),
@@ -708,12 +729,13 @@ impl StreamState {
                 thought_signature: None,
             });
             self.calls.insert(
-                provider_index,
+                call_key,
                 PendingCall {
                     content_index,
                     id: String::new(),
                     name: String::new(),
                     arguments: String::new(),
+                    thought_signature: None,
                 },
             );
             emit(
@@ -727,7 +749,7 @@ impl StreamState {
 
         let mut argument_delta = None;
         let mut content_index = 0;
-        if let Some(pending) = self.calls.get_mut(&provider_index) {
+        if let Some(pending) = self.calls.get_mut(&call_key) {
             content_index = pending.content_index;
 
             if let Some(id) = call.get("id").and_then(Value::as_str)
@@ -735,6 +757,10 @@ impl StreamState {
                 && !id.is_empty()
             {
                 pending.id = id.to_owned();
+            }
+
+            if let Some(signature) = thought_signature(call) {
+                pending.thought_signature = Some(signature.to_owned());
             }
 
             if let Some(function) = call.get("function") {
@@ -767,6 +793,48 @@ impl StreamState {
         }
 
         Ok(())
+    }
+
+    /// Resolves which pending call a delta belongs to.
+    ///
+    /// The OpenAI wire protocol keys calls by `index`, but Gemini may reuse an
+    /// index for parallel calls or omit it entirely. A non-empty `id` is
+    /// therefore authoritative: a delta continues the call with the same id,
+    /// and an unseen id starts a new call even when the index collides.
+    fn call_key(&self, call: &Value) -> usize {
+        let index = call
+            .get("index")
+            .and_then(json_u64)
+            .map(|value| usize::try_from(value).unwrap_or(0));
+        let id = call
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty());
+
+        if let Some(id) = id
+            && let Some((key, _)) = self.calls.iter().find(|(_, pending)| pending.id == id)
+        {
+            return *key;
+        }
+
+        match index {
+            Some(index) => {
+                let conflicts = self.calls.get(&index).is_some_and(|pending| {
+                    !pending.id.is_empty() && id.is_some_and(|id| id != pending.id)
+                });
+                if conflicts {
+                    self.next_call_key()
+                } else {
+                    index
+                }
+            }
+            None if id.is_some() => self.next_call_key(),
+            None => self.calls.keys().next_back().copied().unwrap_or(0),
+        }
+    }
+
+    fn next_call_key(&self) -> usize {
+        self.calls.keys().next_back().map_or(0, |key| key + 1)
     }
 
     async fn close(&mut self, sender: &AssistantStreamSender) -> Result<(), ConsumeError> {
@@ -804,12 +872,13 @@ impl StreamState {
                 id,
                 name,
                 arguments: slot,
-                ..
+                thought_signature,
             }) = self.partial.content.get_mut(pending.content_index)
             {
                 *id = pending.id.clone();
                 *name = pending.name.clone();
                 *slot = arguments;
+                *thought_signature = pending.thought_signature.clone();
             }
 
             emit(
@@ -960,6 +1029,24 @@ impl StreamState {
 
 fn elapsed_ms(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+/// Returns the Gemini thought signature carried by a tool-call delta.
+///
+/// The OpenAI-compatible endpoint attaches it as
+/// `extra_content.google.thought_signature`; a top-level `thought_signature`
+/// is accepted as a fallback for gateways that flatten the object.
+fn thought_signature(call: &Value) -> Option<&str> {
+    call.get("extra_content")
+        .and_then(|extra| extra.get("google"))
+        .and_then(|google| google.get("thought_signature"))
+        .and_then(Value::as_str)
+        .filter(|signature| !signature.is_empty())
+        .or_else(|| {
+            call.get("thought_signature")
+                .and_then(Value::as_str)
+                .filter(|signature| !signature.is_empty())
+        })
 }
 
 fn text_content(content: &Value) -> String {
@@ -1310,16 +1397,26 @@ fn wire_message(message: &Message, compat: &Compat) -> Value {
                         id,
                         name,
                         arguments,
-                        ..
-                    } => Some(json!({
-                        "id": id,
-                        "type": "function",
-                        "function": {
-                            "name": name,
-                            "arguments": serde_json::to_string(arguments)
-                                .unwrap_or_else(|_| "{}".to_owned()),
+                        thought_signature,
+                    } => {
+                        let mut call = json!({
+                            "id": id,
+                            "type": "function",
+                            "function": {
+                                "name": name,
+                                "arguments": serde_json::to_string(arguments)
+                                    .unwrap_or_else(|_| "{}".to_owned()),
+                            }
+                        });
+                        // Gemini 3+ rejects replayed function calls that omit
+                        // the signature returned with the original call.
+                        if let Some(signature) = thought_signature {
+                            call["extra_content"] = json!({
+                                "google": { "thought_signature": signature },
+                            });
                         }
-                    })),
+                        Some(call)
+                    }
                     _ => None,
                 })
                 .collect::<Vec<_>>();

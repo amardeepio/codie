@@ -1,0 +1,9 @@
+{
+  "name": "codie-benchmark-verifier",
+  "private": true,
+  "type": "module",
+  "description": "Hidden browser verifier for the codie vs opencode benchmark",
+  "dependencies": {
+    "playwright-core": "^1.65.1"
+  }
+}

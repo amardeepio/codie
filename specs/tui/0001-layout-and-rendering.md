@@ -2,9 +2,9 @@
 id: SPEC-TUI-001
 title: Interactive terminal interface
 status: accepted
-version: 1.0.0
+version: 1.1.0
 owners: ["@codie-maintainers"]
-requirements: ["TUI-001", "TUI-002", "TUI-003", "TUI-004", "TUI-005", "TUI-006", "TUI-007", "TUI-008", "TUI-009", "TUI-010"]
+requirements: ["TUI-001", "TUI-002", "TUI-003", "TUI-004", "TUI-005", "TUI-006", "TUI-007", "TUI-008", "TUI-009", "TUI-010", "TUI-030"]
 ---
 
 # Context
@@ -37,6 +37,9 @@ Verification: `crates/codie-tui/src/keybindings.rs::spec_tui_007_default_binding
 
 **TUI-008 (MUST)** Themes are declarative TOML files with semantic tokens; `system`, `dark`, and `light` are built in, the body text must meet a 4.5:1 contrast ratio, and a theme file reloads when it changes.
 Verification: `crates/codie-tui/src/theme.rs::spec_tui_008_theme_hot_reload`
+
+**TUI-030 (MUST)** `dracula`, `material`, `gruvbox`, `nord`, `nightowl`, `orng` (alias `orange`), and `tokyonight` are built-in themes ported from OpenCode's palettes. They are accepted by `--theme`, `/theme`, and `CODIE_THEME`, listed by the theme picker, and meet the same 4.5:1 contrast rule for body text and semantic colors. Where an OpenCode color falls below that ratio, the nearest lighter variant of the same hue is used.
+Verification: `crates/codie-tui/src/theme.rs::builtin_themes_load_with_their_names`, `crates/codie-tui/src/theme.rs::builtin_text_colors_meet_contrast`
 
 **TUI-009 (MUST)** A panic, SIGINT, SIGTERM, or SIGHUP restores raw mode, leaves the alternate screen, and shows the cursor before the process exits.
 Verification: `crates/codie-cli/tests/pty.rs::spec_tui_009_terminal_restored_on_signals`

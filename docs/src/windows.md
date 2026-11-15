@@ -30,7 +30,7 @@ It never asks for administrator rights and never writes machine-wide settings.
 ### Pin a version
 
 ```powershell
-$env:CODIE_VERSION = "0.9.0"
+$env:CODIE_VERSION = "0.9.1"
 irm https://raw.githubusercontent.com/amardeepio/codie/main/install.ps1 | iex
 ```
 
@@ -109,7 +109,7 @@ $env:Path = "$env:LOCALAPPDATA\Programs\codie;$env:Path"
 
 ### SmartScreen or antivirus blocks the download
 
-The `0.9.0` release is not code-signed yet. If your organization blocks unsigned binaries, install from
+The `0.9.1` release is not code-signed yet. If your organization blocks unsigned binaries, install from
 source with a Rust 1.88 toolchain, or wait for the signed `1.0` release. Do not disable security controls
 globally.
 

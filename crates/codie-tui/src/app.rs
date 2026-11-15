@@ -452,6 +452,10 @@ pub struct PermissionPrompt {
     pub arguments: Value,
     /// Structured preview for edit, write, and bash calls.
     pub preview: Option<codie_protocol::ext::ExtRenderHint>,
+    /// Vertical scroll offset for the preview body.
+    pub scroll: u16,
+    /// True when the preview shows every row instead of the capped view.
+    pub expanded: bool,
     /// Reply channel.
     reply: Option<oneshot::Sender<Decision>>,
 }
@@ -506,6 +510,33 @@ pub enum Action {
     Quit,
 }
 
+/// A mouse text selection over the rendered screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Selection {
+    /// Row and column where the drag started.
+    pub anchor: (u16, u16),
+    /// Row and column of the pointer.
+    pub cursor: (u16, u16),
+}
+
+impl Selection {
+    /// Returns the top-left and bottom-right corners in reading order.
+    #[must_use]
+    pub fn bounds(&self) -> ((u16, u16), (u16, u16)) {
+        if self.cursor < self.anchor {
+            (self.cursor, self.anchor)
+        } else {
+            (self.anchor, self.cursor)
+        }
+    }
+
+    /// Returns true when both corners sit on the same cell.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.anchor == self.cursor
+    }
+}
+
 /// The interactive application state.
 pub struct App {
     /// Scrolling transcript.
@@ -520,6 +551,16 @@ pub struct App {
     pub status: Status,
     /// Active overlay.
     pub overlay: Option<Overlay>,
+    /// Active mouse selection, if any.
+    pub selection: Option<Selection>,
+    /// True while the primary mouse button is held for a drag.
+    dragging: bool,
+    /// Set when the selection should be copied on the next frame.
+    pub copy_pending: bool,
+    /// Set when one more frame is needed, for example after a copy notice.
+    pub needs_redraw: bool,
+    /// Transient message shown in the editor title until the next input.
+    pub notice: Option<String>,
     /// True when the app should exit.
     pub should_quit: bool,
     /// True when mutating tools run without a prompt.
@@ -643,6 +684,11 @@ impl App {
             },
             status: Status::Idle,
             overlay: None,
+            selection: None,
+            dragging: false,
+            copy_pending: false,
+            needs_redraw: false,
+            notice: None,
             should_quit: false,
             auto_approve: false,
             tick: 0,
@@ -685,6 +731,10 @@ impl App {
     pub fn handle_key(&mut self, key: KeyEvent) -> Action {
         if key.kind == KeyEventKind::Release {
             return Action::None;
+        }
+        self.notice = None;
+        if self.selection.is_some() {
+            self.clear_selection();
         }
         if key.code == KeyCode::BackTab {
             return self.dispatch_action(ActionId::ToggleAutoApprove);
@@ -752,6 +802,58 @@ impl App {
             }
             _ => Action::None,
         }
+    }
+
+    /// Starts a mouse selection at a screen position.
+    pub fn begin_selection(&mut self, column: u16, row: u16) {
+        self.notice = None;
+        self.selection = Some(Selection {
+            anchor: (row, column),
+            cursor: (row, column),
+        });
+        self.dragging = true;
+    }
+
+    /// Extends the active selection to a screen position.
+    pub fn drag_selection(&mut self, column: u16, row: u16) {
+        if !self.dragging {
+            return;
+        }
+        if let Some(selection) = self.selection.as_mut() {
+            selection.cursor = (row, column);
+        }
+    }
+
+    /// Ends a mouse selection.
+    ///
+    /// Returns true when the gesture never moved, so the caller can treat it as
+    /// a click.
+    pub fn end_selection(&mut self, column: u16, row: u16) -> bool {
+        if !self.dragging {
+            return true;
+        }
+        self.dragging = false;
+        if let Some(selection) = self.selection.as_mut() {
+            selection.cursor = (row, column);
+        }
+        let dragged = self
+            .selection
+            .is_some_and(|selection| !selection.is_empty());
+        if dragged {
+            self.copy_pending = true;
+            false
+        } else {
+            self.selection = None;
+            true
+        }
+    }
+
+    /// Clears any selection highlight.
+    pub fn clear_selection(&mut self) {
+        self.selection = None;
+        self.dragging = false;
+        self.copy_pending = false;
+        self.notice = None;
     }
 
     /// Handles a left click at a terminal position.
@@ -910,6 +1012,32 @@ impl App {
             KeyCode::Char('A') => Some(Decision::Always),
             KeyCode::Char('n' | 'N' | 'd' | 'D') | KeyCode::Esc => Some(Decision::Deny),
             KeyCode::Enter => Some(Decision::Allow),
+            KeyCode::Up
+            | KeyCode::Down
+            | KeyCode::PageUp
+            | KeyCode::PageDown
+            | KeyCode::Home
+            | KeyCode::End
+            | KeyCode::Char('o' | 'O') => {
+                if let Some(Overlay::Permission(prompt)) = self.overlay.as_mut() {
+                    match key.code {
+                        KeyCode::Up => prompt.scroll = prompt.scroll.saturating_sub(1),
+                        KeyCode::Down => prompt.scroll = prompt.scroll.saturating_add(1),
+                        KeyCode::PageUp => prompt.scroll = prompt.scroll.saturating_sub(10),
+                        KeyCode::PageDown => prompt.scroll = prompt.scroll.saturating_add(10),
+                        KeyCode::Home => prompt.scroll = 0,
+                        KeyCode::End => prompt.scroll = u16::MAX,
+                        KeyCode::Char('o' | 'O')
+                            if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                        {
+                            prompt.expanded = !prompt.expanded;
+                            prompt.scroll = 0;
+                        }
+                        _ => {}
+                    }
+                }
+                None
+            }
             _ => None,
         };
         if let Some(decision) = decision {
@@ -1232,7 +1360,7 @@ impl App {
 
     fn open_themes(&mut self) {
         let current = self.theme.name.clone();
-        let items = ["system", "dark", "light"]
+        let items = crate::theme::BUILTIN_THEMES
             .into_iter()
             .map(|name| ChoiceItem {
                 label: if name == current {
@@ -1240,7 +1368,11 @@ impl App {
                 } else {
                     name.to_owned()
                 },
-                detail: "Built-in theme".to_owned(),
+                detail: if matches!(name, "system" | "dark" | "light") {
+                    "Built-in theme".to_owned()
+                } else {
+                    "Dark theme".to_owned()
+                },
                 value: name.to_owned(),
             })
             .collect();
@@ -1655,6 +1787,8 @@ impl App {
             tool: request.tool,
             arguments: request.arguments,
             preview,
+            scroll: 0,
+            expanded: false,
             reply: Some(request.reply),
         });
         self.show_next_permission();
@@ -2391,7 +2525,8 @@ async fn event_loop(
     let mut updating: Option<(String, String)> = None;
 
     loop {
-        if dirty {
+        if dirty || app.needs_redraw {
+            app.needs_redraw = false;
             terminal.draw(|frame| render::draw(frame, app))?;
             dirty = false;
         }
@@ -2526,10 +2661,24 @@ async fn event_loop(
                         }
                     }
                     Input::Mouse(mouse) => match mouse.kind {
-                        MouseEventKind::ScrollUp => app.transcript.scroll_up(3),
-                        MouseEventKind::ScrollDown => app.transcript.scroll_down(3),
+                        MouseEventKind::ScrollUp => {
+                            app.clear_selection();
+                            app.transcript.scroll_up(3);
+                        }
+                        MouseEventKind::ScrollDown => {
+                            app.clear_selection();
+                            app.transcript.scroll_down(3);
+                        }
                         MouseEventKind::Down(MouseButton::Left) => {
-                            app.handle_click(mouse.column, mouse.row);
+                            app.begin_selection(mouse.column, mouse.row);
+                        }
+                        MouseEventKind::Drag(MouseButton::Left) => {
+                            app.drag_selection(mouse.column, mouse.row);
+                        }
+                        MouseEventKind::Up(MouseButton::Left) => {
+                            if app.end_selection(mouse.column, mouse.row) {
+                                app.handle_click(mouse.column, mouse.row);
+                            }
                         }
                         _ => {}
                     },
@@ -3572,6 +3721,27 @@ mod tests {
     }
 
     #[test]
+    #[spec("TUI-029")]
+    fn spec_tui_029_drag_selects_text_and_click_still_toggles() {
+        let mut app = app();
+        app.begin_selection(4, 3);
+        assert!(app.end_selection(4, 3), "an unmoved drag is a click");
+        assert!(app.selection.is_none());
+        assert!(!app.copy_pending);
+
+        app.begin_selection(4, 3);
+        app.drag_selection(9, 5);
+        assert!(!app.end_selection(9, 5), "a moved drag is a selection");
+        assert!(app.copy_pending, "the copy happens on the next frame");
+        let selection = app.selection.expect("selection");
+        assert_eq!(selection.bounds(), ((3, 4), (5, 9)));
+
+        app.handle_key(key(KeyCode::Esc));
+        assert!(app.selection.is_none(), "a key press clears the highlight");
+        assert!(!app.copy_pending);
+    }
+
+    #[test]
     #[spec("TUI-018")]
     fn spec_tui_018_permission_prompt_accepts_y_and_n() {
         let mut app = app();
@@ -3948,6 +4118,23 @@ mod tests {
         // Escape closes without changing anything.
         app.handle_key(key(KeyCode::Esc));
         assert!(app.overlay.is_none());
+    }
+
+    #[test]
+    fn theme_command_accepts_extra_themes() {
+        let (_dir, mut app) = app_with_named_session();
+        assert!(app.handle_command("/theme nord"));
+        assert_eq!(app.theme.name, "nord");
+        assert_eq!(app.theme.palette, crate::theme::Palette::nord());
+
+        assert!(app.handle_command("/theme orange"));
+        assert_eq!(app.theme.name, "orng");
+
+        assert!(app.handle_command("/theme"));
+        let Some(Overlay::List(list)) = &app.overlay else {
+            panic!("expected the theme picker");
+        };
+        assert_eq!(list.items.len(), crate::theme::BUILTIN_THEMES.len());
     }
 
     #[test]

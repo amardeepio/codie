@@ -1,9 +1,10 @@
 //! Provider abstractions and wire adapters for codie.
 //!
-//! Phase 1 provides one OpenAI-compatible adapter that serves DeepSeek and
-//! OpenRouter, plus the model catalog, SSE framing, and credential storage the
-//! adapter needs. The adapter implements [`codie_core::agent::ChatClient`] and
-//! emits [`codie_core::event::AssistantDelta`] events; it is the only place in
+//! Phase 1 provides one OpenAI-compatible adapter that serves DeepSeek,
+//! OpenRouter, and Google Gemini, plus the model catalog, SSE framing, and
+//! credential storage the adapter needs. The adapter implements
+//! [`codie_core::agent::ChatClient`] and emits
+//! [`codie_core::event::AssistantDelta`] events; it is the only place in
 //! codie that knows a provider's wire format.
 //!
 //! - [`openai::OpenAiProvider`] — HTTP, retries, SSE, tool calls, usage.
@@ -35,8 +36,8 @@ pub use catalog::{
 };
 pub use model::{
     Compat, DEFAULT_HTTP_REFERER, DEFAULT_X_TITLE, HeaderMap, MaxTokensField, Model, ModelCost,
-    PROVIDER_DEEPSEEK, PROVIDER_OPENROUTER, ThinkingFormat, builtin_models, fallback_model,
-    find_model, provider_base_url, provider_compat,
+    PROVIDER_DEEPSEEK, PROVIDER_GEMINI, PROVIDER_OPENROUTER, ThinkingFormat, builtin_models,
+    fallback_model, find_model, provider_base_url, provider_compat,
 };
 pub use openai::{
     MAX_ATTEMPTS, MAX_ERROR_BODY_CHARS, MAX_RETRY_DELAY, OpenAiProvider, backoff_delay,
@@ -49,7 +50,7 @@ pub use update::{
     compare_versions, latest_from_payload,
 };
 
-/// A provider identifier such as `deepseek` or `openrouter`.
+/// A provider identifier such as `deepseek`, `openrouter`, or `gemini`.
 pub type ProviderId = Cow<'static, str>;
 
 /// A wire-protocol identifier such as `openai-completions`.

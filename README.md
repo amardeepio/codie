@@ -20,16 +20,18 @@ implementation language, the safety posture, and the provider scope.
 
 The command is `codie`.
 
-**Status: stable release (`0.9.0`).** The one-shot agent, the interactive app,
+**Status: stable release (`0.9.1`).** The one-shot agent, the interactive app,
 full-fidelity sessions, customization, automation, and out-of-process extensions all work end to end:
-streaming transcript, editor dock, OpenCode-inspired themes, the startup banner, slash commands, steering,
+streaming transcript, editor dock, additional themes, the startup banner, slash commands, steering,
 permission prompts, plain mode, resume/fork/compact, search tools, skills, prompt templates, project trust,
 system instructions, `@file` and image inputs, guarded `web_fetch`, RPC mode, generated JSON schemas, HTML
 transcript export, `codie update --check`, extension hooks, tools, commands, and examples, and an OpenRouter
 coding-model catalog with live `/provider` switching. The `0.8.0` release added rich edit/write previews,
 collapsed reasoning, `Esc`/`/stop` cancellation, a context meter with `/usage`, permission review previews,
 tool navigation, folded turns, and session picker previews. `0.9.0` adds a Windows x64 preview build, the
-`powershell` tool, a one-command PowerShell installer, and the Windows preview documentation set. See
+`powershell` tool, a one-command PowerShell installer, and the Windows preview documentation set. `0.9.1` adds
+Google Gemini, the codie-vs-opencode benchmark suite, text selection and clipboard copy, additional themes, and
+a refreshed permission overlay. See
 [`docs/src/configuration.md`](docs/src/configuration.md), [`docs/src/rpc.md`](docs/src/rpc.md), and
 [`ROADMAP.md`](ROADMAP.md).
 
@@ -164,14 +166,14 @@ Pin a version or pick another directory:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh \
-  | sh -s -- --version 0.9.0
+  | sh -s -- --version 0.9.1
 
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh \
   | sh -s -- --bin-dir "$HOME/bin"
 ```
 
 ```powershell
-$env:CODIE_VERSION = "0.9.0"
+$env:CODIE_VERSION = "0.9.1"
 irm https://raw.githubusercontent.com/amardeepio/codie/main/install.ps1 | iex
 ```
 
@@ -238,7 +240,7 @@ cargo run -- --env-file .env.local models
 ```
 
 Process environment always wins over `.env`. Supported variables: `DEEPSEEK_API_KEY`,
-`OPENROUTER_API_KEY`, `CODIE_PROVIDER`, `CODIE_MODEL`, `CODIE_THINKING`, `CODIE_MAX_TURNS`,
+`OPENROUTER_API_KEY`, `GEMINI_API_KEY`, `CODIE_PROVIDER`, `CODIE_MODEL`, `CODIE_THINKING`, `CODIE_MAX_TURNS`,
 `CODIE_ALLOW`, `CODIE_BASE_URL`, `CODIE_CONFIG_DIR`, `CODIE_DATA_DIR`, `CODIE_CACHE_DIR`,
 `CODIE_SESSION_DIR`, `CODIE_ENV_FILE`, `CODIE_NO_UPDATE_CHECK`.
 
@@ -252,11 +254,50 @@ permissions. The full planned command surface is documented in [`PLAN.MD`](PLAN.
 |---|---|---|---|
 | DeepSeek | Phase 1 | OpenAI-compatible | `DEEPSEEK_API_KEY` |
 | OpenRouter | Phase 1 | OpenAI-compatible | `OPENROUTER_API_KEY` |
+| Google Gemini | OpenAI-compatible endpoint | OpenAI-compatible | `GEMINI_API_KEY` |
 
-Both are accessed through one adapter that handles SSE framing, tool-call accumulation, stop-reason and usage
-mapping, retries, and per-provider compatibility flags. Anthropic-native passthrough, OAuth login, and
-additional vendors are out of scope for v1.0. See [`docs/src/providers.md`](docs/src/providers.md) and
+All three are accessed through one adapter that handles SSE framing, tool-call accumulation, stop-reason and
+usage mapping, retries, and per-provider compatibility flags. Gemini tool calls replay the provider's thought
+signature so multi-turn tool use works. Anthropic-native passthrough, OAuth login, and additional vendors are
+out of scope for v1.0. See [`docs/src/providers.md`](docs/src/providers.md) and
 [`specs/provider/0001-openai-compatible.md`](specs/provider/0001-openai-compatible.md).
+
+## Benchmarks
+
+[`benchmark/`](benchmark/) compares codie with opencode on the same machine, model
+(`deepseek/deepseek-v4.1-flash-1017` through OpenRouter), prompts, and Next.js scaffold. The suite covers four
+tasks: a greenfield todo UI, a brownfield feature addition, a hidden-test bug fix, and a JSON API. Browser,
+hidden-test, and HTTP verifiers run only after each harness exits.
+
+Latest full run (macOS arm64, 3 runs per harness per task):
+
+| Metric | codie | opencode |
+|---|---|---|
+| Binary launch (median) | **4 ms** | 38 ms |
+| Trivial request, total (median) | **1.15 s** | 1.82 s |
+| Task suite, pooled median | **28.2 s** | 59.0 s |
+| Task success | 11/12 | **12/12** |
+| Cost per successful task | **$0.0046** | $0.0108 |
+| Input + output tokens | **161,617** | 324,374 |
+
+| Task | codie (median) | opencode (median) |
+|---|---|---|
+| `todo-ui` | **56.9 s** | 67.7 s |
+| `feature-add` | **22.5 s** | 62.9 s |
+| `bug-fix` | **11.7 s** | 13.1 s |
+| `api-todo` | **33.9 s** (2/3) | 55.1 s (3/3) |
+
+On this run codie was **2.09x faster** on the pooled median, **2.58x cheaper**, and used **2.01x fewer**
+tokens. It failed one API run (empty text was accepted and a deleted todo remained), so the honest headline is
+faster and cheaper with slightly lower reliability at three samples. See [`benchmark/REPORT.md`](benchmark/REPORT.md)
+for confidence intervals, telemetry (turns, tool calls, time to first edit), and per-run details.
+
+Run it with:
+
+```bash
+./benchmark/run.sh all --runs 3 --yes
+python3 benchmark/report.py --publish
+```
 
 ## Platforms
 

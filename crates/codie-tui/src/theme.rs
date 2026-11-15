@@ -144,6 +144,296 @@ impl Palette {
             rule: Color::Rgb(107, 107, 107),
         }
     }
+    /// Dracula palette, ported from OpenCode's `dracula` theme.
+    #[must_use]
+    pub const fn dracula() -> Self {
+        Self {
+            background: Color::Rgb(40, 42, 54),
+            surface: Color::Rgb(33, 34, 44),
+            surface_alt: Color::Rgb(68, 71, 90),
+            foreground: Color::Rgb(248, 248, 242),
+            muted: Color::Rgb(139, 147, 184),
+            primary: Color::Rgb(189, 147, 249),
+            secondary: Color::Rgb(255, 121, 198),
+            accent: Color::Rgb(139, 233, 253),
+            user: Color::Rgb(248, 248, 242),
+            assistant: Color::Rgb(248, 248, 242),
+            tool: Color::Rgb(255, 121, 198),
+            error: Color::Rgb(255, 85, 85),
+            success: Color::Rgb(80, 250, 123),
+            warning: Color::Rgb(241, 250, 140),
+            info: Color::Rgb(255, 184, 108),
+            diff_add: Color::Rgb(80, 250, 123),
+            diff_del: Color::Rgb(255, 85, 85),
+            border: Color::Rgb(68, 71, 90),
+            border_active: Color::Rgb(189, 147, 249),
+            border_subtle: Color::Rgb(25, 26, 33),
+            heading: Color::Rgb(189, 147, 249),
+            link: Color::Rgb(139, 233, 253),
+            code: Color::Rgb(80, 250, 123),
+            strong: Color::Rgb(255, 184, 108),
+            emphasis: Color::Rgb(241, 250, 140),
+            quote: Color::Rgb(139, 147, 184),
+            list: Color::Rgb(189, 147, 249),
+            list_enum: Color::Rgb(139, 233, 253),
+            rule: Color::Rgb(139, 147, 184),
+        }
+    }
+
+    /// Material palette, ported from OpenCode's `material` theme.
+    #[must_use]
+    pub const fn material() -> Self {
+        Self {
+            background: Color::Rgb(38, 50, 56),
+            surface: Color::Rgb(30, 39, 44),
+            surface_alt: Color::Rgb(55, 71, 79),
+            foreground: Color::Rgb(238, 255, 255),
+            muted: Color::Rgb(138, 159, 169),
+            primary: Color::Rgb(130, 170, 255),
+            secondary: Color::Rgb(199, 146, 234),
+            accent: Color::Rgb(137, 221, 255),
+            user: Color::Rgb(238, 255, 255),
+            assistant: Color::Rgb(238, 255, 255),
+            tool: Color::Rgb(199, 146, 234),
+            error: Color::Rgb(240, 113, 120),
+            success: Color::Rgb(195, 232, 141),
+            warning: Color::Rgb(255, 203, 107),
+            info: Color::Rgb(255, 203, 107),
+            diff_add: Color::Rgb(195, 232, 141),
+            diff_del: Color::Rgb(240, 113, 120),
+            border: Color::Rgb(55, 71, 79),
+            border_active: Color::Rgb(130, 170, 255),
+            border_subtle: Color::Rgb(30, 39, 44),
+            heading: Color::Rgb(130, 170, 255),
+            link: Color::Rgb(137, 221, 255),
+            code: Color::Rgb(195, 232, 141),
+            strong: Color::Rgb(255, 203, 107),
+            emphasis: Color::Rgb(255, 203, 107),
+            quote: Color::Rgb(138, 159, 169),
+            list: Color::Rgb(130, 170, 255),
+            list_enum: Color::Rgb(137, 221, 255),
+            rule: Color::Rgb(138, 159, 169),
+        }
+    }
+
+    /// Gruvbox palette, ported from OpenCode's `gruvbox` theme.
+    #[must_use]
+    pub const fn gruvbox() -> Self {
+        Self {
+            background: Color::Rgb(40, 40, 40),
+            surface: Color::Rgb(60, 56, 54),
+            surface_alt: Color::Rgb(80, 73, 69),
+            foreground: Color::Rgb(235, 219, 178),
+            muted: Color::Rgb(168, 153, 132),
+            primary: Color::Rgb(131, 165, 152),
+            secondary: Color::Rgb(211, 134, 155),
+            accent: Color::Rgb(142, 192, 124),
+            user: Color::Rgb(235, 219, 178),
+            assistant: Color::Rgb(235, 219, 178),
+            tool: Color::Rgb(211, 134, 155),
+            error: Color::Rgb(251, 95, 76),
+            success: Color::Rgb(184, 187, 38),
+            warning: Color::Rgb(254, 128, 25),
+            info: Color::Rgb(250, 189, 47),
+            diff_add: Color::Rgb(184, 187, 38),
+            diff_del: Color::Rgb(251, 73, 52),
+            border: Color::Rgb(102, 92, 84),
+            border_active: Color::Rgb(235, 219, 178),
+            border_subtle: Color::Rgb(80, 73, 69),
+            heading: Color::Rgb(131, 165, 152),
+            link: Color::Rgb(142, 192, 124),
+            code: Color::Rgb(250, 189, 47),
+            strong: Color::Rgb(254, 128, 25),
+            emphasis: Color::Rgb(211, 134, 155),
+            quote: Color::Rgb(168, 153, 132),
+            list: Color::Rgb(131, 165, 152),
+            list_enum: Color::Rgb(142, 192, 124),
+            rule: Color::Rgb(168, 153, 132),
+        }
+    }
+
+    /// Nord palette, ported from OpenCode's `nord` theme.
+    #[must_use]
+    pub const fn nord() -> Self {
+        Self {
+            background: Color::Rgb(46, 52, 64),
+            surface: Color::Rgb(59, 66, 82),
+            surface_alt: Color::Rgb(67, 76, 94),
+            foreground: Color::Rgb(236, 239, 244),
+            muted: Color::Rgb(154, 164, 182),
+            primary: Color::Rgb(136, 192, 208),
+            secondary: Color::Rgb(129, 161, 193),
+            accent: Color::Rgb(143, 188, 187),
+            user: Color::Rgb(236, 239, 244),
+            assistant: Color::Rgb(236, 239, 244),
+            tool: Color::Rgb(129, 161, 193),
+            error: Color::Rgb(221, 139, 147),
+            success: Color::Rgb(163, 190, 140),
+            warning: Color::Rgb(221, 148, 126),
+            info: Color::Rgb(136, 192, 208),
+            diff_add: Color::Rgb(163, 190, 140),
+            diff_del: Color::Rgb(191, 97, 106),
+            border: Color::Rgb(67, 76, 94),
+            border_active: Color::Rgb(76, 86, 106),
+            border_subtle: Color::Rgb(67, 76, 94),
+            heading: Color::Rgb(136, 192, 208),
+            link: Color::Rgb(129, 161, 193),
+            code: Color::Rgb(163, 190, 140),
+            strong: Color::Rgb(235, 203, 139),
+            emphasis: Color::Rgb(221, 148, 126),
+            quote: Color::Rgb(154, 164, 182),
+            list: Color::Rgb(136, 192, 208),
+            list_enum: Color::Rgb(143, 188, 187),
+            rule: Color::Rgb(154, 164, 182),
+        }
+    }
+
+    /// Night Owl palette, ported from OpenCode's `nightowl` theme.
+    #[must_use]
+    pub const fn nightowl() -> Self {
+        Self {
+            background: Color::Rgb(1, 22, 39),
+            surface: Color::Rgb(11, 37, 58),
+            surface_alt: Color::Rgb(11, 37, 58),
+            foreground: Color::Rgb(214, 222, 235),
+            muted: Color::Rgb(119, 145, 166),
+            primary: Color::Rgb(130, 170, 255),
+            secondary: Color::Rgb(127, 219, 202),
+            accent: Color::Rgb(199, 146, 234),
+            user: Color::Rgb(214, 222, 235),
+            assistant: Color::Rgb(214, 222, 235),
+            tool: Color::Rgb(127, 219, 202),
+            error: Color::Rgb(239, 83, 80),
+            success: Color::Rgb(197, 228, 120),
+            warning: Color::Rgb(236, 196, 141),
+            info: Color::Rgb(130, 170, 255),
+            diff_add: Color::Rgb(197, 228, 120),
+            diff_del: Color::Rgb(239, 83, 80),
+            border: Color::Rgb(95, 126, 151),
+            border_active: Color::Rgb(130, 170, 255),
+            border_subtle: Color::Rgb(95, 126, 151),
+            heading: Color::Rgb(130, 170, 255),
+            link: Color::Rgb(127, 219, 202),
+            code: Color::Rgb(197, 228, 120),
+            strong: Color::Rgb(236, 196, 141),
+            emphasis: Color::Rgb(199, 146, 234),
+            quote: Color::Rgb(119, 145, 166),
+            list: Color::Rgb(130, 170, 255),
+            list_enum: Color::Rgb(127, 219, 202),
+            rule: Color::Rgb(119, 145, 166),
+        }
+    }
+
+    /// The OpenCode orange palette (`orng`).
+    #[must_use]
+    pub const fn orng() -> Self {
+        Self {
+            background: Color::Rgb(10, 10, 10),
+            surface: Color::Rgb(20, 20, 20),
+            surface_alt: Color::Rgb(30, 30, 30),
+            foreground: Color::Rgb(238, 238, 238),
+            muted: Color::Rgb(128, 128, 128),
+            primary: Color::Rgb(236, 91, 43),
+            secondary: Color::Rgb(238, 121, 72),
+            accent: Color::Rgb(255, 247, 241),
+            user: Color::Rgb(238, 238, 238),
+            assistant: Color::Rgb(238, 238, 238),
+            tool: Color::Rgb(238, 121, 72),
+            error: Color::Rgb(224, 108, 117),
+            success: Color::Rgb(107, 161, 230),
+            warning: Color::Rgb(236, 91, 43),
+            info: Color::Rgb(86, 182, 194),
+            diff_add: Color::Rgb(107, 161, 230),
+            diff_del: Color::Rgb(197, 59, 83),
+            border: Color::Rgb(236, 91, 43),
+            border_active: Color::Rgb(238, 121, 72),
+            border_subtle: Color::Rgb(60, 60, 60),
+            heading: Color::Rgb(236, 91, 43),
+            link: Color::Rgb(236, 91, 43),
+            code: Color::Rgb(107, 161, 230),
+            strong: Color::Rgb(238, 121, 72),
+            emphasis: Color::Rgb(229, 192, 123),
+            quote: Color::Rgb(255, 247, 241),
+            list: Color::Rgb(236, 91, 43),
+            list_enum: Color::Rgb(86, 182, 194),
+            rule: Color::Rgb(128, 128, 128),
+        }
+    }
+
+    /// Tokyo Night palette, ported from OpenCode's `tokyonight` theme.
+    #[must_use]
+    pub const fn tokyonight() -> Self {
+        Self {
+            background: Color::Rgb(26, 27, 38),
+            surface: Color::Rgb(30, 32, 48),
+            surface_alt: Color::Rgb(34, 36, 54),
+            foreground: Color::Rgb(200, 211, 245),
+            muted: Color::Rgb(130, 139, 184),
+            primary: Color::Rgb(130, 170, 255),
+            secondary: Color::Rgb(192, 153, 255),
+            accent: Color::Rgb(255, 150, 108),
+            user: Color::Rgb(200, 211, 245),
+            assistant: Color::Rgb(200, 211, 245),
+            tool: Color::Rgb(192, 153, 255),
+            error: Color::Rgb(255, 117, 127),
+            success: Color::Rgb(195, 232, 141),
+            warning: Color::Rgb(255, 150, 108),
+            info: Color::Rgb(130, 170, 255),
+            diff_add: Color::Rgb(79, 214, 190),
+            diff_del: Color::Rgb(197, 59, 83),
+            border: Color::Rgb(115, 122, 162),
+            border_active: Color::Rgb(144, 153, 178),
+            border_subtle: Color::Rgb(84, 92, 126),
+            heading: Color::Rgb(192, 153, 255),
+            link: Color::Rgb(130, 170, 255),
+            code: Color::Rgb(195, 232, 141),
+            strong: Color::Rgb(255, 150, 108),
+            emphasis: Color::Rgb(255, 199, 119),
+            quote: Color::Rgb(255, 199, 119),
+            list: Color::Rgb(130, 170, 255),
+            list_enum: Color::Rgb(134, 225, 252),
+            rule: Color::Rgb(130, 139, 184),
+        }
+    }
+}
+
+/// Names accepted by `--theme`, `/theme`, and `CODIE_THEME`.
+///
+/// Every built-in theme except `system` is a fixed dark palette ported from
+/// OpenCode. `system` resolves to `dark` or `light` from the terminal
+/// background unless `CODIE_THEME` names another built-in.
+pub const BUILTIN_THEMES: [&str; 10] = [
+    "system",
+    "dark",
+    "light",
+    "dracula",
+    "material",
+    "gruvbox",
+    "nord",
+    "nightowl",
+    "orng",
+    "tokyonight",
+];
+
+/// Returns the palette for a named built-in theme.
+fn named_palette(name: &str) -> Option<Palette> {
+    Some(match name {
+        "dark" => Palette::dark(),
+        "light" => Palette::light(),
+        "dracula" => Palette::dracula(),
+        "material" => Palette::material(),
+        "gruvbox" => Palette::gruvbox(),
+        "nord" => Palette::nord(),
+        "nightowl" => Palette::nightowl(),
+        "orng" | "orange" => Palette::orng(),
+        "tokyonight" => Palette::tokyonight(),
+        _ => return None,
+    })
+}
+
+/// Returns the canonical name for a built-in theme alias.
+fn canonical_name(name: &str) -> &str {
+    if name == "orange" { "orng" } else { name }
 }
 
 /// A loaded theme.
@@ -156,27 +446,26 @@ pub struct Theme {
 }
 
 impl Theme {
-    /// Loads a theme from `system`, `dark`, `light`, or a TOML path.
+    /// Loads a built-in theme name, `system`, or a TOML path.
     ///
     /// # Errors
     ///
     /// Returns an error for an unknown name or an invalid theme file.
     pub fn load(spec: Option<&str>) -> Result<Self> {
-        match spec.unwrap_or("system") {
-            "system" => Ok(Self {
+        let name = spec.unwrap_or("system");
+        if name == "system" {
+            return Ok(Self {
                 name: "system".to_owned(),
                 palette: system_palette(),
-            }),
-            "dark" => Ok(Self {
-                name: "dark".to_owned(),
-                palette: Palette::dark(),
-            }),
-            "light" => Ok(Self {
-                name: "light".to_owned(),
-                palette: Palette::light(),
-            }),
-            path => load_file(Path::new(path)),
+            });
         }
+        if let Some(palette) = named_palette(name) {
+            return Ok(Self {
+                name: canonical_name(name).to_owned(),
+                palette,
+            });
+        }
+        load_file(Path::new(name))
     }
 
     /// Returns the background for the body text contrast check.
@@ -234,12 +523,12 @@ impl ThemeWatcher {
 
 fn system_palette() -> Palette {
     // `COLORFGBG` ends with the terminal background index; 7 and above are
-    // normally light. `CODIE_THEME` overrides detection for unusual terminals.
-    if std::env::var("CODIE_THEME").as_deref() == Ok("light") {
-        return Palette::light();
-    }
-    if std::env::var("CODIE_THEME").as_deref() == Ok("dark") {
-        return Palette::dark();
+    // normally light. `CODIE_THEME` overrides detection for unusual terminals
+    // and can name any built-in theme.
+    if let Ok(name) = std::env::var("CODIE_THEME")
+        && let Some(palette) = named_palette(&name)
+    {
+        return palette;
     }
 
     let light = std::env::var("COLORFGBG").is_ok_and(|value| {
@@ -435,10 +724,8 @@ mod tests {
 
     #[test]
     fn builtin_palettes_meet_body_contrast() {
-        for theme in [
-            Theme::load(Some("dark")).unwrap(),
-            Theme::load(Some("light")).unwrap(),
-        ] {
+        for name in BUILTIN_THEMES.into_iter().filter(|name| *name != "system") {
+            let theme = Theme::load(Some(name)).unwrap();
             assert!(
                 theme.body_contrast() >= 4.5,
                 "{} contrast {:.2}",
@@ -450,10 +737,8 @@ mod tests {
 
     #[test]
     fn builtin_text_colors_meet_contrast() {
-        for theme in [
-            Theme::load(Some("dark")).unwrap(),
-            Theme::load(Some("light")).unwrap(),
-        ] {
+        for name in BUILTIN_THEMES.into_iter().filter(|name| *name != "system") {
+            let theme = Theme::load(Some(name)).unwrap();
             let palette = theme.palette;
             for color in [
                 palette.foreground,
@@ -483,6 +768,19 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    #[spec("TUI-030")]
+    fn builtin_themes_load_with_their_names() {
+        for name in BUILTIN_THEMES {
+            let theme = Theme::load(Some(name)).unwrap();
+            assert_eq!(theme.name, name, "unexpected name for {name}");
+        }
+        let alias = Theme::load(Some("orange")).unwrap();
+        assert_eq!(alias.name, "orng");
+        assert_eq!(alias.palette, Palette::orng());
+        assert!(Theme::load(Some("dracula")).unwrap().name == "dracula");
     }
 
     #[test]

@@ -64,6 +64,7 @@ do not shift column borders.
 | Mouse click on a tool or turn header | Toggle that block or turn |
 | Mouse click on `Thinking` | Show the live reasoning stream |
 | Mouse click on the footer | Show usage details |
+| Mouse drag anywhere | Select text; releasing copies it to the clipboard |
 | `Shift+Tab` | Toggle full-access mode (no permission prompts) |
 | `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / redo |
 | `Ctrl+K` / `Ctrl+Y` | Kill to end of line / yank |
@@ -128,20 +129,46 @@ diagnostics as a transcript line.
 
 `/theme`, `/provider`, `/model`, and `/thinking` without an argument open live pickers. The model picker lists
 the coding models for the active provider; OpenRouter entries carry their real context window and price from the
-catalog cache. `/provider` switches between DeepSeek and OpenRouter in place, selects the new provider's default
-model, and refreshes the model list. Model selection updates the context window and is persisted; reasoning
+catalog cache. `/provider` switches between DeepSeek, OpenRouter, and Gemini in place, selects the new
+provider's default model, and refreshes the model list. Model selection updates the context window and is persisted; reasoning
 selection is persisted with the session. The footer shows context usage and tokens per second, with a live
 estimate while streaming.
+
+## Selection and copy
+
+Drag with the mouse to select any part of the screen: transcript, tool output, diffs, or an open overlay. The
+selection is drawn in reverse video and is copied automatically on release. The editor title confirms the copy
+(`prompt · copied 12 line(s)`), and the highlight stays visible until the next click, scroll, or key press.
+
+Copying uses `pbcopy` on macOS, `wl-copy` or `xclip` on Linux, and `clip` on Windows. When no clipboard command
+is available the editor title reports it, and the selection stays highlighted so you can retry.
+
+Because the app captures the mouse, a plain drag belongs to the app rather than the terminal. Hold your
+terminal's bypass modifier (usually `Shift` or `Option`) to select with the terminal's own selection instead.
 
 ## Permissions
 
 Read-only tools run without prompting. `write`, `edit`, and the platform shell (`bash` on macOS/Linux,
-`powershell` on Windows) ask before executing. The prompt previews the operation: edits show a diff, new files
-show numbered code, and shell commands show the command.
+`powershell` on Windows) ask before executing. The prompt previews the operation: edits show a diff with added
+and removed counts, new files show numbered code, and shell commands show the command with a `$` prompt.
 
 ```text
-[y] allow once   [A] always allow   [n] deny   [Enter] allow   [Esc] deny   [Shift+Tab] full access
+╭─ Permission ─────────────────────────────────────── bash ─────────╮
+│  Run this shell command?                                          │
+│  ~/project  ⑂ main                                                │
+│                                                                   │
+│  Command                                                          │
+│  $ cargo test --workspace                                         │
+│                                                                   │
+│  ▸ [y] allow once     [A] always allow     [n] deny               │
+│  Enter allow · Esc deny · Shift+Tab full access                   │
+╰───────────────────────────────────────────────────────────────────╯
 ```
+
+The dialog is sized to its content, the transcript behind it is dimmed, and the three decisions are color-coded:
+green allow once, amber always allow, red deny. `↑`/`↓`, `PgUp`/`PgDn`, `Home`/`End` scroll a long preview and
+`Ctrl+O` shows every row. Commands that usually destroy work (`rm -rf`, `sudo`, `git reset --hard`, and similar)
+turn the frame red and add a warning line.
 
 `y`/`Y` allows once, `n`/`N` or `Esc` denies, `A` allows the tool for the rest of the run, and `Enter` allows.
 `Shift+Tab` toggles full-access mode; the footer shows `FULL ACCESS` while it is on, and turning it on allows a
@@ -161,9 +188,21 @@ Click the footer or run `/usage` for the full token and cost breakdown.
 
 ## Themes
 
-`--theme system`, `--theme dark`, `--theme light`, or a TOML file with semantic tokens. The built-in
-palettes follow OpenCode's default theme: a near-black canvas, warm peach focus, purple headings, green code,
-and distinct colors for emphasis, quotes, and lists.
+`--theme system`, `--theme dark`, `--theme light`, a named theme, or a TOML file with semantic
+tokens. The named themes are `dracula`, `material`, `gruvbox`, `nord`, `nightowl`, `orng` (also accepted as
+`orange`), and `tokyonight`. Their colors come from the upstream palettes; a few muted and error tones are
+lightened slightly so every built-in theme keeps the 4.5:1 contrast guarantee.
+
+The default `dark` and `light` palettes use a near-black canvas, warm peach focus,
+purple headings, green code, and distinct colors for emphasis, quotes, and lists.
+
+```text
+codie --theme gruvbox
+codie --theme tokyonight
+```
+
+`CODIE_THEME` also names the theme that `system` resolves to, so `CODIE_THEME=nord codie` starts in Nord while
+still following the terminal background when the variable is unset.
 
 ```toml
 background = "#0a0a0a"

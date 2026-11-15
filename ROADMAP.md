@@ -4,7 +4,7 @@ codie is built in gated phases. Each phase ends with a demoable, installable art
 No phase starts before the previous phase's exit criteria are met. Durations are planning bounds for one
 full-time engineer, not commitments; the exit criteria are the real gate.
 
-**Current status: `0.9.0` released; Phase 7 in progress toward `1.0.0`.** `0.1.0` shipped the
+**Current status: `0.9.1` released; Phase 7 in progress toward `1.0.0`.** `0.1.0` shipped the
 headless core, `0.2.0` the interactive app, `0.3.0` full-fidelity sessions, `0.4.0` customization and trust,
 `0.5.0` RPC and export, `0.6.0` the TUI refresh, and `0.7.0` the out-of-process extension protocol, hooks,
 manifests, custom tools and commands, and Python and TypeScript examples. `0.7.1` refined `/update`, and
@@ -12,6 +12,8 @@ manifests, custom tools and commands, and Python and TypeScript examples. `0.7.1
 `/usage`, permission review previews, tool navigation, folded turns, and session picker previews.
 `0.9.0` adds a Windows x64 preview build, the `powershell` tool, the one-command PowerShell installer,
 and the Windows preview documentation set, plus a fix for session directories on Windows.
+`0.9.1` adds Google Gemini, the codie-vs-opencode benchmark suite, text selection and clipboard copy,
+additional themes, and the refreshed permission overlay.
 
 ## Phase summary
 

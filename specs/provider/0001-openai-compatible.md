@@ -2,17 +2,17 @@
 id: SPEC-PROV-001
 title: OpenAI-compatible provider adapter
 status: accepted
-version: 1.0.0
+version: 1.1.0
 owners: ["@codie-maintainers"]
-requirements: ["PROV-001", "PROV-002", "PROV-003", "PROV-004", "PROV-005", "PROV-010", "PROV-011", "PROV-012", "PROV-013", "PROV-014", "PROV-015", "PROV-016", "PROV-017", "PROV-018", "PROV-019", "PROV-020", "PROV-021", "PROV-022", "PROV-023"]
+requirements: ["PROV-001", "PROV-002", "PROV-003", "PROV-004", "PROV-005", "PROV-010", "PROV-011", "PROV-012", "PROV-013", "PROV-014", "PROV-015", "PROV-016", "PROV-017", "PROV-018", "PROV-019", "PROV-020", "PROV-021", "PROV-022", "PROV-023", "PROV-024"]
 ---
 
 # Context
 
-codie ships one OpenAI-compatible wire adapter for two providers, DeepSeek and OpenRouter. The adapter owns HTTP,
-SSE framing, retries, error normalization, tool-call assembly, stop-reason mapping, usage normalization, and the
-small compatibility matrix that lets one implementation serve both providers without provider-specific code in
-the agent loop. Correctness here is observable: a wrong counter, a misplaced tool argument, or a retried
+codie ships one OpenAI-compatible wire adapter for three providers, DeepSeek, OpenRouter, and Google Gemini. The
+adapter owns HTTP, SSE framing, retries, error normalization, tool-call assembly, stop-reason mapping, usage
+normalization, and the small compatibility matrix that lets one implementation serve every provider without
+provider-specific code in the agent loop. Correctness here is observable: a wrong counter, a misplaced tool argument, or a retried
 partial stream corrupts the transcript and the user's cost accounting.
 
 `PROV-019` is allocated here to the compat-gated request-field rule that `PLAN.MD` §6.2.2 states without an ID.
@@ -76,13 +76,13 @@ Verification: `crates/codie-ai/tests/openai_compat.rs::spec_prov_011_reasoning_p
 **PROV-012 (MUST)** SSE parsing accepts `data:` frames split across arbitrary chunk boundaries, ignores comment and keepalive lines, tolerates CRLF and LF, and terminates on `data: [DONE]`. An EOF without a terminal chunk is an error ("stream ended without finish_reason") unless the provider is explicitly marked as omitting finish reasons in `compat`.
 Verification: `crates/codie-ai/tests/sse.rs::spec_prov_012_sse_frame_reassembly`
 
-**PROV-013 (MUST)** Tool-call deltas accumulate by `index` (primary) and `id` (secondary). An `id` arriving after arguments is attached to the pending block with the same index. Argument fragments are concatenated as text and parsed once at the end; invalid JSON sets `arguments_error` and produces an error tool result the model can recover from. Arguments are never parsed incrementally.
-Verification: `crates/codie-ai/tests/tool_calls.rs::spec_prov_013_tool_call_accumulation`
+**PROV-013 (MUST)** Tool-call deltas accumulate by `index` (primary) and `id` (secondary). A non-empty `id` that differs from the call held at the same index starts a new call, and a missing `index` falls back to `id` matching, so providers that reuse an index for parallel calls are never merged. An `id` arriving after arguments is attached to the pending block with the same index. Argument fragments are concatenated as text and parsed once at the end; invalid JSON sets `arguments_error` and produces an error tool result the model can recover from. Arguments are never parsed incrementally.
+Verification: `crates/codie-ai/tests/tool_calls.rs::spec_prov_013_tool_call_accumulation`, `crates/codie-ai/tests/gemini.rs::spec_prov_013_gemini_parallel_calls_share_an_index`
 
 **PROV-014 (MUST)** Stop reasons map exactly: `null`, `stop`, and `end_turn` to `stop`; `length` and `max_tokens` to `length`; `tool_calls` and `function_call` to `tool_use`; `content_filter` to `error` with a diagnostic message; any unknown value to `error` with the raw value preserved in `raw_stop_reason`.
 Verification: `crates/codie-ai/tests/stop_reason.rs::spec_prov_014_stop_reason_mapping`
 
-**PROV-015 (MUST)** Usage maps as follows. DeepSeek: `input = prompt_tokens - prompt_cache_hit_tokens`, `cache_read = prompt_cache_hit_tokens`, `output = completion_tokens`, and `reasoning` from `completion_tokens_details.reasoning_tokens` when present. OpenRouter uses the same shape with `prompt_tokens_details.cached_tokens` as the cache read, converts `usage.cost` from USD to nano-USD and sets `cost_from_provider = true`, and preserves `is_byok` and `cost_details` in diagnostics. Both providers use the `Usage::total_tokens` formula from `MSG-005`.
+**PROV-015 (MUST)** Usage maps as follows. DeepSeek: `input = prompt_tokens - prompt_cache_hit_tokens`, `cache_read = prompt_cache_hit_tokens`, `output = completion_tokens`, and `reasoning` from `completion_tokens_details.reasoning_tokens` when present. OpenRouter uses the same shape with `prompt_tokens_details.cached_tokens` as the cache read, converts `usage.cost` from USD to nano-USD and sets `cost_from_provider = true`, and preserves `is_byok` and `cost_details` in diagnostics. Gemini uses `prompt_tokens_details.cached_tokens` for the cache read and estimates cost from the bundled catalog. Every provider uses the `Usage::total_tokens` formula from `MSG-005`.
 Verification: `crates/codie-ai/tests/usage.rs::spec_prov_015_usage_mapping`
 
 **PROV-016 (MUST)** Assistant reasoning is replayed verbatim as `reasoning_content` when the model requires it (DeepSeek) and dropped otherwise. When reasoning was not preserved and `compat` requires replay, the adapter sends `reasoning_content: ""`. Thinking blocks are never summarized into visible text.
@@ -109,9 +109,12 @@ Verification: `crates/codie-ai/tests/openrouter.rs::spec_prov_022_openai_compati
 **PROV-023 (MUST)** Image blocks in a user message are sent as `{"type":"image_url","image_url":{"url":"data:<mime>;base64,<data>"}}` alongside text parts. A text-only user message stays a plain string.
 Verification: `crates/codie-ai/tests/openai_compat.rs::spec_prov_023_user_images_use_data_urls`
 
+**PROV-024 (MUST)** Provider tool-call replay metadata is preserved. When a streamed tool-call delta carries `extra_content.google.thought_signature`, the adapter stores it on that call's content block and replays it verbatim as `extra_content.google.thought_signature` on the matching assistant tool call in later requests. A call without a signature keeps the plain OpenAI shape, and the signature is never invented or shared across calls.
+Verification: `crates/codie-ai/tests/gemini.rs::spec_prov_024_gemini_thought_signature_round_trip`
+
 # Request and response shapes
 
-Both providers receive `POST {base_url}/chat/completions` with `Authorization: Bearer <key>`,
+Every provider receives `POST {base_url}/chat/completions` with `Authorization: Bearer <key>`,
 `Content-Type: application/json`, and `Accept: text/event-stream`. Fields are emitted only when supported by
 `compat`.
 

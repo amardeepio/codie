@@ -21,7 +21,7 @@ irm https://raw.githubusercontent.com/amardeepio/codie/main/install.ps1 | iex
 Pin a specific version explicitly:
 
 ```powershell
-$env:CODIE_VERSION = "0.9.0"
+$env:CODIE_VERSION = "0.9.1"
 irm https://raw.githubusercontent.com/amardeepio/codie/main/install.ps1 | iex
 ```
 
@@ -36,6 +36,8 @@ See [Installation](install.md) for checksums, custom directories, source builds,
 codie auth login deepseek
 # or
 codie auth login openrouter
+# or
+codie auth login gemini
 codie auth status
 ```
 

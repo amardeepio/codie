@@ -23,6 +23,9 @@ pub const PROVIDER_DEEPSEEK: &str = "deepseek";
 /// The provider identifier used by OpenRouter.
 pub const PROVIDER_OPENROUTER: &str = "openrouter";
 
+/// The provider identifier used by Google Gemini.
+pub const PROVIDER_GEMINI: &str = "gemini";
+
 /// The default `HTTP-Referer` attribution value for OpenRouter.
 pub const DEFAULT_HTTP_REFERER: &str = "https://github.com/amardeepio/codie";
 
@@ -32,7 +35,7 @@ pub const DEFAULT_X_TITLE: &str = "codie";
 /// The request field that carries the maximum output token limit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MaxTokensField {
-    /// Send the limit as `max_tokens` (DeepSeek).
+    /// Send the limit as `max_tokens` (DeepSeek and Gemini).
     MaxTokens,
     /// Send the limit as `max_completion_tokens` (OpenRouter and newer OpenAI).
     MaxCompletionTokens,
@@ -100,6 +103,24 @@ impl Compat {
             max_tokens_field: MaxTokensField::MaxCompletionTokens,
             requires_reasoning_content_on_assistant_messages: false,
             thinking_format: ThinkingFormat::OpenRouter,
+            supports_usage_in_streaming: true,
+            supports_finish_reason: true,
+        }
+    }
+
+    /// The compatibility set used by Google Gemini's OpenAI-compatible endpoint.
+    ///
+    /// Gemini accepts `max_tokens` (with `max_completion_tokens` as an alias),
+    /// streams usage, and controls reasoning with a top-level
+    /// `reasoning_effort`. It has no `store` field and no `developer` role.
+    #[must_use]
+    pub const fn gemini() -> Self {
+        Self {
+            supports_store: false,
+            supports_developer_role: false,
+            max_tokens_field: MaxTokensField::MaxTokens,
+            requires_reasoning_content_on_assistant_messages: false,
+            thinking_format: ThinkingFormat::OpenAi,
             supports_usage_in_streaming: true,
             supports_finish_reason: true,
         }
@@ -241,6 +262,32 @@ fn openrouter_thinking_levels() -> BTreeMap<ThinkingLevel, Option<String>> {
     ])
 }
 
+/// Gemini 4 reasoning levels. `minimal` is mapped to `low` by the provider.
+fn gemini4_thinking_levels() -> BTreeMap<ThinkingLevel, Option<String>> {
+    BTreeMap::from([
+        (ThinkingLevel::Minimal, Some("low".to_owned())),
+        (ThinkingLevel::Low, Some("low".to_owned())),
+        (ThinkingLevel::Medium, Some("medium".to_owned())),
+        (ThinkingLevel::High, Some("high".to_owned())),
+    ])
+}
+
+/// Gemini 4 Hydrogen additionally accepts `xhigh`.
+fn gemini4_hydrogen_thinking_levels() -> BTreeMap<ThinkingLevel, Option<String>> {
+    let mut levels = gemini4_thinking_levels();
+    levels.insert(ThinkingLevel::XHigh, Some("xhigh".to_owned()));
+    levels
+}
+
+/// Gemini 3 reasoning levels. `minimal` is rejected by these models.
+fn gemini3_thinking_levels() -> BTreeMap<ThinkingLevel, Option<String>> {
+    BTreeMap::from([
+        (ThinkingLevel::Low, Some("low".to_owned())),
+        (ThinkingLevel::Medium, Some("medium".to_owned())),
+        (ThinkingLevel::High, Some("high".to_owned())),
+    ])
+}
+
 /// Returns the base URL for a known provider.
 #[must_use]
 pub fn provider_base_url(provider: &str) -> &'static str {
@@ -248,6 +295,8 @@ pub fn provider_base_url(provider: &str) -> &'static str {
         "https://api.deepseek.com"
     } else if provider.eq_ignore_ascii_case(PROVIDER_OPENROUTER) {
         "https://openrouter.ai/api/v1"
+    } else if provider.eq_ignore_ascii_case(PROVIDER_GEMINI) {
+        "https://generativelanguage.googleapis.com/v1beta/openai"
     } else {
         ""
     }
@@ -260,6 +309,8 @@ pub fn provider_compat(provider: &str) -> Compat {
         Compat::deepseek()
     } else if provider.eq_ignore_ascii_case(PROVIDER_OPENROUTER) {
         Compat::openrouter()
+    } else if provider.eq_ignore_ascii_case(PROVIDER_GEMINI) {
+        Compat::gemini()
     } else {
         Compat::openai()
     }
@@ -346,6 +397,110 @@ pub fn builtin_models() -> Vec<Model> {
             compat: Compat::openrouter(),
             headers: HeaderMap::new(),
         },
+        // Gemini pricing is USD per million tokens as published on
+        // 2026-11-15. Gemini 4 prices double on 2026-12-01; update the
+        // catalog when the new prices take effect. Cache writes are billed as
+        // storage per hour, so the per-token write price stays zero here.
+        Model {
+            id: "gemini-4-hydrogen".to_owned(),
+            name: "Gemini 4 Hydrogen".to_owned(),
+            provider: provider_id(PROVIDER_GEMINI),
+            api: api_id(),
+            base_url: provider_base_url(PROVIDER_GEMINI).to_owned(),
+            context_window: 1_048_576,
+            max_output_tokens: 65_536,
+            reasoning: true,
+            reasoning_mandatory: true,
+            thinking_levels: gemini4_hydrogen_thinking_levels(),
+            cost: ModelCost {
+                input: 1.50,
+                output: 7.50,
+                cache_read: 0.075,
+                cache_write: 0.0,
+            },
+            compat: Compat::gemini(),
+            headers: HeaderMap::new(),
+        },
+        Model {
+            id: "gemini-4-argon".to_owned(),
+            name: "Gemini 4 Argon".to_owned(),
+            provider: provider_id(PROVIDER_GEMINI),
+            api: api_id(),
+            base_url: provider_base_url(PROVIDER_GEMINI).to_owned(),
+            context_window: 1_048_576,
+            max_output_tokens: 65_536,
+            reasoning: true,
+            reasoning_mandatory: true,
+            thinking_levels: gemini4_thinking_levels(),
+            cost: ModelCost {
+                input: 2.00,
+                output: 10.00,
+                cache_read: 0.10,
+                cache_write: 0.0,
+            },
+            compat: Compat::gemini(),
+            headers: HeaderMap::new(),
+        },
+        Model {
+            id: "gemini-4-carbon".to_owned(),
+            name: "Gemini 4 Carbon".to_owned(),
+            provider: provider_id(PROVIDER_GEMINI),
+            api: api_id(),
+            base_url: provider_base_url(PROVIDER_GEMINI).to_owned(),
+            context_window: 1_048_576,
+            max_output_tokens: 65_536,
+            reasoning: true,
+            reasoning_mandatory: true,
+            thinking_levels: gemini4_thinking_levels(),
+            cost: ModelCost {
+                input: 2.00,
+                output: 10.00,
+                cache_read: 0.10,
+                cache_write: 0.0,
+            },
+            compat: Compat::gemini(),
+            headers: HeaderMap::new(),
+        },
+        Model {
+            id: "gemini-3.8-flash".to_owned(),
+            name: "Gemini 3.8 Flash".to_owned(),
+            provider: provider_id(PROVIDER_GEMINI),
+            api: api_id(),
+            base_url: provider_base_url(PROVIDER_GEMINI).to_owned(),
+            context_window: 1_048_576,
+            max_output_tokens: 65_536,
+            reasoning: true,
+            reasoning_mandatory: true,
+            thinking_levels: gemini3_thinking_levels(),
+            cost: ModelCost {
+                input: 0.75,
+                output: 3.75,
+                cache_read: 0.075,
+                cache_write: 0.0,
+            },
+            compat: Compat::gemini(),
+            headers: HeaderMap::new(),
+        },
+        Model {
+            id: "gemini-3.5-flash-lite".to_owned(),
+            name: "Gemini 3.5 Flash-Lite".to_owned(),
+            provider: provider_id(PROVIDER_GEMINI),
+            api: api_id(),
+            base_url: provider_base_url(PROVIDER_GEMINI).to_owned(),
+            context_window: 1_048_576,
+            max_output_tokens: 65_536,
+            reasoning: true,
+            reasoning_mandatory: true,
+            thinking_levels: gemini3_thinking_levels(),
+            cost: ModelCost {
+                input: 0.30,
+                output: 2.50,
+                cache_read: 0.03,
+                cache_write: 0.0,
+            },
+            compat: Compat::gemini(),
+            headers: HeaderMap::new(),
+        },
     ]
 }
 
@@ -394,6 +549,16 @@ mod tests {
         assert!(models.iter().any(|model| model.id == "deepseek-flash"));
         assert!(models.iter().any(|model| model.id == "deepseek-v4-pro"));
         assert!(models.iter().any(|model| model.id == "openrouter/auto"));
+        assert!(models.iter().any(|model| model.id == "gemini-4-hydrogen"));
+
+        let hydrogen = find_model("gemini", "gemini-4-hydrogen").expect("hydrogen is built in");
+        assert_eq!(hydrogen.context_window, 1_048_576);
+        assert!(hydrogen.reasoning_mandatory);
+        assert_eq!(hydrogen.cost.input, 1.50);
+        assert_eq!(
+            hydrogen.thinking_effort(ThinkingLevel::XHigh),
+            Some("xhigh".into())
+        );
 
         let flash = find_model("deepseek", "deepseek-flash").expect("flash is built in");
         assert_eq!(flash.context_window, 1_000_000);

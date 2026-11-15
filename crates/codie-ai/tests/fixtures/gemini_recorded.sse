@@ -1,0 +1,13 @@
+data: {"id":"gemini-recorded-1","object":"chat.completion.chunk","created":1,"model":"gemini-4-hydrogen","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+data: {"id":"gemini-recorded-1","object":"chat.completion.chunk","created":1,"model":"gemini-4-hydrogen","choices":[{"index":0,"delta":{"content":"Reading the file."},"finish_reason":null}]}
+
+data: {"id":"gemini-recorded-1","object":"chat.completion.chunk","created":1,"model":"gemini-4-hydrogen","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"function-call-1","type":"function","function":{"name":"read","arguments":"{\"path\":"},"extra_content":{"google":{"thought_signature":"sig-abc"}}}]},"finish_reason":null}]}
+
+data: {"id":"gemini-recorded-1","object":"chat.completion.chunk","created":1,"model":"gemini-4-hydrogen","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"function-call-1","type":"function","function":{"arguments":"\"math.py\"}"}}]},"finish_reason":null}]}
+
+data: {"id":"gemini-recorded-1","object":"chat.completion.chunk","created":1,"model":"gemini-4-hydrogen","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+data: {"id":"gemini-recorded-1","object":"chat.completion.chunk","created":1,"model":"gemini-4-hydrogen","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":30,"prompt_tokens_details":{"cached_tokens":20},"completion_tokens_details":{"reasoning_tokens":10}}}
+
+data: [DONE]

@@ -1,8 +1,8 @@
 # codie-ai
 
 Provider abstractions for codie. Phase 1 ships the OpenAI-compatible wire
-adapter used by DeepSeek and OpenRouter, the built-in model catalog, SSE
-framing, and `auth.json` credential storage.
+adapter used by DeepSeek, OpenRouter, and Google Gemini, the built-in model
+catalog, SSE framing, and `auth.json` credential storage.
 
 - `openai::OpenAiProvider` implements `codie_core::agent::ChatClient` and
   streams `AssistantDelta` events.

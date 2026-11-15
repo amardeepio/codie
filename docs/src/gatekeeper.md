@@ -40,8 +40,8 @@ a quarantine block on a checksum-valid binary is a signing problem.
 ### Verifying a download
 
 ```bash
-shasum -a 256 codie-v0.9.0-aarch64-apple-darwin.tar.gz
-cat codie-v0.9.0-aarch64-apple-darwin.tar.gz.sha256
+shasum -a 256 codie-v0.9.1-aarch64-apple-darwin.tar.gz
+cat codie-v0.9.1-aarch64-apple-darwin.tar.gz.sha256
 ```
 
 The hashes must match. `install.sh` performs this check automatically and aborts on a mismatch.
@@ -70,8 +70,8 @@ Do not add broad antivirus exclusions for the whole disk.
 ### Verifying a download
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\codie-v0.9.0-x86_64-pc-windows-msvc.zip
-Get-Content .\codie-v0.9.0-x86_64-pc-windows-msvc.zip.sha256
+Get-FileHash -Algorithm SHA256 .\codie-v0.9.1-x86_64-pc-windows-msvc.zip
+Get-Content .\codie-v0.9.1-x86_64-pc-windows-msvc.zip.sha256
 ```
 
 The installer performs the same check and aborts on a mismatch.

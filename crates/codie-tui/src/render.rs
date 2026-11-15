@@ -7,6 +7,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
+use codie_protocol::ext::ExtRenderKind;
+
 use crate::app::{
     App, CachedToolView, CachedTranscript, Hit, HitTarget, Overlay, Status, ToolViewKey,
     TranscriptCacheKey,
@@ -57,6 +59,76 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
             _ => draw_overlay(frame, area, overlay, app),
         }
     }
+
+    if let Some(selection) = app.selection {
+        highlight_selection(frame, selection);
+    }
+    if std::mem::take(&mut app.copy_pending)
+        && let Some(selection) = app.selection
+    {
+        let text = selection_text(frame.buffer_mut(), selection);
+        if !text.trim().is_empty() {
+            let lines = text.lines().count();
+            app.notice = Some(match crate::copy_to_clipboard(&text) {
+                Ok(()) => format!("copied {lines} line(s)"),
+                Err(error) => format!("clipboard unavailable: {error}"),
+            });
+            app.needs_redraw = true;
+        }
+    }
+}
+
+/// Marks every selected cell so the highlight is visible.
+fn highlight_selection(frame: &mut Frame<'_>, selection: crate::app::Selection) {
+    let ((top, left), (bottom, right)) = selection.bounds();
+    let area = frame.area();
+    let buffer = frame.buffer_mut();
+    for row in top..=bottom {
+        if !(area.top()..area.bottom()).contains(&row) {
+            continue;
+        }
+        let from = if row == top { left } else { area.left() };
+        let to = if row == bottom {
+            right
+        } else {
+            area.right().saturating_sub(1)
+        };
+        for column in from.max(area.left())..=to.min(area.right().saturating_sub(1)) {
+            if let Some(cell) = buffer.cell_mut((column, row)) {
+                cell.modifier |= Modifier::REVERSED;
+            }
+        }
+    }
+}
+
+/// Reads the selected cells as plain text, trimming row padding.
+fn selection_text(buffer: &ratatui::buffer::Buffer, selection: crate::app::Selection) -> String {
+    let ((top, left), (bottom, right)) = selection.bounds();
+    let area = buffer.area;
+    let mut rows = Vec::new();
+    for row in top..=bottom {
+        if !(area.top()..area.bottom()).contains(&row) {
+            continue;
+        }
+        let from = if row == top { left } else { area.left() };
+        let to = if row == bottom {
+            right
+        } else {
+            area.right().saturating_sub(1)
+        };
+        let mut line = String::new();
+        for column in from.max(area.left())..=to.min(area.right().saturating_sub(1)) {
+            line.push_str(buffer[(column, row)].symbol());
+        }
+        rows.push(line.trim_end().to_owned());
+    }
+    while rows.first().is_some_and(String::is_empty) {
+        rows.remove(0);
+    }
+    while rows.last().is_some_and(String::is_empty) {
+        rows.pop();
+    }
+    rows.join("\n")
 }
 
 fn draw_list_overlay(frame: &mut Frame<'_>, area: Rect, list: &crate::app::ChoiceList, app: &App) {
@@ -703,7 +775,7 @@ fn draw_editor(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         Status::Error => (" error ".to_owned(), palette.error),
     };
     let block = Block::bordered()
-        .title(title)
+        .title(editor_title(title, app))
         .border_style(Style::default().fg(border));
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -746,6 +818,19 @@ fn draw_editor(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
             .min(inner.y.saturating_add(inner.height.saturating_sub(1)));
         frame.set_cursor_position((x, y));
     }
+}
+
+/// Builds the editor title, appending a transient notice when present.
+fn editor_title(title: String, app: &App) -> Line<'static> {
+    let palette = app.theme.palette;
+    let mut spans = vec![Span::styled(title, Style::default().fg(palette.muted))];
+    if let Some(notice) = &app.notice {
+        spans.push(Span::styled(
+            format!("· {notice} "),
+            Style::default().fg(palette.success),
+        ));
+    }
+    Line::from(spans)
 }
 
 fn draw_footer(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
@@ -1129,6 +1214,27 @@ fn format_age(updated: std::time::SystemTime) -> String {
     }
 }
 
+/// Rows a capped permission preview shows.
+const PERMISSION_CODE_ROWS: usize = 40;
+/// Rows a capped permission diff shows.
+const PERMISSION_DIFF_ROWS: usize = 48;
+/// Rows a permission preview shows once expanded.
+const PERMISSION_EXPANDED_ROWS: usize = 400;
+/// Widest permission dialog.
+const PERMISSION_MAX_WIDTH: u16 = 96;
+/// Narrowest permission dialog that keeps the footer readable.
+const PERMISSION_MIN_WIDTH: u16 = 44;
+
+/// One built permission dialog body.
+struct PermissionBody {
+    /// Intent line and operation context.
+    header: Vec<Line<'static>>,
+    /// Preview title, rows, and truncation state.
+    preview: Vec<Line<'static>>,
+    /// True when the preview is capped.
+    truncated: bool,
+}
+
 fn draw_permission_overlay(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -1136,116 +1242,361 @@ fn draw_permission_overlay(
     app: &App,
 ) {
     let palette = app.theme.palette;
-    let width = area.width.saturating_mul(4) / 5;
-    let height = area.height.saturating_mul(3) / 5;
-    let rect = centered(area, width.max(40), height.max(12));
+    let width = area
+        .width
+        .saturating_sub(4)
+        .min(PERMISSION_MAX_WIDTH)
+        .max(PERMISSION_MIN_WIDTH.min(area.width))
+        .min(area.width);
+    let inner_width = usize::from(width.saturating_sub(2));
+    let danger = destructive_command(prompt);
+    let PermissionBody {
+        header,
+        preview,
+        truncated,
+    } = permission_body(
+        prompt,
+        inner_width,
+        &palette,
+        danger,
+        &app.footer.cwd,
+        app.footer.git_branch.as_deref(),
+    );
+
+    // Borders, header, two gaps, and a pinned footer. The dialog hugs its
+    // content instead of filling a fixed fraction of the screen.
+    let overhead = 2 + header.len() + 2 + 2;
+    let capacity = usize::from(area.height).saturating_sub(overhead).max(1);
+    let height = u16::try_from(overhead + preview.len().min(capacity))
+        .unwrap_or(u16::MAX)
+        .min(area.height);
+    let rect = centered(area, width, height);
     frame.render_widget(Clear, rect);
+    dim_outside(frame, rect);
+
+    let border = if danger {
+        palette.error
+    } else {
+        palette.warning
+    };
     let block = Block::bordered()
-        .title(" permission ")
-        .border_style(Style::default().fg(palette.warning));
+        .title(Line::from(vec![
+            Span::styled(
+                " permission ",
+                Style::default().fg(border).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("· ", Style::default().fg(palette.muted)),
+            Span::styled(
+                format!("{} ", prompt.tool),
+                Style::default()
+                    .fg(palette.tool)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]))
+        .border_style(Style::default().fg(border));
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
 
-    let path = prompt
-        .arguments
-        .get("path")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
-    let mut body = vec![
-        Line::from(vec![
-            Span::styled("Allow ", Style::default().fg(palette.foreground)),
-            Span::styled(
-                format!("`{}`", prompt.tool),
-                Style::default()
-                    .fg(palette.warning)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("?", Style::default().fg(palette.foreground)),
-        ]),
-        Line::default(),
-    ];
+    let gap = u16::from(!preview.is_empty());
+    let rows = Layout::vertical([
+        Constraint::Length(u16::try_from(header.len()).unwrap_or(0)),
+        Constraint::Length(gap),
+        Constraint::Min(0),
+        Constraint::Length(gap),
+        Constraint::Length(2),
+    ])
+    .split(inner);
 
-    if let Some(preview) = &prompt.preview {
-        if let Some(title) = &preview.title {
-            body.push(Line::from(Span::styled(
-                title.clone(),
-                Style::default()
-                    .fg(palette.heading)
-                    .add_modifier(Modifier::BOLD),
-            )));
-        }
-        match preview.kind {
-            codie_protocol::ext::ExtRenderKind::Diff => {
-                let (lines, truncated) = tool_view::render_diff(
-                    &preview.text,
-                    path,
-                    usize::from(inner.width),
-                    &palette,
-                    48,
-                );
-                body.extend(lines);
-                if truncated {
-                    body.push(Line::from(Span::styled(
-                        "  … diff truncated",
-                        Style::default().fg(palette.muted),
-                    )));
-                }
-            }
-            codie_protocol::ext::ExtRenderKind::Code => {
-                let language_path = match prompt.tool.as_str() {
-                    "bash" => "command.sh",
-                    "powershell" => "command.ps1",
-                    _ => path,
-                };
-                let (lines, truncated) = tool_view::render_code(
-                    &preview.text,
-                    language_path,
-                    usize::from(inner.width),
-                    &palette,
-                    40,
-                );
-                body.extend(lines);
-                if truncated {
-                    body.push(Line::from(Span::styled(
-                        "  … preview truncated",
-                        Style::default().fg(palette.muted),
-                    )));
-                }
-            }
-            _ => {}
-        }
-    } else {
-        let json = serde_json::to_string_pretty(&prompt.arguments).unwrap_or_default();
-        for line in json.lines().take(40) {
-            body.push(Line::from(Span::styled(
-                format!("  {line}"),
-                Style::default().fg(palette.foreground),
-            )));
-        }
-    }
-
-    let maximum = usize::from(inner.height).max(1);
-    let preview_limit = maximum.saturating_sub(3).max(1);
-    if body.len() > preview_limit {
-        body.truncate(preview_limit.saturating_sub(1));
-        body.push(Line::from(Span::styled(
-            "…",
-            Style::default().fg(palette.muted),
-        )));
-    }
-    body.push(Line::default());
-    body.push(Line::from(Span::styled(
-        "[y] allow once   [A] always allow   [n] deny   [Enter] allow   [Esc] deny   [Shift+Tab] full access",
-        Style::default().fg(palette.muted),
-    )));
     frame.render_widget(
-        Paragraph::new(body).wrap(Wrap { trim: false }).style(
+        Paragraph::new(header).style(
             Style::default()
                 .fg(palette.foreground)
                 .bg(palette.background),
         ),
-        inner,
+        rows[0],
     );
+
+    let preview_rows = usize::from(rows[2].height);
+    let max_scroll = preview.len().saturating_sub(preview_rows);
+    let scroll = usize::from(prompt.scroll).min(max_scroll);
+    frame.render_widget(
+        Paragraph::new(preview).scroll((u16::try_from(scroll).unwrap_or(0), 0)),
+        rows[2],
+    );
+
+    let footer = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).split(rows[4]);
+    frame.render_widget(
+        Paragraph::new(Line::from(permission_actions(inner_width, &palette))),
+        footer[0],
+    );
+    let mut hints = String::from("Enter allow · Esc deny");
+    if max_scroll > 0 {
+        hints.push_str(" · ↑↓ scroll");
+    }
+    if prompt.expanded {
+        hints.push_str(" · Ctrl+O collapse");
+    } else if truncated {
+        hints.push_str(" · Ctrl+O full");
+    }
+    let shift_tab = " · Shift+Tab full access";
+    if UnicodeWidthStr::width(hints.as_str()) + UnicodeWidthStr::width(shift_tab) <= inner_width {
+        hints.push_str(shift_tab);
+    }
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            truncate(&hints, inner_width),
+            Style::default().fg(palette.muted),
+        ))),
+        footer[1],
+    );
+}
+
+/// Dims every cell outside the modal so the transcript recedes.
+fn dim_outside(frame: &mut Frame<'_>, rect: Rect) {
+    let area = frame.area();
+    let buffer = frame.buffer_mut();
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            if x >= rect.x && x < rect.right() && y >= rect.y && y < rect.bottom() {
+                continue;
+            }
+            if let Some(cell) = buffer.cell_mut((x, y)) {
+                cell.modifier |= Modifier::DIM;
+            }
+        }
+    }
+}
+
+/// Builds the intent header and the preview rows for one prompt.
+fn permission_body(
+    prompt: &crate::app::PermissionPrompt,
+    width: usize,
+    palette: &Palette,
+    danger: bool,
+    cwd: &str,
+    branch: Option<&str>,
+) -> PermissionBody {
+    let intent = match prompt.tool.as_str() {
+        "bash" => "Run this shell command?",
+        "powershell" => "Run this PowerShell command?",
+        "edit" => "Apply these edits?",
+        "write" => "Write this file?",
+        _ => "Allow this tool to run?",
+    };
+    let mut header = vec![Line::from(Span::styled(
+        intent,
+        Style::default()
+            .fg(palette.foreground)
+            .add_modifier(Modifier::BOLD),
+    ))];
+
+    let mut context: Vec<(String, Style)> =
+        vec![(cwd.to_owned(), Style::default().fg(palette.muted))];
+    if let Some(branch) = branch {
+        context.push((format!("  ⑂ {branch}"), Style::default().fg(palette.info)));
+    }
+    if let Some(preview) = &prompt.preview
+        && preview.kind == ExtRenderKind::Diff
+    {
+        let (added, removed) = diff_stats(&preview.text);
+        context.push((format!("  +{added}"), Style::default().fg(palette.diff_add)));
+        context.push((
+            format!(" −{removed}"),
+            Style::default().fg(palette.diff_del),
+        ));
+    }
+    header.push(Line::from(clip_spans(context, width)));
+    if danger {
+        header.push(Line::from(Span::styled(
+            truncate(
+                "⚠ destructive command — review every line before allowing",
+                width,
+            ),
+            Style::default()
+                .fg(palette.error)
+                .add_modifier(Modifier::BOLD),
+        )));
+    }
+
+    let mut preview = Vec::new();
+    let truncated;
+    match &prompt.preview {
+        Some(hint) => {
+            if let Some(title) = &hint.title {
+                preview.push(Line::from(Span::styled(
+                    title.clone(),
+                    Style::default()
+                        .fg(palette.heading)
+                        .add_modifier(Modifier::BOLD),
+                )));
+            }
+            let limit = if prompt.expanded {
+                PERMISSION_EXPANDED_ROWS
+            } else {
+                match hint.kind {
+                    ExtRenderKind::Diff => PERMISSION_DIFF_ROWS,
+                    _ => PERMISSION_CODE_ROWS,
+                }
+            };
+            let path = prompt
+                .arguments
+                .get("path")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            let (rows, capped) = match hint.kind {
+                ExtRenderKind::Diff if width < 110 => {
+                    tool_view::render_diff_unified(&hint.text, path, width, palette, limit)
+                }
+                ExtRenderKind::Diff => {
+                    tool_view::render_diff(&hint.text, path, width, palette, limit)
+                }
+                ExtRenderKind::Code if matches!(prompt.tool.as_str(), "bash" | "powershell") => {
+                    let shell = if prompt.tool == "powershell" {
+                        "command.ps1"
+                    } else {
+                        "command.sh"
+                    };
+                    tool_view::render_shell(&hint.text, shell, width, palette, limit)
+                }
+                ExtRenderKind::Code => {
+                    tool_view::render_code(&hint.text, path, width, palette, limit)
+                }
+                _ => (
+                    hint.text
+                        .lines()
+                        .map(|line| Line::from(line.to_owned()))
+                        .collect(),
+                    false,
+                ),
+            };
+            truncated = capped;
+            preview.extend(rows);
+        }
+        None => {
+            let json = serde_json::to_string_pretty(&prompt.arguments).unwrap_or_default();
+            for line in json.lines().take(PERMISSION_CODE_ROWS) {
+                preview.push(Line::from(Span::styled(
+                    format!("  {line}"),
+                    Style::default().fg(palette.foreground),
+                )));
+            }
+            truncated = json.lines().count() > PERMISSION_CODE_ROWS;
+        }
+    }
+    PermissionBody {
+        header,
+        preview,
+        truncated,
+    }
+}
+
+/// Returns the three decision chips, each in its own color, with the
+/// `Enter` target marked.
+fn permission_actions(width: usize, palette: &Palette) -> Vec<Span<'static>> {
+    let compact = width < 48;
+    let actions: [(&str, &str, ratatui::style::Color, bool); 3] = [
+        (
+            "y",
+            if compact { "allow" } else { "allow once" },
+            palette.success,
+            true,
+        ),
+        (
+            "A",
+            if compact { "always" } else { "always allow" },
+            palette.warning,
+            false,
+        ),
+        ("n", "deny", palette.error, false),
+    ];
+    let mut spans = Vec::new();
+    for (index, (key, label, color, selected)) in actions.into_iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::raw(if compact { "  " } else { "   " }));
+        }
+        spans.push(Span::styled(
+            if selected { "▸ " } else { "  " },
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(
+            format!("[{key}]"),
+            Style::default()
+                .fg(palette.background)
+                .bg(color)
+                .add_modifier(Modifier::BOLD),
+        ));
+        let mut label_style = Style::default().fg(color);
+        if selected {
+            label_style = label_style.add_modifier(Modifier::BOLD);
+        }
+        spans.push(Span::styled(format!(" {label}"), label_style));
+    }
+    spans
+}
+
+/// Counts added and removed rows in a unified diff.
+fn diff_stats(text: &str) -> (usize, usize) {
+    text.lines().fold((0, 0), |(added, removed), line| {
+        if line.starts_with("+++") || line.starts_with("---") {
+            (added, removed)
+        } else if line.starts_with('+') {
+            (added + 1, removed)
+        } else if line.starts_with('-') {
+            (added, removed + 1)
+        } else {
+            (added, removed)
+        }
+    })
+}
+
+/// Truncates styled fragments to a display width.
+fn clip_spans(spans: Vec<(String, Style)>, width: usize) -> Vec<Span<'static>> {
+    let mut clipped = Vec::new();
+    let mut used = 0;
+    for (text, style) in spans {
+        let remaining = width.saturating_sub(used);
+        if remaining == 0 {
+            break;
+        }
+        let text = truncate(&text, remaining);
+        used += UnicodeWidthStr::width(text.as_str());
+        clipped.push(Span::styled(text, style));
+    }
+    clipped
+}
+
+/// Detects shell commands that commonly destroy work.
+fn destructive_command(prompt: &crate::app::PermissionPrompt) -> bool {
+    if !matches!(prompt.tool.as_str(), "bash" | "powershell") {
+        return false;
+    }
+    let Some(command) = prompt
+        .arguments
+        .get("command")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return false;
+    };
+    const PATTERNS: [&str; 16] = [
+        "rm -rf",
+        "rm -fr",
+        "rm -r",
+        "sudo ",
+        "git reset --hard",
+        "git clean -f",
+        "git checkout -- .",
+        "mkfs",
+        "dd if=",
+        "chmod -r",
+        "chown -r",
+        "truncate -s 0",
+        "remove-item",
+        "format-volume",
+        "stop-computer",
+        ":(){",
+    ];
+    let lowered = command.to_ascii_lowercase();
+    PATTERNS.iter().any(|pattern| lowered.contains(pattern))
 }
 
 fn draw_overlay(frame: &mut Frame<'_>, area: Rect, overlay: &Overlay, app: &App) {
@@ -1416,6 +1767,7 @@ mod tests {
     use codie_testkit::spec;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     fn app() -> App {
         let mut app = App::new(
@@ -1719,6 +2071,47 @@ mod tests {
     }
 
     #[test]
+    fn selected_cells_copy_as_trimmed_text() {
+        let mut buffer = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 12, 3));
+        for (y, text) in ["hello world", "second line", ""].iter().enumerate() {
+            for (x, character) in text.chars().enumerate() {
+                buffer[(x as u16, y as u16)].set_symbol(&character.to_string());
+            }
+        }
+        let selection = crate::app::Selection {
+            anchor: (1, 6),
+            cursor: (0, 2),
+        };
+        assert_eq!(selection_text(&buffer, selection), "llo world\nsecond");
+
+        let trailing = crate::app::Selection {
+            anchor: (2, 0),
+            cursor: (0, 0),
+        };
+        assert_eq!(
+            selection_text(&buffer, trailing),
+            "hello world\nsecond line"
+        );
+    }
+
+    #[test]
+    fn selection_highlights_the_rendered_screen() {
+        let mut app = app();
+        app.transcript.push_user("hello");
+        app.selection = Some(crate::app::Selection {
+            anchor: (0, 0),
+            cursor: (3, 10),
+        });
+        let buffer = buffer_at(&mut app, 80, 20);
+        let reversed = buffer
+            .content()
+            .iter()
+            .filter(|cell| cell.modifier.contains(Modifier::REVERSED))
+            .count();
+        assert!(reversed > 0, "the selection is not highlighted");
+    }
+
+    #[test]
     #[spec("TUI-025")]
     fn permission_overlay_renders_an_edit_diff() {
         let directory = tempfile::tempdir().unwrap();
@@ -1864,6 +2257,131 @@ mod tests {
         assert!(text.contains("hello prompt"), "{text}");
         assert!(text.contains("Last reply"), "{text}");
         assert!(text.contains("hello answer"), "{text}");
+    }
+
+    fn buffer_at(app: &mut App, width: u16, height: u16) -> ratatui::buffer::Buffer {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, app)).unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    fn permission_app() -> App {
+        let mut app = app();
+        app.footer = Footer {
+            cwd: "/tmp/project".into(),
+            git_branch: Some("main".into()),
+            model: "deepseek-flash".into(),
+            thinking: "medium".into(),
+            ..Footer::default()
+        };
+        app
+    }
+
+    #[test]
+    fn permission_overlay_hugs_its_content_and_names_the_keys() {
+        let mut app = permission_app();
+        let (reply, _answer) = tokio::sync::oneshot::channel();
+        app.push_permission(crate::permissions::PermissionRequest {
+            tool: "bash".to_owned(),
+            arguments: serde_json::json!({"command": "cargo test"}),
+            reply,
+        });
+        let text = buffer(&mut app);
+        assert!(text.contains("Run this shell command?"), "{text}");
+        assert!(text.contains("/tmp/project"), "{text}");
+        assert!(text.contains("⑂ main"), "{text}");
+        assert!(text.contains("$ cargo test"), "{text}");
+        assert!(text.contains("[y] allow once"), "{text}");
+        assert!(text.contains("[A] always allow"), "{text}");
+        assert!(text.contains("[n] deny"), "{text}");
+        assert!(text.contains("full access"), "{text}");
+
+        let buffer = buffer_at(&mut app, 80, 30);
+        let row_text = |y: u16| (0..80).map(|x| buffer[(x, y)].symbol()).collect::<String>();
+        let top = (0..30)
+            .find(|y| row_text(*y).contains("permission · bash"))
+            .expect("dialog title row");
+        let bottom = (top..30)
+            .find(|y| (0..80).any(|x| buffer[(x, *y)].symbol() == "└"))
+            .expect("dialog bottom border");
+        let height = bottom - top + 1;
+        assert!(
+            height <= 12,
+            "dialog is {height} rows tall, not hugging content"
+        );
+    }
+
+    #[test]
+    fn permission_overlay_colors_each_decision_and_dims_the_transcript() {
+        let mut app = permission_app();
+        let (reply, _answer) = tokio::sync::oneshot::channel();
+        app.push_permission(crate::permissions::PermissionRequest {
+            tool: "bash".to_owned(),
+            arguments: serde_json::json!({"command": "cargo test"}),
+            reply,
+        });
+        let palette = crate::theme::Theme::load(Some("dark")).unwrap().palette;
+        let buffer = buffer_at(&mut app, 100, 24);
+
+        let count = |wanted: ratatui::style::Color| {
+            buffer
+                .content()
+                .iter()
+                .filter(|cell| cell.bg == wanted)
+                .count()
+        };
+        assert!(count(palette.success) > 0, "allow once is not green");
+        assert!(count(palette.warning) > 0, "always allow is not amber");
+        assert!(count(palette.error) > 0, "deny is not red");
+
+        let dimmed = buffer
+            .content()
+            .iter()
+            .filter(|cell| cell.modifier.contains(Modifier::DIM))
+            .count();
+        assert!(dimmed > 0, "the transcript behind the dialog is not dimmed");
+    }
+
+    #[test]
+    fn permission_overlay_warns_before_destructive_commands() {
+        let mut app = permission_app();
+        let (reply, _answer) = tokio::sync::oneshot::channel();
+        app.push_permission(crate::permissions::PermissionRequest {
+            tool: "bash".to_owned(),
+            arguments: serde_json::json!({"command": "rm -rf target && cargo build"}),
+            reply,
+        });
+        let text = buffer(&mut app);
+        assert!(text.contains("destructive"), "{text}");
+        assert!(text.contains("review every line"), "{text}");
+    }
+
+    #[test]
+    fn permission_overlay_scrolls_and_expands_long_previews() {
+        let mut app = permission_app();
+        let command = (0..80)
+            .map(|index| format!("echo line-{index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let (reply, _answer) = tokio::sync::oneshot::channel();
+        app.push_permission(crate::permissions::PermissionRequest {
+            tool: "bash".to_owned(),
+            arguments: serde_json::json!({"command": command}),
+            reply,
+        });
+        let text = buffer(&mut app);
+        assert!(text.contains("Ctrl+O full"), "{text}");
+        assert!(text.contains("↑↓ scroll"), "{text}");
+
+        let before = buffer(&mut app);
+        app.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+        let after = buffer(&mut app);
+        assert_ne!(before, after, "scrolling did not move the preview");
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+        let expanded = buffer(&mut app);
+        assert!(expanded.contains("Ctrl+O collapse"), "{expanded}");
     }
 
     #[test]
