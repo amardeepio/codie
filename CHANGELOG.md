@@ -11,6 +11,28 @@ that major series, with migrations applied on read.
 
 ### Added
 
+- Nothing yet.
+
+### Changed
+
+- Nothing yet.
+
+### Fixed
+
+- Nothing yet.
+
+### Removed
+
+- Nothing yet.
+
+### Security
+
+- Nothing yet.
+
+## [0.9.1] - 2026-11-15
+
+### Added
+
 - The permission overlay now renders as a content-sized modal with a dimmed transcript, a pinned footer, a
   scrolled and expandable preview (`↑↓`/`PgUp`/`PgDn`, `Ctrl+O`), per-tool wording, diff counts, and a
   destructive-command warning. Each decision has its own color: green for allow once, amber for always allow,
@@ -31,7 +53,8 @@ that major series, with migrations applied on read.
 
 ### Changed
 
-- Nothing yet.
+- Extra themes are labelled "Dark theme" in the picker, and the README documents the benchmark results and
+  uses a refreshed TUI screenshot.
 
 ### Fixed
 
