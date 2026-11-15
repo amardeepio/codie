@@ -46,13 +46,15 @@ No provider is configured. Run:
 codie auth login deepseek
 # or
 codie auth login openrouter
+# or
+codie auth login gemini
 ```
 
 ### `401` or `403` from a provider
 
 Check that the key belongs to the selected provider. `codie auth status` shows which providers have stored
-credentials. Environment variables (`DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`) take precedence over stored
-credentials; an empty environment variable can shadow a valid stored key in some shells.
+credentials. Environment variables (`DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY`) take precedence
+over stored credentials; an empty environment variable can shadow a valid stored key in some shells.
 
 ### `429` or repeated retries
 

@@ -11,7 +11,23 @@ that major series, with migrations applied on read.
 
 ### Added
 
-- Nothing yet.
+- The permission overlay now renders as a content-sized modal with a dimmed transcript, a pinned footer, a
+  scrolled and expandable preview (`↑↓`/`PgUp`/`PgDn`, `Ctrl+O`), per-tool wording, diff counts, and a
+  destructive-command warning. Each decision has its own color: green for allow once, amber for always allow,
+  and red for deny.
+- Dragging with the mouse now selects rendered text and copies it to the clipboard on release, with an
+  editor-title confirmation that leaves the transcript and scroll position untouched.
+- Added the `dracula`, `material`, `gruvbox`, `nord`, `nightowl`, `orng`, and `tokyonight` themes, ported from
+  their upstream palettes. `--theme`, `/theme`, and `CODIE_THEME` accept them, and `orange` is an alias for `orng`.
+- Added Google Gemini as a provider (`--provider gemini`, `GEMINI_API_KEY`, `/provider` in the TUI) using
+  Gemini's OpenAI-compatible endpoint. The bundled catalog includes Gemini 4 Carbon, Argon, and Hydrogen plus
+  Gemini 3.8 Flash and 3.5 Flash-Lite, with `gemini-4-hydrogen` as the default.
+- Gemini tool calls now preserve and replay `extra_content.google.thought_signature` so multi-turn tool use
+  works, and parallel tool calls that reuse an index are no longer merged.
+- Added `benchmark/`, a repeatable harness that compares codie and opencode startup plus a four-task coding
+  suite (greenfield UI, brownfield UI, hidden-test bug fix, and JSON API) using the same prompts, scaffold, and
+  pinned OpenRouter model. It records turns, tool calls, time to first edit, tokens, cost, and bootstrap
+  confidence intervals, with browser, hidden-test, and HTTP verifiers.
 
 ### Changed
 

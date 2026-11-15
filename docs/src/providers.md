@@ -1,7 +1,8 @@
 # Providers
 
-codie ships one OpenAI-compatible adapter and two provider presets: OpenRouter and DeepSeek. Both use HTTP with
-API-key authentication and stream responses as Server-Sent Events. Both are available in the Phase 1 binary.
+codie ships one OpenAI-compatible adapter and three provider presets: OpenRouter, DeepSeek, and Google Gemini.
+All use HTTP with API-key authentication and stream responses as Server-Sent Events. All three are available in
+the binary.
 
 ## Support matrix
 
@@ -9,10 +10,11 @@ API-key authentication and stream responses as Server-Sent Events. Both are avai
 |---|---|---|---|
 | DeepSeek | `deepseek` | `https://api.deepseek.com` | `DEEPSEEK_API_KEY` |
 | OpenRouter | `openrouter` | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` |
+| Google Gemini | `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai` | `GEMINI_API_KEY` |
 
-Both speak the `openai-completions` API. A provider is a runtime unit (id, base URL, auth, catalog, filters); an
+All three speak the `openai-completions` API. A provider is a runtime unit (id, base URL, auth, catalog, filters); an
 API is a wire protocol; a model carries the API, provider, limits, cost, and compatibility flags. Keeping these
-separate is what lets one adapter serve both providers without provider-specific branches in the agent loop.
+separate is what lets one adapter serve every provider without provider-specific branches in the agent loop.
 
 ## Configuration
 
@@ -44,16 +46,17 @@ The normative auth requirements are `PROV-030`..`PROV-034` in
 
 ## Differences the adapter handles
 
-| Concern | DeepSeek | OpenRouter |
-|---|---|---|
-| Max output field | `max_tokens` | `max_completion_tokens` |
-| Reasoning parameter | `thinking` plus optional `reasoning_effort` | `reasoning.effort` |
-| Reasoning replay | Required on assistant messages | Dropped unless the model requires it |
-| Cost | Estimated from model prices | Provider-reported `usage.cost`, authoritative |
-| Routing | Fixed base URL | Optional `provider.order` / `only` / `allow_fallbacks` |
-| Attribution | None | `HTTP-Referer` and `X-Title` |
-| Catalog | Bundled in the binary, updated with codie releases | `GET /models`, ETag, 4-hour freshness, stale-on-failure |
-| Session affinity | None | `x-session-id` |
+| Concern | DeepSeek | OpenRouter | Gemini |
+|---|---|---|---|
+| Max output field | `max_tokens` | `max_completion_tokens` | `max_tokens` |
+| Reasoning parameter | `thinking` plus optional `reasoning_effort` | `reasoning.effort` | top-level `reasoning_effort` |
+| Reasoning replay | Required on assistant messages | Dropped unless the model requires it | Dropped; tool-call thought signatures are replayed |
+| Reasoning off | `thinking: {type: "disabled"}` | `reasoning: {effort: "none"}` | Not supported on Gemini 3/4; the field is omitted |
+| Cost | Estimated from model prices | Provider-reported `usage.cost`, authoritative | Estimated from model prices |
+| Routing | Fixed base URL | Optional `provider.order` / `only` / `allow_fallbacks` | Fixed base URL |
+| Attribution | None | `HTTP-Referer` and `X-Title` | None |
+| Catalog | Bundled in the binary, updated with codie releases | `GET /models`, ETag, 4-hour freshness, stale-on-failure | Bundled in the binary; other IDs usable with `--model` |
+| Session affinity | None | `x-session-id` | None |
 
 ## Streaming and tool calls
 
@@ -68,10 +71,11 @@ never re-emits content already delivered to the consumer.
 
 ## Model selection
 
-Models are selected by `provider/model`, for example `deepseek/deepseek-flash`. OpenRouter model IDs are used
-verbatim inside that path; codie does not rewrite vendor prefixes. A model is selectable only when it is a chat
-model whose input modalities include text. The DeepSeek catalog ships as bundled data, so newly released
-DeepSeek models require a codie release.
+Models are selected by `provider/model`, for example `deepseek/deepseek-flash` or
+`gemini/gemini-4-hydrogen`. OpenRouter model IDs are used verbatim inside that path; codie does not rewrite
+vendor prefixes. A model is selectable only when it is a chat model whose input modalities include text. The
+DeepSeek and Gemini catalogs ship as bundled data, so newly released models require a codie release, though any
+model ID can still be passed to `--model`.
 
 OpenRouter models come from the live `/models` catalog, cached under the data directory. The picker narrows the
 catalog to coding models: models that support tool calling and either appear in OpenRouter's `programming`
@@ -82,13 +86,14 @@ refresh runs in the background in every mode; a completed refresh appears the ne
 
 `codie models [--provider <p>] [--json]` lists the merged catalog from the local cache without a network call.
 
-In the TUI, `/provider` switches between DeepSeek and OpenRouter in place. The agent keeps one stable client
-handle, so an in-flight session can change provider without restarting; the switch selects the new provider's
-default model and persists a model-change entry.
+In the TUI, `/provider` switches between DeepSeek, OpenRouter, and Gemini in place. The agent keeps one stable
+client handle, so an in-flight session can change provider without restarting; the switch selects the new
+provider's default model and persists a model-change entry.
 
 ## Testing and limitations
 
 Provider behavior is tested with recorded fixtures and a scripted fake provider; CI never calls a live API and
 never records credentials. Text is the only supported input in v1.0. Anthropic-native passthrough, OAuth login,
-and additional vendors are out of scope. See [`specs/provider/0001-openai-compatible.md`](../../specs/provider/0001-openai-compatible.md)
+and additional vendors beyond these three are out of scope. See
+[`specs/provider/0001-openai-compatible.md`](../../specs/provider/0001-openai-compatible.md)
 for the normative wire contract.

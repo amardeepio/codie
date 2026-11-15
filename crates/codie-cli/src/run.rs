@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
 use codie_ai::{
-    AuthStore, Model, OpenAiProvider, OpenRouterCatalog, PROVIDER_OPENROUTER, builtin_models,
-    fallback_model, merge_models, provider_base_url, resolve_key,
+    AuthStore, Model, OpenAiProvider, OpenRouterCatalog, PROVIDER_GEMINI, PROVIDER_OPENROUTER,
+    builtin_models, fallback_model, merge_models, provider_base_url, resolve_key,
 };
 use codie_core::{
     Agent, AgentConfig, AgentEvent, ChatClient, Message, ModelRef, RunStatus, StopReason,
@@ -81,11 +81,12 @@ pub(crate) struct RunArgs {
     #[arg(long, value_enum, default_value = "full")]
     pub(crate) tui_mode: TuiModeArg,
 
-    /// Theme name (`system`, `dark`, `light`) or a TOML theme path.
+    /// Theme name (`system`, `dark`, `light`, `dracula`, `material`, `gruvbox`, `nord`, `nightowl`,
+    /// `orng`, `tokyonight`) or a TOML theme path.
     #[arg(long, value_name = "NAME|PATH")]
     pub(crate) theme: Option<String>,
 
-    /// Provider id (`deepseek` or `openrouter`).
+    /// Provider id (`deepseek`, `openrouter`, or `gemini`).
     #[arg(long)]
     pub(crate) provider: Option<String>,
 
@@ -288,6 +289,7 @@ pub(crate) async fn run(args: RunArgs, deferred_flags: BTreeMap<String, String>)
 
     let mut provider = match provider_id.as_str() {
         PROVIDER_OPENROUTER => OpenAiProvider::openrouter(key),
+        PROVIDER_GEMINI => OpenAiProvider::gemini(key),
         _ => OpenAiProvider::deepseek(key),
     };
     if let Some(base_url) = args.base_url.clone().or_else(|| config.base_url.clone()) {
@@ -398,6 +400,10 @@ pub(crate) async fn run(args: RunArgs, deferred_flags: BTreeMap<String, String>)
             id: PROVIDER_OPENROUTER.to_owned(),
             name: "OpenRouter".to_owned(),
         },
+        ProviderChoice {
+            id: PROVIDER_GEMINI.to_owned(),
+            name: "Gemini".to_owned(),
+        },
     ];
     let switch_provider = {
         let switchable = Arc::clone(&switchable);
@@ -412,6 +418,7 @@ pub(crate) async fn run(args: RunArgs, deferred_flags: BTreeMap<String, String>)
                 .map_err(|error| format!("{error:#}"))?;
             let mut client = match provider {
                 PROVIDER_OPENROUTER => OpenAiProvider::openrouter(key),
+                PROVIDER_GEMINI => OpenAiProvider::gemini(key),
                 _ => OpenAiProvider::deepseek(key),
             };
             if let Some(base_url) = &base_url {
@@ -908,14 +915,15 @@ fn ensure_system_message(
 
 fn validate_provider(provider: &str) -> Result<()> {
     match provider {
-        "deepseek" | "openrouter" => Ok(()),
-        other => bail!("unsupported provider `{other}`; expected deepseek or openrouter"),
+        "deepseek" | "openrouter" | "gemini" => Ok(()),
+        other => bail!("unsupported provider `{other}`; expected deepseek, openrouter, or gemini"),
     }
 }
 
 fn default_model(provider: &str) -> &'static str {
     match provider {
         PROVIDER_OPENROUTER => "openrouter/auto",
+        PROVIDER_GEMINI => "gemini-4-hydrogen",
         _ => "deepseek-flash",
     }
 }

@@ -20,6 +20,7 @@ codie-local/
 
 # Local design notes (not tracked)
 OPENCODE-MODELS.MD
+CODIE-MEMORY-PLAN.MD
 
 # Coverage and profiling
 lcov.info

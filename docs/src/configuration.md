@@ -13,7 +13,8 @@ codie reads configuration from three layers. Later layers do not override earlie
 |---|---|
 | `DEEPSEEK_API_KEY` | DeepSeek API key. |
 | `OPENROUTER_API_KEY` | OpenRouter API key. |
-| `CODIE_PROVIDER` | Default provider (`deepseek` or `openrouter`). |
+| `GEMINI_API_KEY` | Google Gemini API key. |
+| `CODIE_PROVIDER` | Default provider (`deepseek`, `openrouter`, or `gemini`). |
 | `CODIE_MODEL` | Default model id, used verbatim. |
 | `CODIE_THINKING` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. |
 | `CODIE_MAX_TURNS` | Maximum assistant requests per run. Must be greater than zero. |

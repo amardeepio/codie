@@ -66,6 +66,21 @@ pub(crate) fn render_diff(
     }
 }
 
+/// Renders one parsed diff as a single-column unified view.
+pub(crate) fn render_diff_unified(
+    text: &str,
+    path: &str,
+    width: usize,
+    palette: &Palette,
+    limit: usize,
+) -> (Vec<Line<'static>>, bool) {
+    let hunks = parse_unified(text);
+    if hunks_empty(&hunks) {
+        return (Vec::new(), false);
+    }
+    render_unified(&hunks, path, width, palette, limit)
+}
+
 /// Renders written file content with line numbers.
 pub(crate) fn render_code(
     content: &str,
@@ -107,6 +122,88 @@ pub(crate) fn render_code(
         }
     }
     (lines, truncated)
+}
+
+/// Renders a shell command with a `$` prompt and hanging indents.
+pub(crate) fn render_shell(
+    command: &str,
+    path: &str,
+    width: usize,
+    palette: &Palette,
+    limit: usize,
+) -> (Vec<Line<'static>>, bool) {
+    let language = language_for(path);
+    let gutter = 2;
+    let content_width = width.saturating_sub(gutter).max(1);
+    let prompt_style = Style::default().fg(palette.muted);
+
+    let mut lines = Vec::new();
+    let mut truncated = false;
+    'source: for (index, source) in command.lines().enumerate() {
+        for (row_index, chunk) in wrap_command(source, content_width).iter().enumerate() {
+            if lines.len() >= limit {
+                truncated = true;
+                break 'source;
+            }
+            let marker = if index == 0 && row_index == 0 {
+                "$ "
+            } else {
+                "  "
+            };
+            let mut spans = markdown::highlight_code(chunk, language, palette).spans;
+            let used = spans_width(&spans);
+            let mut line = vec![Span::styled(marker, prompt_style)];
+            line.append(&mut spans);
+            if used < content_width {
+                line.push(Span::raw(" ".repeat(content_width - used)));
+            }
+            lines.push(Line::from(line));
+        }
+    }
+    (lines, truncated)
+}
+
+/// Wraps one command line, preferring spaces over mid-word breaks.
+fn wrap_command(line: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut rows: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut current_width = 0;
+    for word in line.split_whitespace() {
+        let word_width = UnicodeWidthStr::width(word);
+        let space = usize::from(!current.is_empty());
+        if current_width + space + word_width <= width {
+            if space == 1 {
+                current.push(' ');
+                current_width += 1;
+            }
+            current.push_str(word);
+            current_width += word_width;
+            continue;
+        }
+        if !current.is_empty() {
+            rows.push(std::mem::take(&mut current));
+            current_width = 0;
+        }
+        if word_width <= width {
+            current.push_str(word);
+            current_width = word_width;
+            continue;
+        }
+        for character in word.chars() {
+            let char_width = character.width().unwrap_or(0);
+            if current_width + char_width > width && !current.is_empty() {
+                rows.push(std::mem::take(&mut current));
+                current_width = 0;
+            }
+            current.push(character);
+            current_width += char_width;
+        }
+    }
+    if !current.is_empty() || rows.is_empty() {
+        rows.push(current);
+    }
+    rows
 }
 
 /// Returns the lightweight highlighter language for a path.
@@ -785,6 +882,40 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         let (lines, truncated) = render_code(&content, "notes.txt", 80, &palette, 3);
+        assert_eq!(lines.len(), 3);
+        assert!(truncated);
+    }
+
+    #[test]
+    fn shell_view_uses_a_prompt_and_wraps_on_words() {
+        let palette = Palette::dark();
+        let (lines, truncated) = render_shell(
+            "cd /Users/amardeep/ai-learning/TIC-TAC-TOE && git status --short 2>&1",
+            "command.sh",
+            60,
+            &palette,
+            10,
+        );
+        assert!(!truncated);
+        let rows = plain(&lines);
+        assert!(rows[0].starts_with("$ cd"), "{rows:?}");
+        assert!(rows.len() > 1, "{rows:?}");
+        let text = rows.join("\n");
+        assert!(text.contains("TIC-TAC-TOE"), "word was split: {text}");
+        assert!(
+            text.lines().skip(1).all(|line| line.starts_with("  ")),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn shell_view_caps_long_commands() {
+        let palette = Palette::dark();
+        let command = (1..=20)
+            .map(|index| format!("echo {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let (lines, truncated) = render_shell(&command, "command.sh", 60, &palette, 3);
         assert_eq!(lines.len(), 3);
         assert!(truncated);
     }

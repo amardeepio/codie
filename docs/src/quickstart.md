@@ -36,6 +36,8 @@ See [Installation](install.md) for checksums, custom directories, source builds,
 codie auth login deepseek
 # or
 codie auth login openrouter
+# or
+codie auth login gemini
 codie auth status
 ```
 

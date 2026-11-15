@@ -2,7 +2,7 @@
 
 use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
-use codie_ai::{AuthStore, PROVIDER_DEEPSEEK, PROVIDER_OPENROUTER};
+use codie_ai::{AuthStore, PROVIDER_DEEPSEEK, PROVIDER_GEMINI, PROVIDER_OPENROUTER};
 
 use crate::config::Config;
 
@@ -19,7 +19,7 @@ pub(crate) struct AuthArgs {
 pub(crate) enum AuthCommand {
     /// Store an API key for a provider.
     Login {
-        /// Provider id (`deepseek` or `openrouter`).
+        /// Provider id (`deepseek`, `openrouter`, or `gemini`).
         provider: String,
         /// API key. When omitted, codie prompts without echoing.
         #[arg(long)]
@@ -68,7 +68,7 @@ pub(crate) fn run(args: AuthArgs, config: &Config) -> Result<u8> {
             }
         }
         AuthCommand::Status { json } => {
-            let statuses = ["deepseek", "openrouter"]
+            let statuses = [PROVIDER_DEEPSEEK, PROVIDER_OPENROUTER, PROVIDER_GEMINI]
                 .into_iter()
                 .map(|provider| {
                     let stored = store.get(provider).ok().flatten().is_some();
@@ -118,16 +118,20 @@ pub(crate) fn run(args: AuthArgs, config: &Config) -> Result<u8> {
 }
 
 fn validate_provider(provider: &str) -> Result<()> {
-    if provider == PROVIDER_DEEPSEEK || provider == PROVIDER_OPENROUTER {
+    if provider == PROVIDER_DEEPSEEK
+        || provider == PROVIDER_OPENROUTER
+        || provider == PROVIDER_GEMINI
+    {
         Ok(())
     } else {
-        bail!("unsupported provider `{provider}`; expected deepseek or openrouter")
+        bail!("unsupported provider `{provider}`; expected deepseek, openrouter, or gemini")
     }
 }
 
 pub(crate) fn env_var(provider: &str) -> &'static str {
     match provider {
         PROVIDER_OPENROUTER => "OPENROUTER_API_KEY",
+        PROVIDER_GEMINI => "GEMINI_API_KEY",
         _ => "DEEPSEEK_API_KEY",
     }
 }

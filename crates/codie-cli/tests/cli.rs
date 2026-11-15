@@ -106,7 +106,7 @@ fn auth_status_reports_configuration_without_secrets() {
     let value: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("auth status is valid JSON");
     let providers = value["providers"].as_array().expect("providers array");
-    assert_eq!(providers.len(), 2);
+    assert_eq!(providers.len(), 3);
     assert!(
         providers
             .iter()
