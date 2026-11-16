@@ -11,7 +11,9 @@ use codie_core::{
     Agent, AgentConfig, AgentEvent, ChatClient, Content, Message, ModelRef, RunStatus,
     ThinkingLevel, ToolResultMessage, Toolbox, Usage,
 };
-use codie_prompt::{Customizations, PromptInput, build_system_message, load_project_context};
+use codie_prompt::{
+    Customizations, PromptInput, build_system_message, load_project_context, load_project_memory,
+};
 use codie_session::{Session, SessionSummary, TreeEntry};
 use codie_tools::Registry;
 use ratatui::Terminal;
@@ -112,6 +114,18 @@ pub enum ChoiceKind {
     Thinking,
     /// Tool blocks in the transcript.
     Tools,
+}
+
+/// One file attached through the editor and shown as a compact label.
+///
+/// The editor holds `[Image 1]` rather than the full path; the label is replaced
+/// with an `@path` token when the prompt is submitted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attachment {
+    /// Text shown in the editor, such as `[Image 1]`.
+    pub label: String,
+    /// Absolute path the label resolves to.
+    pub path: PathBuf,
 }
 
 /// A filterable, scrollable list overlay.
@@ -617,6 +631,10 @@ pub struct App {
     pub customizations: Customizations,
     /// Prompt produced by a customization command, submitted by the event loop.
     pub command_prompt: Option<String>,
+    /// Files attached through the editor, keyed by their compact label.
+    pub attachments: Vec<Attachment>,
+    /// Next attachment number used to build labels.
+    next_attachment: usize,
     /// Slash commands declared by extensions.
     pub extension_commands: Vec<String>,
     /// True after `/new` starts a fresh session.
@@ -717,6 +735,8 @@ impl App {
             theme_watcher,
             customizations: Customizations::default(),
             command_prompt: None,
+            attachments: Vec::new(),
+            next_attachment: 0,
             extension_commands: Vec::new(),
             extension_session_reset: false,
             drop_queued: false,
@@ -760,6 +780,7 @@ impl App {
             }
             KeyCode::Char(character) if !control && !alt => {
                 self.editor.insert_char(character);
+                self.attach_completed_path();
                 Action::None
             }
             KeyCode::Backspace => {
@@ -905,6 +926,7 @@ impl App {
                     Action::Quit
                 } else {
                     self.editor.clear();
+                    self.clear_attachments();
                     Action::None
                 }
             }
@@ -952,6 +974,10 @@ impl App {
             }
             ActionId::Yank => {
                 self.editor.yank();
+                Action::None
+            }
+            ActionId::PasteImage => {
+                self.paste_clipboard();
                 Action::None
             }
             ActionId::HistoryPrevious => {
@@ -1076,6 +1102,13 @@ impl App {
                 list.refresh();
             }
             _ => {}
+        }
+        if list.kind == ChoiceKind::Commands && path_like_query(&list.query) {
+            // A pasted or typed absolute path is not a command. Hand the text
+            // back to the editor instead of leaving it in the palette filter.
+            self.overlay = None;
+            self.editor.insert_str(&format!("/{}", list.query));
+            return Action::None;
         }
         self.overlay = Some(Overlay::List(list));
         Action::None
@@ -1767,15 +1800,191 @@ impl App {
                 for warning in self.customizations.warnings() {
                     self.transcript.push_error(warning.clone());
                 }
+                let refreshed = self.reload_project_memory();
                 self.transcript.push_info(format!(
-                    "Reloaded {} skill(s) and {} template(s).",
+                    "Reloaded {} skill(s), {} template(s), and {} project memory.",
                     self.customizations.skills().len(),
-                    self.customizations.templates().len()
+                    self.customizations.templates().len(),
+                    if refreshed { "refreshed" } else { "unchanged" }
                 ));
+            }
+            Command::Init => {
+                if self.status == Status::Streaming {
+                    self.transcript
+                        .push_info("Finish or cancel the current run before scaffolding.");
+                } else {
+                    match codie_prompt::scaffold(&self.cwd) {
+                        Ok(outcome) => {
+                            for path in &outcome.created {
+                                let label = if path.file_name().is_some_and(|name| {
+                                    name.to_string_lossy() == codie_prompt::PROJECT_MEMORY_FILE
+                                }) {
+                                    "Created (loaded into every session)"
+                                } else {
+                                    "Created"
+                                };
+                                self.transcript
+                                    .push_info(format!("{label}: {}", path.display()));
+                            }
+                            for path in &outcome.existing {
+                                self.transcript
+                                    .push_info(format!("Kept existing: {}", path.display()));
+                            }
+                            if outcome.created.iter().any(|path| {
+                                path.file_name().is_some_and(|name| {
+                                    name.to_string_lossy() == codie_prompt::PROJECT_MEMORY_FILE
+                                })
+                            }) {
+                                self.reload_project_memory();
+                            }
+                        }
+                        Err(error) => self
+                            .transcript
+                            .push_error(format!("Cannot scaffold project files: {error}")),
+                    }
+                }
             }
             Command::Unknown(name) => self
                 .transcript
                 .push_error(format!("Unknown command `/{name}`. Try /help.")),
+        }
+        true
+    }
+
+    /// Handles pasted text.
+    ///
+    /// A paste that looks like a path closes the command palette first, so an
+    /// absolute path never lands in the palette filter.
+    pub fn paste(&mut self, text: &str) {
+        if let Some(path) = codie_prompt::resolve_path_text(text, &self.cwd) {
+            self.overlay = None;
+            self.insert_attachment(path);
+            return;
+        }
+        let palette_open = matches!(
+            &self.overlay,
+            Some(Overlay::List(list)) if list.kind == ChoiceKind::Commands
+        );
+        if palette_open && (text.contains('/') || text.contains('\\')) {
+            self.overlay = None;
+            let draft = if text.starts_with('/') {
+                text.to_owned()
+            } else {
+                format!("/{text}")
+            };
+            self.editor.insert_str(&draft);
+            return;
+        }
+        self.editor.paste(text);
+    }
+
+    /// Turns the editor contents into an attachment when they name a file.
+    ///
+    /// A dragged screenshot arrives one character at a time, so the path must
+    /// become an attachment before the temporary file disappears. Doing this on
+    /// every keystroke is cheap because the check only runs for path-like first
+    /// characters.
+    fn attach_completed_path(&mut self) {
+        let text = self.editor.text();
+        let trimmed = text.trim_start();
+        if trimmed.is_empty() || !trimmed.starts_with(['/', '~', '.']) {
+            return;
+        }
+        if let Some(path) = codie_prompt::resolve_path_text(&text, &self.cwd) {
+            self.editor.clear();
+            self.insert_attachment(path);
+        }
+    }
+
+    /// Adds one attachment to the editor as a compact label.
+    ///
+    /// Repeating the same path reuses its label instead of adding a duplicate.
+    fn insert_attachment(&mut self, path: PathBuf) {
+        if let Some(existing) = self
+            .attachments
+            .iter()
+            .find(|attachment| attachment.path == path)
+        {
+            let label = existing.label.clone();
+            self.editor.insert_str(&format!("{label} "));
+            return;
+        }
+        self.next_attachment += 1;
+        let kind = if codie_prompt::is_image_path(&path) {
+            "Image"
+        } else {
+            "File"
+        };
+        let label = format!("[{kind} {}]", self.next_attachment);
+        let notice = format!("Attached {label}.");
+        self.attachments.push(Attachment {
+            label: label.clone(),
+            path,
+        });
+        self.editor.insert_str(&format!("{label} "));
+        self.notice = Some(notice);
+    }
+
+    /// Replaces attachment labels with `@path` tokens before submission.
+    pub fn expand_attachment_labels(&mut self, text: &str) -> String {
+        if self.attachments.is_empty() {
+            return text.to_owned();
+        }
+        let mut expanded = text.to_owned();
+        for attachment in &self.attachments {
+            expanded = expanded.replace(
+                &attachment.label,
+                &codie_prompt::quote_attachment_path(&attachment.path),
+            );
+        }
+        expanded
+    }
+
+    /// Drops attachment labels; the editor no longer references them.
+    pub fn clear_attachments(&mut self) {
+        self.attachments.clear();
+        self.next_attachment = 0;
+    }
+
+    /// Pastes a clipboard image as an attachment, or clipboard text.
+    pub fn paste_clipboard(&mut self) {
+        if let Some(path) = crate::clipboard::read_image() {
+            self.insert_attachment(path);
+            return;
+        }
+        match crate::clipboard::read_text() {
+            Some(text) if !text.is_empty() => self.paste(&text),
+            _ => self.notice = Some("Clipboard has no image or text.".to_owned()),
+        }
+    }
+
+    /// Re-reads `CODIE.MD` and refreshes the persisted system prompt.
+    ///
+    /// Returns true when the prompt changed. The update is recorded as a
+    /// context edit so the session file stays the source of truth.
+    fn reload_project_memory(&mut self) -> bool {
+        let memory = codie_prompt::load_project_memory(&self.cwd);
+        let Some(Message::System(system)) = self.history.first_mut() else {
+            return false;
+        };
+        let updated = codie_prompt::replace_project_memory(&system.content, memory.as_ref());
+        if updated == system.content {
+            return false;
+        }
+        system.content = updated.clone();
+
+        if let Some(session) = self.session.as_mut() {
+            let target = session.entries().iter().find_map(|entry| match entry {
+                codie_session::Entry::Message {
+                    id,
+                    message: Message::System(_),
+                    ..
+                } => Some(id.clone()),
+                _ => None,
+            });
+            if let Some(id) = target {
+                let _ = session.append_context_edit(id, Some(Content::text(updated)));
+            }
         }
         true
     }
@@ -2020,16 +2229,21 @@ impl App {
     }
 
     fn complete_file(&self, prefix: &str) -> Option<String> {
-        let mut matches = ignore::WalkBuilder::new(&self.cwd)
+        let (search_root, written_root, stem) = split_completion(prefix, &self.cwd);
+        let depth = if written_root.is_empty() { 6 } else { 3 };
+        let mut matches = ignore::WalkBuilder::new(&search_root)
             .hidden(true)
             .git_ignore(true)
+            .max_depth(Some(depth))
             .build()
             .filter_map(Result::ok)
             .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
             .filter_map(|entry| {
-                let path = entry.path().strip_prefix(&self.cwd).ok()?;
-                let display = path.to_string_lossy().replace('\\', "/");
-                display.starts_with(prefix).then_some(display)
+                let relative = entry.path().strip_prefix(&search_root).ok()?;
+                let relative = relative.to_string_lossy().replace('\\', "/");
+                relative
+                    .starts_with(&stem)
+                    .then(|| quote_completion(&format!("{written_root}{relative}")))
             })
             .take(200)
             .collect::<Vec<_>>();
@@ -2069,6 +2283,51 @@ impl App {
         }
         self.refresh_context();
     }
+}
+
+/// Splits an attachment completion prefix into the directory to walk, the text
+/// to keep in front of the match, and the stem being completed.
+fn split_completion(prefix: &str, cwd: &std::path::Path) -> (PathBuf, String, String) {
+    let expanded = expand_tilde(prefix);
+    let (written_root, stem) = match expanded.rsplit_once('/') {
+        Some((directory, stem)) => (format!("{directory}/"), stem.to_owned()),
+        None => (String::new(), expanded.clone()),
+    };
+    let root = if written_root.is_empty() {
+        cwd.to_path_buf()
+    } else if std::path::Path::new(&written_root).is_absolute() {
+        PathBuf::from(&written_root)
+    } else {
+        cwd.join(&written_root)
+    };
+    (root, written_root, stem)
+}
+
+fn expand_tilde(prefix: &str) -> String {
+    if let Some(rest) = prefix.strip_prefix("~/")
+        && let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
+    {
+        return format!("{}/{rest}", PathBuf::from(home).display());
+    }
+    prefix.to_owned()
+}
+
+/// Quotes a completed path so it stays one attachment token.
+fn quote_completion(display: &str) -> String {
+    if display.chars().any(char::is_whitespace) {
+        format!("\"{display}\"")
+    } else {
+        display.to_owned()
+    }
+}
+
+/// Returns true when a command-palette query is really a filesystem path.
+///
+/// The leading `/` opened the palette, so the query is everything after it.
+/// A colon marks a command argument (`skill:review`), which stays in the
+/// palette; a slash or a leading `~` means the user is typing a path.
+fn path_like_query(query: &str) -> bool {
+    !query.contains(':') && (query.contains('/') || query.starts_with('~'))
 }
 
 fn message_chars(message: &Message) -> u64 {
@@ -2151,6 +2410,7 @@ async fn run_full(mut options: TuiOptions) -> Result<u8> {
             append: options.append.clone(),
             skills: options.customizations.skills().to_vec(),
             project_context: load_project_context(&options.cwd),
+            project_memory: load_project_memory(&options.cwd),
         };
         let system = build_system_message(&input, declarations);
         if let Some(session) = app.session.as_mut() {
@@ -2559,6 +2819,32 @@ async fn event_loop(
                                 clear_queued_messages(app, &agent);
                             }
                             Action::Submit(text) => {
+                                let text = app.expand_attachment_labels(&text);
+                                app.clear_attachments();
+                                let text = match codie_prompt::attachment_token_for_path_text(
+                                    &text, &app.cwd,
+                                ) {
+                                    Some(token) => token,
+                                    None
+                                        if codie_prompt::looks_like_path_text(&text)
+                                            && matches!(
+                                                parse_command(&text),
+                                                Some(Command::Unknown(_))
+                                            ) =>
+                                    {
+                                        if let Some(path) = crate::clipboard::read_image() {
+                                            codie_prompt::quote_attachment_path(&path)
+                                        } else {
+                                            app.transcript.push_error(format!(
+                                                "Cannot attach `{}`: the file no longer exists. \
+                                                 Copy the screenshot and press Ctrl+V, or drag it again.",
+                                                text.trim()
+                                            ));
+                                            continue;
+                                        }
+                                    }
+                                    None => text,
+                                };
                                 let extension_candidate = text.trim_start().starts_with("/ext:")
                                     || matches!(
                                         parse_command(&text),
@@ -2646,6 +2932,8 @@ async fn event_loop(
                                 }
                             }
                             Action::FollowUp(text) => {
+                                let text = app.expand_attachment_labels(&text);
+                                app.clear_attachments();
                                 if !text.trim().is_empty()
                                     && let Some(text) = submit_user_prompt(
                                         app,
@@ -2682,7 +2970,7 @@ async fn event_loop(
                         }
                         _ => {}
                     },
-                    Input::Paste(text) => app.editor.paste(&text),
+                    Input::Paste(text) => app.paste(&text),
                     Input::Signal(code) => {
                         signal_code = code;
                         break;
@@ -2910,6 +3198,35 @@ fn permission_preview(
                 kind: codie_protocol::ext::ExtRenderKind::Code,
                 title: Some("Command".to_owned()),
                 text: command.to_owned(),
+            })
+        }
+        "project_memory" => {
+            let file = arguments
+                .get("file")
+                .and_then(Value::as_str)
+                .unwrap_or("codie");
+            let target = match file {
+                "plan" => codie_prompt::PROJECT_PLAN_FILE,
+                _ => codie_prompt::PROJECT_MEMORY_FILE,
+            };
+            let section = arguments
+                .get("section")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let text = arguments
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let root = codie_prompt::project_root(cwd);
+            let target_path = root.join(target);
+            Some(codie_protocol::ext::ExtRenderHint {
+                kind: codie_protocol::ext::ExtRenderKind::Code,
+                title: Some(format!("Memory · {target} · {section}")),
+                text: format!(
+                    "{}\n\n{}",
+                    target_path.display(),
+                    codie_tools::project_memory::redact(text)
+                ),
             })
         }
         _ => None,
@@ -4118,6 +4435,82 @@ mod tests {
         // Escape closes without changing anything.
         app.handle_key(key(KeyCode::Esc));
         assert!(app.overlay.is_none());
+    }
+
+    #[test]
+    #[spec("TUI-032")]
+    fn spec_tui_032_paths_close_the_command_palette() {
+        let mut app = app();
+        app.handle_key(key(KeyCode::Char('/')));
+        assert!(matches!(
+            &app.overlay,
+            Some(Overlay::List(list)) if list.kind == ChoiceKind::Commands
+        ));
+        for character in "var/folders".chars() {
+            app.handle_key(key(KeyCode::Char(character)));
+        }
+        assert!(app.overlay.is_none(), "a path must leave the palette");
+        assert_eq!(app.editor.text(), "/var/folders");
+
+        // A bracketed paste of an absolute path also leaves the palette.
+        app.editor.clear();
+        app.handle_key(key(KeyCode::Char('/')));
+        app.paste("/Users/me/shot.png");
+        assert!(app.overlay.is_none());
+        assert_eq!(app.editor.text(), "/Users/me/shot.png");
+    }
+
+    #[test]
+    #[spec("TUI-032")]
+    fn spec_tui_032_dragged_paths_become_attachments_while_typing() {
+        let mut app = app();
+        let directory = tempfile::tempdir().unwrap();
+        let shot = directory
+            .path()
+            .join("Screenshot 2026-11-16 at 3.24.22 PM.png");
+        std::fs::write(&shot, b"\x89PNG\r\n\x1a\nfake").unwrap();
+        let escaped = shot.to_string_lossy().replace(' ', "\\ ");
+
+        for character in escaped.chars() {
+            app.handle_key(key(KeyCode::Char(character)));
+        }
+
+        assert_eq!(
+            app.editor.text(),
+            "[Image 1] ",
+            "drag path must become a compact attachment"
+        );
+        assert_eq!(app.attachments.len(), 1);
+    }
+
+    #[test]
+    #[spec("TUI-031")]
+    fn spec_tui_031_clipboard_paste_inserts_an_attachment_token() {
+        let mut app = app();
+        assert_eq!(
+            Bindings::default()
+                .action_for(&KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL)),
+            Some(ActionId::PasteImage)
+        );
+        app.paste("@\"/tmp/my shot.png\"");
+        assert_eq!(app.editor.text(), "@\"/tmp/my shot.png\"");
+        assert_eq!(
+            codie_prompt::quote_attachment_path(std::path::Path::new("/tmp/my shot.png")),
+            "@\"/tmp/my shot.png\""
+        );
+
+        // A pasted bare path becomes a compact attachment, and submitting it
+        // expands back to the `@path` token.
+        let directory = tempfile::tempdir().unwrap();
+        let shot = directory.path().join("Screenshot 2026-11-16.png");
+        std::fs::write(&shot, b"\x89PNG\r\n\x1a\nfake").unwrap();
+        app.editor.clear();
+        app.paste(&shot.to_string_lossy());
+        assert_eq!(app.editor.text(), "[Image 1] ");
+        let expanded = app.expand_attachment_labels("[Image 1] what is this?");
+        assert!(expanded.contains("Screenshot 2026-11-16.png"), "{expanded}");
+        assert!(expanded.starts_with("@\""), "{expanded}");
+        assert!(expanded.ends_with(" what is this?"));
     }
 
     #[test]

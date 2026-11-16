@@ -71,6 +71,18 @@ do not shift column borders.
 | `Ctrl+P` / `Ctrl+N` | Prompt history |
 | `PgUp` / `PgDn`, `Shift+Up/Down`, `Alt+Up/Down`, mouse wheel | Scroll the transcript |
 | `Tab` | Complete a slash command or an `@file` path |
+| `Ctrl+V` | Paste a clipboard image as an `@file` attachment, or paste clipboard text |
+
+Copying a screenshot with `Cmd+Ctrl+Shift+4` puts an image on the system clipboard, and `Ctrl+V` inserts an
+attachment token for it (`@"…"`) at the cursor. Terminals never forward image bytes, so codie reads the clipboard
+itself. On macOS, PNG and TIFF flavours are supported; Linux uses `wl-paste` or `xclip`, Windows uses PowerShell.
+Past attachments are saved under the temporary `codie-paste` directory and cleaned up after a day. Attachment paths
+may be quoted (`@"Screenshot 2026-11-16.png"`) or use a backslash before a space. Pasting or dragging a file path,
+even with spaces in it, attaches it as soon as the path resolves — this matters for screenshot thumbnails, whose
+temporary file disappears quickly. Attachments show as compact labels in the editor, `[Image 1]` for images and
+`[File 1]` for text; they expand back to `@path` tokens when you submit. If a path is submitted after its file is gone, codie attaches
+the clipboard image when there is one, or explains that the file no longer exists instead of reporting an unknown
+command.
 
 Keybindings can be overridden in `~/.config/codie/keybindings.toml`:
 
@@ -111,7 +123,10 @@ to scroll, and `Enter` to select. `Esc` closes it.
 
 `/help`, `/hotkeys`, `/new`, `/session`, `/tree`, `/fork [entry]`, `/clone`, `/name [text]`, `/export [path]`,
 `/export html [path]`, `/copy`, `/debug`, `/update`, `/theme [name]`, `/provider [id]`, `/model [id]`,
-`/thinking [level]`, `/compact [instructions]`, `/usage`, `/stop`, `/quit`.
+`/thinking [level]`, `/compact [instructions]`, `/usage`, `/stop`, `/quit`, `/reload`, `/init`.
+
+`/init` writes `PLAN.MD` and `CODIE.MD` for the current project when they are missing and prints what it kept.
+`/reload` refreshes skills, templates, and the `<project_memory>` block without restarting the session.
 
 Extensions can add commands. Invoke one as `/ext:<extension>:<command> [arguments]`; a bare
 `/<command>` also works when it is unambiguous and does not collide with a built-in. Extension commands

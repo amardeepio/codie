@@ -71,6 +71,34 @@ fn spec_prmpt_010_reports_missing_and_oversized_attachments() {
 }
 
 #[test]
+#[spec("PRMPT-012")]
+fn spec_prmpt_012_quoted_and_escaped_attachment_paths() {
+    let directory = tempfile::tempdir().expect("dir");
+    write(
+        directory.path().join("my shot.png"),
+        b"\x89PNG\r\n\x1a\nfake",
+    );
+    write(directory.path().join("notes here.txt"), b"hello\n");
+
+    let quoted = expand_attachments("@\"my shot.png\"", directory.path());
+    assert_eq!(quoted.attached.len(), 1);
+    assert!(quoted.errors.is_empty());
+
+    let escaped = expand_attachments("@notes\\ here.txt", directory.path());
+    assert_eq!(escaped.attached.len(), 1);
+    assert!(text_of(&escaped).contains("hello"));
+
+    assert_eq!(
+        codie_prompt::quote_attachment_path(Path::new("/tmp/my shot.png")),
+        "@\"/tmp/my shot.png\""
+    );
+    assert_eq!(
+        codie_prompt::quote_attachment_path(Path::new("/tmp/shot.png")),
+        "@/tmp/shot.png"
+    );
+}
+
+#[test]
 #[spec("PRMPT-011")]
 fn spec_prmpt_011_duplicate_references_expand_once() {
     let directory = tempfile::tempdir().expect("dir");

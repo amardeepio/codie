@@ -1635,7 +1635,8 @@ fn draw_overlay(frame: &mut Frame<'_>, area: Rect, overlay: &Overlay, app: &App)
                 "/stop              stop the active run",
                 "/skill:<name>      invoke a skill",
                 "/template:<name>   expand a prompt template",
-                "/reload            reload skills and templates",
+                "/reload            reload skills, templates, and project memory",
+                "/init              create PLAN.MD and CODIE.MD",
                 "/quit              exit",
             ]
             .join("\n"),

@@ -566,6 +566,7 @@ version = "0.9.1"
 dependencies = [
  "async-trait",
  "codie-core",
+ "codie-prompt",
  "codie-testkit",
  "globset",
  "ignore",

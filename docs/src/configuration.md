@@ -47,6 +47,8 @@ value with `codie config set provider openrouter`, print the file path with `cod
 | Skills | `.codie/skills/<name>/SKILL.md`, `~/.config/codie/skills/` | Reusable instruction blocks invoked with `/skill:<name>` |
 | Templates | `.codie/templates/<name>.md`, `~/.config/codie/templates/` | Prompts with `$ARGUMENTS` and `$1`..`$9`, invoked with `/template:<name>` |
 | System prompt | `SYSTEM.md`, `APPEND_SYSTEM.md` from the working directory upward | Replace or extend the preamble |
+| Project memory | `CODIE.MD` at the project root | Read into every prompt as `<project_memory>`; updated with `/init` and the `project_memory` tool |
+| Project plan | `PLAN.MD` at the project root | Created by `/init`; the plan the model keeps current |
 | Extensions | `.codie/extensions/<name>/codie.toml`, `~/.config/codie/extensions/` | Out-of-process tools, commands, and hooks |
 | Flags | `--system-prompt`, `--append-system-prompt`, `--extension`, `--no-extensions` | Per-run overrides |
 
@@ -60,13 +62,27 @@ Load an extension for one run with `--extension <path>`, or disable every extens
 protocol.
 
 `@path` in a prompt attaches a file: text becomes a `<file>` block and images become image content for models
-that accept it. Use `/reload` in the interactive app to pick up new skills and templates.
+that accept it. Use `/reload` in the interactive app to pick up new skills, templates, and edits to `CODIE.MD`.
+
+`CODIE.MD` is the project notebook. It is created by `/init` (or by the model when you ask for a new project),
+loaded into the system prompt as `<project_memory>` at session start, and kept current by the `project_memory`
+tool. It is capped at 32 KiB, deduplicated, and has credentials redacted before every write. Unlike `AGENTS.md`,
+it is loaded from the project root only and never inherited from a parent directory. Treat it as project data:
+the prompt tells the model to ignore any instructions inside it.
+
+```markdown
+## Commands
+
+- `cargo xtask ci` runs the full gate; plain `cargo test` skips spec checks.
+```
+
 
 Network access is not enabled by default. `web_fetch` requires `--allow web_fetch` (or `--allow-all`) in
 headless mode and an approval in the interactive app.
 
 Interactive keybindings live in `keybindings.toml` under the config directory; see
-[Interactive terminal](tui.md#keys).
+[Interactive terminal](tui.md#keys). `paste_image = ["ctrl+v"]` controls clipboard image paste and can be
+rebound or disabled like any other action.
 
 ## `.env` files
 
