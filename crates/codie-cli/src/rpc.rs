@@ -17,6 +17,7 @@ use codie_core::{
 use codie_ext::ExtensionSet;
 use codie_prompt::{
     Customizations, PromptInput, build_system_message, expand_attachments, load_project_context,
+    load_project_memory,
 };
 use codie_protocol::ext::ExtSessionInfo;
 use codie_protocol::{
@@ -695,6 +696,7 @@ impl State {
             append: self.options.append.clone(),
             skills: self.options.customizations.skills().to_vec(),
             project_context: load_project_context(&self.options.cwd),
+            project_memory: load_project_memory(&self.options.cwd),
         };
         build_system_message(&input, declarations)
     }

@@ -89,7 +89,7 @@ impl TableState {
 
 enum Border {
     Top,
-    Middle,
+    Row,
     Bottom,
 }
 
@@ -106,10 +106,8 @@ impl Renderer {
                 }
             }
             Event::Code(text) => {
-                let style = Style::default()
-                    .fg(self.palette.code)
-                    .bg(self.palette.surface_alt);
-                self.push_span(format!("`{text}`"), style);
+                let style = Style::default().fg(self.palette.code);
+                self.push_span(text.to_string(), style);
             }
             Event::SoftBreak | Event::HardBreak => {
                 if self.is_in_table_cell() {
@@ -430,14 +428,36 @@ fn table_lines(table: TableState, palette: &Palette, width: usize) -> Vec<Line<'
         return stacked_lines(&table, palette);
     }
     shrink_widths(&mut widths, available);
+    grow_widths(&mut widths, available);
 
     let mut lines = Vec::new();
     lines.push(border_line(&widths, palette, Border::Top));
     for (index, row) in table.rows.iter().enumerate() {
         let header = index < table.header_rows;
-        lines.push(row_line(row, &widths, &table.alignments, palette, header));
-        if header && index + 1 == table.header_rows && table.rows.len() > table.header_rows {
-            lines.push(border_line(&widths, palette, Border::Middle));
+        let wrapped = widths
+            .iter()
+            .enumerate()
+            .map(|(column, width)| {
+                row.get(column)
+                    .map_or_else(|| vec![Vec::new()], |cell| wrap_cell(cell, *width))
+            })
+            .collect::<Vec<_>>();
+        let height = wrapped.iter().map(Vec::len).max().unwrap_or(1).max(1);
+        for line in 0..height {
+            let cells = wrapped
+                .iter()
+                .map(|cell_lines| cell_lines.get(line).cloned().unwrap_or_default())
+                .collect::<Vec<_>>();
+            lines.push(row_line(
+                &cells,
+                &widths,
+                &table.alignments,
+                palette,
+                header,
+            ));
+        }
+        if index + 1 < table.rows.len() {
+            lines.push(border_line(&widths, palette, Border::Row));
         }
     }
     lines.push(border_line(&widths, palette, Border::Bottom));
@@ -461,35 +481,124 @@ fn shrink_widths(widths: &mut [usize], available: usize) {
     }
 }
 
-fn fit_cell(cell: &[Span<'static>], width: usize) -> Cell {
-    if spans_width(cell) <= width {
-        return cell.to_vec();
+/// Distributes leftover width proportionally so the table spans the transcript.
+fn grow_widths(widths: &mut [usize], available: usize) {
+    let content: usize = widths.iter().sum();
+    if content >= available {
+        return;
+    }
+    let extra = available - content;
+    let divisor = content.max(1);
+    let last = widths.len().saturating_sub(1);
+    let mut assigned = 0usize;
+    for (index, width) in widths.iter_mut().enumerate() {
+        let share = if index == last {
+            extra - assigned
+        } else {
+            extra * *width / divisor
+        };
+        *width += share;
+        assigned += share;
+    }
+}
+
+/// Wraps a cell onto multiple lines at `width`, preserving span styles.
+fn wrap_cell(cell: &[Span<'static>], width: usize) -> Vec<Cell> {
+    if width == 0 {
+        return vec![Vec::new()];
     }
 
-    let limit = width.saturating_sub(1);
-    let mut fitted = Vec::new();
-    let mut used = 0usize;
-    'spans: for span in cell {
-        let mut text = String::new();
-        for character in span.content.chars() {
-            let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
-            if used + character_width > limit {
-                break 'spans;
+    let mut lines: Vec<Cell> = Vec::new();
+    let mut line: Cell = Vec::new();
+    let mut line_width = 0usize;
+
+    for (word, word_width) in cell_words(cell) {
+        let separator = usize::from(!line.is_empty());
+        if line_width + separator + word_width <= width {
+            if separator == 1 {
+                let style = line.last().map_or_else(Style::default, |span| span.style);
+                push_styled(&mut line, " ", style);
+                line_width += 1;
             }
-            text.push(character);
-            used += character_width;
+            for span in word {
+                push_styled(&mut line, span.content.as_ref(), span.style);
+            }
+            line_width += word_width;
+            continue;
         }
-        if !text.is_empty() {
-            fitted.push(Span::styled(text, span.style));
+
+        if !line.is_empty() {
+            lines.push(std::mem::take(&mut line));
+            line_width = 0;
+        }
+        for span in word {
+            let mut segment = String::new();
+            for character in span.content.chars() {
+                let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
+                if line_width > 0 && line_width + character_width > width {
+                    if !segment.is_empty() {
+                        push_styled(&mut line, &segment, span.style);
+                        segment.clear();
+                    }
+                    lines.push(std::mem::take(&mut line));
+                    line_width = 0;
+                }
+                segment.push(character);
+                line_width += character_width;
+            }
+            if !segment.is_empty() {
+                push_styled(&mut line, &segment, span.style);
+            }
         }
     }
-    let style = cell.last().map_or_else(Style::default, |span| span.style);
-    fitted.push(Span::styled("…".to_owned(), style));
-    fitted
+
+    if !line.is_empty() || lines.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
+fn cell_words(cell: &[Span<'static>]) -> Vec<(Cell, usize)> {
+    let mut words = Vec::new();
+    let mut word: Cell = Vec::new();
+    let mut width = 0usize;
+    for span in cell {
+        for character in span.content.chars() {
+            if character.is_whitespace() {
+                if !word.is_empty() {
+                    words.push((std::mem::take(&mut word), width));
+                    width = 0;
+                }
+                continue;
+            }
+            let mut buffer = [0u8; 4];
+            push_styled(&mut word, character.encode_utf8(&mut buffer), span.style);
+            width += UnicodeWidthChar::width(character).unwrap_or(0);
+        }
+    }
+    if !word.is_empty() {
+        words.push((word, width));
+    }
+    words
+}
+
+fn push_styled(cell: &mut Cell, text: &str, style: Style) {
+    if text.is_empty() {
+        return;
+    }
+    if let Some(last) = cell.last_mut()
+        && last.style == style
+    {
+        let mut content = last.content.to_string();
+        content.push_str(text);
+        last.content = content.into();
+        return;
+    }
+    cell.push(Span::styled(text.to_owned(), style));
 }
 
 fn row_line(
-    row: &Row,
+    cells: &[Cell],
     widths: &[usize],
     alignments: &[Alignment],
     palette: &Palette,
@@ -500,21 +609,21 @@ fn row_line(
 
     for (index, width) in widths.iter().enumerate() {
         let empty: Cell = Vec::new();
-        let cell = row.get(index).unwrap_or(&empty);
-        let mut fitted = fit_cell(cell, *width);
-        if header {
-            fitted = fitted
-                .into_iter()
+        let cell = cells.get(index).unwrap_or(&empty);
+        let fitted = if header {
+            cell.iter()
                 .map(|span| {
                     Span::styled(
-                        span.content,
+                        span.content.to_string(),
                         Style::default()
                             .fg(palette.heading)
                             .add_modifier(Modifier::BOLD),
                     )
                 })
-                .collect();
-        }
+                .collect::<Cell>()
+        } else {
+            cell.clone()
+        };
 
         let padding = width.saturating_sub(spans_width(&fitted));
         let (left, right) = match alignments.get(index).copied().unwrap_or(Alignment::None) {
@@ -541,7 +650,7 @@ fn row_line(
 fn border_line(widths: &[usize], palette: &Palette, border: Border) -> Line<'static> {
     let (left, join, right) = match border {
         Border::Top => ('┌', '┬', '┐'),
-        Border::Middle => ('├', '┼', '┤'),
+        Border::Row => ('├', '┼', '┤'),
         Border::Bottom => ('└', '┴', '┘'),
     };
 
@@ -768,10 +877,63 @@ mod tests {
         let markdown = "| left | center | right |\n|:-----|:------:|------:|\n| a | b | c |\n";
         let text = plain(&render(markdown, &palette, 80));
 
+        let row = text
+            .iter()
+            .find(|line| line.starts_with('│') && line.contains('a') && line.contains('c'))
+            .expect("data row");
+        let chars = row.chars().collect::<Vec<_>>();
+        let borders = chars
+            .iter()
+            .enumerate()
+            .filter(|(_, character)| **character == '│')
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        assert_eq!(borders.len(), 4, "{row:?}");
+
+        let find = |target: char| {
+            chars
+                .iter()
+                .position(|character| *character == target)
+                .expect("cell content")
+        };
+        let a = find('a');
+        let b = find('b');
+        let c = find('c');
+        assert_eq!(a, borders[0] + 2, "left cell hugs the border: {row:?}");
+        assert_eq!(c, borders[3] - 2, "right cell hugs the border: {row:?}");
+        let left_gap = b - borders[1];
+        let right_gap = borders[2] - b;
         assert!(
-            text.iter().any(|line| line == "│ a    │   b    │     c │"),
+            left_gap.abs_diff(right_gap) <= 1,
+            "center cell is centered: {row:?}"
+        );
+    }
+
+    #[test]
+    #[spec("TUI-004")]
+    fn spec_tui_004_tables_rule_every_row() {
+        let palette = Palette::dark();
+        let markdown = "| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n";
+        let text = plain(&render(markdown, &palette, 40));
+
+        // One rule under the header and one between the two data rows.
+        assert_eq!(
+            text.iter().filter(|line| line.starts_with('├')).count(),
+            2,
             "{text:?}"
         );
+    }
+
+    #[test]
+    #[spec("TUI-004")]
+    fn spec_tui_004_tables_fill_the_available_width() {
+        let palette = Palette::dark();
+        let markdown = "| a | b |\n|---|---|\n| 1 | 2 |\n";
+        let text = plain(&render(markdown, &palette, 40));
+
+        for line in text.iter().filter(|line| is_table_line(line)) {
+            assert_eq!(UnicodeWidthStr::width(line.as_str()), 40, "{text:?}");
+        }
     }
 
     #[test]
@@ -807,12 +969,28 @@ mod tests {
 
     #[test]
     #[spec("TUI-004")]
-    fn spec_tui_004_long_cells_truncate_with_ellipsis() {
+    fn spec_tui_004_long_cells_wrap_instead_of_truncating() {
         let palette = Palette::dark();
         let markdown = "| key | value |\n|---|---|\n| a | a very long value that cannot fit |\n";
         let text = plain(&render(markdown, &palette, 24));
 
-        assert!(text.iter().any(|line| line.contains('…')), "{text:?}");
+        assert!(!text.iter().any(|line| line.contains('…')), "{text:?}");
+        assert!(text.iter().any(|line| line.contains("│ a ")), "{text:?}");
+        assert!(
+            text.iter().any(|line| line.contains("very long")),
+            "{text:?}"
+        );
+        assert!(
+            text.iter().any(|line| line.contains("cannot fit")),
+            "{text:?}"
+        );
+
+        let widths = text
+            .iter()
+            .filter(|line| is_table_line(line))
+            .map(|line| UnicodeWidthStr::width(line.as_str()))
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(widths.len(), 1, "wrapped rows stay aligned: {text:?}");
     }
 
     #[test]
@@ -848,8 +1026,29 @@ mod tests {
         assert_eq!(fg("Title"), Some(palette.heading));
         assert_eq!(fg("bold"), Some(palette.strong));
         assert_eq!(fg("em"), Some(palette.emphasis));
-        assert_eq!(fg("`code`"), Some(palette.code));
+        assert_eq!(fg("code"), Some(palette.code));
         assert_eq!(fg("link"), Some(palette.link));
+    }
+
+    #[test]
+    fn inline_code_drops_backticks_and_background() {
+        let palette = Palette::dark();
+        let lines = render("Use `cargo test` now\n", &palette, 80);
+        let span = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .find(|span| span.content.contains("cargo test"))
+            .expect("code span");
+
+        assert_eq!(span.content, "cargo test");
+        assert_eq!(span.style.fg, Some(palette.code));
+        assert_eq!(span.style.bg, None);
+        assert!(
+            !lines
+                .iter()
+                .any(|line| { line.spans.iter().any(|span| span.content.contains('`')) }),
+            "inline code must not keep its backticks"
+        );
     }
 
     #[test]

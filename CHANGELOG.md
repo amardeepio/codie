@@ -11,11 +11,26 @@ that major series, with migrations applied on read.
 
 ### Added
 
-- Nothing yet.
+- Project memory: `CODIE.MD` is loaded into every system prompt as `<project_memory>`, and `/init` scaffolds
+  `PLAN.MD` plus `CODIE.MD` with the detected toolchain commands.
+- `project_memory` tool for section-scoped, deduplicated memory writes with credential redaction and size caps.
+- The prompt now instructs the model to create `PLAN.MD` and `CODIE.MD` when asked to start a new project.
+- `/reload` refreshes project memory in place and records the change as a session context edit.
+- Ctrl+V pastes a clipboard image as an attachment: images are saved as PNG and shown in the editor as compact
+  `[Image 1]` / `[File 1]` labels that expand to `@path` on submit, with a text fallback. macOS supports PNG and TIFF clipboard flavours; Linux uses `wl-paste`/`xclip`, Windows PowerShell.
+- Attachment tokens may be quoted (`@"a b.png"`) or escape spaces (`@a\ b.png`), and `Tab` completion reaches
+  absolute and `~/` paths and quotes names with spaces.
+- A path typed or pasted into the command palette now returns to the editor instead of being swallowed by the
+  filter, and a dragged path becomes an attachment as soon as it resolves.
+- A path-like prompt whose file is gone no longer reports `Unknown command`; codie falls back to the clipboard
+  image and otherwise shows an attachment error.
 
 ### Changed
 
-- Nothing yet.
+- Assistant markdown renders inline code without backticks or a chip background, tables span the transcript
+  width with a rule between every row, and long cells wrap onto extra lines instead of truncating with `…`.
+- The `/theme` picker previews the highlighted theme as the selection or filter moves, starts on the active
+  theme, and restores the previous theme on `Esc`.
 
 ### Fixed
 

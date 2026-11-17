@@ -51,8 +51,10 @@ pub enum Command {
     Skill(String, String),
     /// Expand a prompt template with arguments.
     Template(String, String),
-    /// Reload skills, templates, and file-backed themes.
+    /// Reload skills, templates, and project memory.
     Reload,
+    /// Create `PLAN.MD` and `CODIE.MD` for the current project.
+    Init,
     /// An unknown command.
     Unknown(String),
 }
@@ -113,6 +115,7 @@ pub fn parse(input: &str) -> Option<Command> {
         "compact" => Command::Compact(argument),
         "usage" => Command::Usage,
         "reload" => Command::Reload,
+        "init" => Command::Init,
         other => Command::Unknown(other.to_owned()),
     })
 }
@@ -148,6 +151,7 @@ pub fn names() -> &'static [&'static str] {
         "/compact",
         "/usage",
         "/reload",
+        "/init",
     ]
 }
 
@@ -224,6 +228,7 @@ mod tests {
             Some(Command::Template("fix".to_owned(), "Cargo.toml".to_owned()))
         );
         assert_eq!(parse("/reload"), Some(Command::Reload));
+        assert_eq!(parse("/init"), Some(Command::Init));
     }
 
     #[test]

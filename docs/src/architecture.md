@@ -84,8 +84,8 @@ helper used by the test attribute. `xtask` is repository automation, not a shipp
 
 ## Built-in tools
 
-`codie-tools` exposes eight wire-stable tools. `read`, `grep`, `find`, and `ls` are read-only; `write`, `edit`,
-and the platform shell mutate or execute and are gated by the permission policy.
+`codie-tools` exposes nine wire-stable tools. `read`, `grep`, `find`, and `ls` are read-only; `write`, `edit`,
+`project_memory`, and the platform shell mutate or execute and are gated by the permission policy.
 
 | Tool | Purpose | Notes |
 |---|---|---|
@@ -98,15 +98,17 @@ and the platform shell mutate or execute and are gated by the permission policy.
 | `find` | Glob path search | Patterns without `/` match base names at any depth |
 | `ls` | One directory listing | `path`, `all`; sizes, symlink targets |
 | `web_fetch` | Fetch one HTTP(S) URL | Not read-only; blocks private addresses and caps bytes/time |
+| `project_memory` | Append to `CODIE.MD` or `PLAN.MD` | Section-scoped, deduplicated, redacts credentials, enforces caps |
 
-The registry always has exactly one shell in the `bash`/`powershell` slot, so the declaration count stays eight
+The registry always has exactly one shell in the `bash`/`powershell` slot, so the declaration count stays nine
 (`SPEC-TOOL-001`). Both shells share the same timeout, output, and truncation implementation.
 
 `grep` and `find` share an `ignore`-based walker, so `.gitignore`, git excludes, and hidden entries behave the
 same way in both. Tool output is bounded by `max_results` and the shared truncation caps (`SPEC-TOOL-002`).
 
-`codie-prompt` also owns customization: `SYSTEM.md`/`APPEND_SYSTEM.md`, skills, templates, project trust, and
-`@path` expansion. Trust is checked before any project resource is read (`SPEC-TRUST-001`).
+`codie-prompt` also owns customization: `SYSTEM.md`/`APPEND_SYSTEM.md`, skills, templates, project trust,
+`@path` expansion, and project memory. `CODIE.MD` is discovered at the project root (the nearest ancestor with
+`.git`), capped at 32 KiB, and emitted as `<project_memory>` after the instruction files and before `<cwd>`. Trust is checked before any project resource is read (`SPEC-TRUST-001`).
 
 ## State layering
 

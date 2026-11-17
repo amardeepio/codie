@@ -49,6 +49,8 @@ pub enum ActionId {
     KillLine,
     /// Yank the kill ring.
     Yank,
+    /// Paste an image from the clipboard as an attachment.
+    PasteImage,
     /// Recall the previous prompt.
     HistoryPrevious,
     /// Recall the next prompt.
@@ -69,7 +71,7 @@ pub enum ActionId {
 
 impl ActionId {
     /// Every action in display order.
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 23] = [
         Self::Submit,
         Self::Newline,
         Self::FollowUp,
@@ -84,6 +86,7 @@ impl ActionId {
         Self::Redo,
         Self::KillLine,
         Self::Yank,
+        Self::PasteImage,
         Self::HistoryPrevious,
         Self::HistoryNext,
         Self::ScrollUp,
@@ -112,6 +115,7 @@ impl ActionId {
             Self::Redo => "redo",
             Self::KillLine => "kill_line",
             Self::Yank => "yank",
+            Self::PasteImage => "paste_image",
             Self::HistoryPrevious => "history_previous",
             Self::HistoryNext => "history_next",
             Self::ScrollUp => "scroll_up",
@@ -141,6 +145,7 @@ impl ActionId {
             Self::Redo => "redo",
             Self::KillLine => "kill to end of line",
             Self::Yank => "yank",
+            Self::PasteImage => "paste a clipboard image",
             Self::HistoryPrevious => "previous prompt",
             Self::HistoryNext => "next prompt",
             Self::ScrollUp => "scroll up",
@@ -315,6 +320,7 @@ impl Default for Bindings {
         bind(ActionId::Redo, &["ctrl+shift+z"]);
         bind(ActionId::KillLine, &["ctrl+k"]);
         bind(ActionId::Yank, &["ctrl+y"]);
+        bind(ActionId::PasteImage, &["ctrl+v"]);
         bind(ActionId::HistoryPrevious, &["ctrl+p"]);
         bind(ActionId::HistoryNext, &["ctrl+n"]);
         bind(ActionId::ScrollUp, &["pgup", "shift+up", "alt+up"]);

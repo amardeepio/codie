@@ -15,6 +15,7 @@ workspace = true
 [dependencies]
 async-trait.workspace = true
 codie-core.workspace = true
+codie-prompt.workspace = true
 globset.workspace = true
 ignore.workspace = true
 jsonschema.workspace = true

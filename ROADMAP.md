@@ -167,6 +167,16 @@ Status: complete 2026-11-13; released as `0.7.0`.
 Exit criteria (met 2026-11-13): protocol spec and conformance tests pass; the Python and TypeScript examples
 run against the same protocol; a hung extension is killed without hanging the agent.
 
+## Next: project memory
+
+Status: in progress (unreleased).
+
+- `CODIE.MD` project notebook loaded into every prompt as `<project_memory>`, capped and labelled as data.
+- `/init` scaffolds `PLAN.MD` and `CODIE.MD`; the prompt rules make the model do the same for new projects.
+- `project_memory` tool: section-scoped appends, deduplication, credential redaction, atomic writes.
+- `/reload` refreshes the memory block in place through a session context edit.
+- Ctrl+V clipboard image paste, quoted and space-escaped attachment paths, and a path-safe command palette.
+
 ## Later phases
 
 - **Phase 7:** macOS terminal and packaging matrix, signing, notarization, fuzzing, SBOM, 1.0 release.

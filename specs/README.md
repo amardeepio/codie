@@ -24,7 +24,7 @@ The format is `<AREA>-<NNN>`, for example `AGENT-004` or `PROV-012`.
 Allocated areas are: `PROV` (providers), `MSG` (message model), `AGENT` (agent loop), `TOOL` (tools),
 `SESS` (sessions), `CTX` (compaction and context), `PRMPT` (prompt, skills, templates), `TUI` (terminal UI),
 `CLI` (arguments and configuration), `PROTO` (JSON and RPC), `EXT` (extensions), `SEC` (security and
-permissions), and `PERF` (performance).
+permissions), `MEM` (instruction layering and project memory), and `PERF` (performance).
 
 Rules:
 

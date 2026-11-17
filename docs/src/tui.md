@@ -31,22 +31,24 @@ answer starts streaming, the collapsed form reads `Thought  (click to view)`.
 
 Assistant messages are rendered as Markdown in the transcript: headings are styled by level without `#`
 markers, unordered lists use bullets, ordered lists keep their numbers and start value, and fenced code is
-highlighted by language.
+highlighted by language. Inline code keeps its color without backticks or a background chip.
 
-Tables render as width-aware grids with box-drawing borders, a header separator, and per-column alignment from
-the `:---:` row:
+Tables render as width-aware grids that span the transcript, with box-drawing borders, a rule between every
+row, and per-column alignment from the `:---:` row:
 
 ```text
 ┌──────────┬──────────────────────────────────┐
 │ Item     │ Spec                             │
 ├──────────┼──────────────────────────────────┤
 │ Model    │ Mac mini (Mac16,10), MCYT4HN/A   │
+├──────────┼──────────────────────────────────┤
+│ Chip     │ Apple M4                         │
 └──────────┴──────────────────────────────────┘
 ```
 
 When the terminal is too narrow for the grid, each row falls back to stacked `Key: value` lines. Cells that
-still overflow their column truncate with `…`. Wide characters are measured by display width, so CJK and emoji
-do not shift column borders.
+would overflow their column wrap onto additional lines instead of being truncated. Wide characters are
+measured by display width, so CJK and emoji do not shift column borders.
 
 ## Keys
 
@@ -71,6 +73,18 @@ do not shift column borders.
 | `Ctrl+P` / `Ctrl+N` | Prompt history |
 | `PgUp` / `PgDn`, `Shift+Up/Down`, `Alt+Up/Down`, mouse wheel | Scroll the transcript |
 | `Tab` | Complete a slash command or an `@file` path |
+| `Ctrl+V` | Paste a clipboard image as an `@file` attachment, or paste clipboard text |
+
+Copying a screenshot with `Cmd+Ctrl+Shift+4` puts an image on the system clipboard, and `Ctrl+V` inserts an
+attachment token for it (`@"…"`) at the cursor. Terminals never forward image bytes, so codie reads the clipboard
+itself. On macOS, PNG and TIFF flavours are supported; Linux uses `wl-paste` or `xclip`, Windows uses PowerShell.
+Past attachments are saved under the temporary `codie-paste` directory and cleaned up after a day. Attachment paths
+may be quoted (`@"Screenshot 2026-11-16.png"`) or use a backslash before a space. Pasting or dragging a file path,
+even with spaces in it, attaches it as soon as the path resolves — this matters for screenshot thumbnails, whose
+temporary file disappears quickly. Attachments show as compact labels in the editor, `[Image 1]` for images and
+`[File 1]` for text; they expand back to `@path` tokens when you submit. If a path is submitted after its file is gone, codie attaches
+the clipboard image when there is one, or explains that the file no longer exists instead of reporting an unknown
+command.
 
 Keybindings can be overridden in `~/.config/codie/keybindings.toml`:
 
@@ -111,7 +125,10 @@ to scroll, and `Enter` to select. `Esc` closes it.
 
 `/help`, `/hotkeys`, `/new`, `/session`, `/tree`, `/fork [entry]`, `/clone`, `/name [text]`, `/export [path]`,
 `/export html [path]`, `/copy`, `/debug`, `/update`, `/theme [name]`, `/provider [id]`, `/model [id]`,
-`/thinking [level]`, `/compact [instructions]`, `/usage`, `/stop`, `/quit`.
+`/thinking [level]`, `/compact [instructions]`, `/usage`, `/stop`, `/quit`, `/reload`, `/init`.
+
+`/init` writes `PLAN.MD` and `CODIE.MD` for the current project when they are missing and prints what it kept.
+`/reload` refreshes skills, templates, and the `<project_memory>` block without restarting the session.
 
 Extensions can add commands. Invoke one as `/ext:<extension>:<command> [arguments]`; a bare
 `/<command>` also works when it is unambiguous and does not collide with a built-in. Extension commands
@@ -130,7 +147,9 @@ diagnostics as a transcript line.
 `/theme`, `/provider`, `/model`, and `/thinking` without an argument open live pickers. The model picker lists
 the coding models for the active provider; OpenRouter entries carry their real context window and price from the
 catalog cache. `/provider` switches between DeepSeek, OpenRouter, and Gemini in place, selects the new
-provider's default model, and refreshes the model list. Model selection updates the context window and is persisted; reasoning
+provider's default model, and refreshes the model list. The theme picker starts on the active theme, previews
+each highlighted theme as you move or filter, and `Esc` restores the theme you started from; `Enter` keeps it.
+Model selection updates the context window and is persisted; reasoning
 selection is persisted with the session. The footer shows context usage and tokens per second, with a live
 estimate while streaming.
 

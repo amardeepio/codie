@@ -19,13 +19,13 @@ use codie_core::{
 use codie_ext::{ExtensionSet, LoadOptions};
 use codie_prompt::{
     Customizations, PromptInput, TrustStore, build_system_message, expand_attachments,
-    load_instructions, load_project_context,
+    load_instructions, load_project_context, load_project_memory,
 };
 use codie_protocol::ext::ExtSessionInfo;
 use codie_session::Session;
 use codie_tools::{
     BashTool, EditTool, FindTool, GrepTool, LsTool, Policy, PolicyToolbox, PowerShellTool,
-    ReadTool, Registry, ToolName, WebFetchTool, WriteTool,
+    ProjectMemoryTool, ReadTool, Registry, ToolName, WebFetchTool, WriteTool,
 };
 use codie_tui::app::{ProviderChoice, ProviderRuntime};
 use codie_tui::{TuiOptions, TuiRunMode};
@@ -904,6 +904,7 @@ fn ensure_system_message(
         append: append.map(str::to_owned),
         skills: customizations.skills().to_vec(),
         project_context: load_project_context(cwd),
+        project_memory: load_project_memory(cwd),
     };
     let system = build_system_message(&input, declarations);
     if let Some(session) = session.as_mut() {
@@ -1072,6 +1073,7 @@ fn tool_for(name: ToolName) -> Arc<dyn Tool> {
         ToolName::Find => Arc::new(FindTool),
         ToolName::Ls => Arc::new(LsTool),
         ToolName::WebFetch => Arc::new(WebFetchTool::new()),
+        ToolName::ProjectMemory => Arc::new(ProjectMemoryTool::new()),
     }
 }
 

@@ -9,8 +9,8 @@ use crate::bash::BashTool;
 #[cfg(windows)]
 use crate::powershell::PowerShellTool;
 use crate::{
-    edit::EditTool, find::FindTool, grep::GrepTool, ls::LsTool, read::ReadTool,
-    validate::ValidatedTool, web_fetch::WebFetchTool, write::WriteTool,
+    edit::EditTool, find::FindTool, grep::GrepTool, ls::LsTool, project_memory::ProjectMemoryTool,
+    read::ReadTool, validate::ValidatedTool, web_fetch::WebFetchTool, write::WriteTool,
 };
 
 /// A collection of tools addressed by their wire name.
@@ -45,6 +45,7 @@ impl Registry {
             Arc::new(FindTool),
             Arc::new(LsTool),
             Arc::new(WebFetchTool::new()),
+            Arc::new(ProjectMemoryTool::new()),
         ])
     }
 
@@ -261,7 +262,8 @@ mod tests {
                 "grep",
                 "find",
                 "ls",
-                "web_fetch"
+                "web_fetch",
+                "project_memory"
             ]
         );
         assert!(registry.get("read").is_some());
@@ -307,7 +309,7 @@ mod tests {
     fn policy_toolbox_delegates_lookup_and_declarations() {
         let toolbox = PolicyToolbox::new(Arc::new(Registry::builtin()), Policy::headless([SHELL]));
         assert!(toolbox.get("write").is_some());
-        assert_eq!(toolbox.declarations().len(), 8);
+        assert_eq!(toolbox.declarations().len(), 9);
         assert!(toolbox.denial("write").is_some());
         assert!(toolbox.denial(SHELL).is_none());
         assert!(toolbox.denial("read").is_none());

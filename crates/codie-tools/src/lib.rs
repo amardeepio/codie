@@ -1,7 +1,7 @@
 //! Built-in tools for codie.
 //!
 //! The built-in surface is `read`, `write`, `edit`, a platform shell,
-//! `grep`, `find`, `ls`, and `web_fetch`, plus path resolution, output
+//! `grep`, `find`, `ls`, `web_fetch`, and `project_memory`, plus path resolution, output
 //! truncation, a tool registry, and a policy wrapper. The shell is `bash` on
 //! macOS and Linux and `powershell` on Windows. `read`, `grep`, `find`, and
 //! `ls` are read-only and never denied by the default permission policy.
@@ -19,6 +19,7 @@ pub mod grep;
 pub mod ls;
 pub mod path;
 pub mod powershell;
+pub mod project_memory;
 pub mod read;
 pub mod registry;
 mod search;
@@ -35,6 +36,7 @@ pub use grep::GrepTool;
 pub use ls::LsTool;
 pub use path::resolve_path;
 pub use powershell::PowerShellTool;
+pub use project_memory::ProjectMemoryTool;
 pub use read::ReadTool;
 pub use registry::{Policy, PolicyToolbox, Registry, is_read_only};
 pub use shell::MAX_TIMEOUT_SECONDS;
@@ -71,6 +73,8 @@ pub enum ToolName {
     Ls,
     /// Fetch an http(s) URL.
     WebFetch,
+    /// Record durable project memory in `CODIE.MD` or `PLAN.MD`.
+    ProjectMemory,
 }
 
 /// The shell tool registered by default on this platform.
@@ -94,6 +98,7 @@ impl ToolName {
             Self::Find => "find",
             Self::Ls => "ls",
             Self::WebFetch => "web_fetch",
+            Self::ProjectMemory => "project_memory",
         }
     }
 
@@ -103,7 +108,7 @@ impl ToolName {
     /// Windows, so [`ToolName::Bash`] and [`ToolName::PowerShell`] always
     /// parse but only the platform's shell appears in the registry.
     #[must_use]
-    pub const fn all() -> [Self; 8] {
+    pub const fn all() -> [Self; 9] {
         [
             Self::Read,
             Self::Write,
@@ -113,6 +118,7 @@ impl ToolName {
             Self::Find,
             Self::Ls,
             Self::WebFetch,
+            Self::ProjectMemory,
         ]
     }
 }
@@ -173,7 +179,8 @@ mod tests {
         assert_eq!(ToolName::Find.as_str(), "find");
         assert_eq!(ToolName::Ls.as_str(), "ls");
         assert_eq!(ToolName::WebFetch.as_str(), "web_fetch");
-        assert_eq!(ToolName::all().len(), 8);
+        assert_eq!(ToolName::ProjectMemory.as_str(), "project_memory");
+        assert_eq!(ToolName::all().len(), 9);
     }
 
     #[test]

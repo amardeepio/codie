@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use codie_core::{Agent, AgentConfig, AgentEvent, Content, Message, RunStatus, Toolbox};
-use codie_prompt::{PromptInput, build_system_message, load_project_context};
+use codie_prompt::{PromptInput, build_system_message, load_project_context, load_project_memory};
 use codie_session::Session;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -40,6 +40,7 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
             append: options.append.clone(),
             skills: options.customizations.skills().to_vec(),
             project_context: load_project_context(&options.cwd),
+            project_memory: load_project_memory(&options.cwd),
         };
         let system = build_system_message(&input, declarations);
         if let Some(session) = session.as_mut() {
@@ -108,6 +109,20 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
         }
         if let Some(command) = parse_command(&line) {
             if matches!(command, Command::Unknown(_)) {
+                if codie_prompt::looks_like_path_text(&line) {
+                    run_prompt(
+                        &agent,
+                        &mut history,
+                        &mut session,
+                        &options,
+                        &cancel,
+                        &mut permission_rx,
+                        &mut last_assistant,
+                        line,
+                    )
+                    .await?;
+                    continue;
+                }
                 match handle_extension_command(&options, &session, &line).await {
                     Ok(Some(prompt)) => {
                         run_prompt(
@@ -139,7 +154,7 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
                 }
                 Command::Help | Command::Hotkeys => {
                     println!(
-                        "/help /quit /stop /usage /new /session /tree /fork /clone /name /export [path] /export html [path] /copy /debug /update /theme /provider [id] /model [id] /thinking [level] /compact /skill:<name> /template:<name> /reload"
+                        "/help /quit /stop /usage /new /session /tree /fork /clone /name /export [path] /export html [path] /copy /debug /update /theme /provider [id] /model [id] /thinking [level] /compact /skill:<name> /template:<name> /reload /init"
                     )
                 }
                 Command::Theme(argument) => match argument {
@@ -462,11 +477,22 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
                 Command::Reload => {
                     options.customizations.refresh();
                     println!(
-                        "Reloaded {} skill(s) and {} template(s).",
+                        "Reloaded {} skill(s) and {} template(s). Project memory applies to the next session.",
                         options.customizations.skills().len(),
                         options.customizations.templates().len()
                     );
                 }
+                Command::Init => match codie_prompt::scaffold(&options.cwd) {
+                    Ok(outcome) => {
+                        for path in &outcome.created {
+                            println!("Created: {}", path.display());
+                        }
+                        for path in &outcome.existing {
+                            println!("Kept existing: {}", path.display());
+                        }
+                    }
+                    Err(error) => println!("Cannot scaffold project files: {error}"),
+                },
                 Command::Unknown(name) => println!("Unknown command `/{name}`."),
             }
             continue;
@@ -559,6 +585,17 @@ async fn run_prompt(
     config.session_id = session.as_ref().map(|session| session.id().to_owned());
     config.cancel = cancel.clone();
 
+    let prompt = match codie_prompt::attachment_token_for_path_text(&prompt, &options.cwd) {
+        Some(token) => token,
+        None if codie_prompt::looks_like_path_text(&prompt) => {
+            println!(
+                "warning: cannot attach `{}`: the file no longer exists.",
+                prompt.trim()
+            );
+            return Ok(());
+        }
+        None => prompt,
+    };
     println!("\n› {prompt}");
     let expansion = codie_prompt::expand_attachments(&prompt, &options.cwd);
     for error in &expansion.errors {
