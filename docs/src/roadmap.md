@@ -20,8 +20,9 @@ not commitments; the exit criteria are the real gate.
 `0.9.0` is the Phase 7 release. It adds a Windows x64 preview build, the `powershell` tool, the
 one-command PowerShell installer, and the Windows preview documentation set. `0.9.1` adds Google Gemini, the
 codie-vs-opencode benchmark suite, text selection and clipboard copy, additional themes, and the refreshed
-permission overlay. Signing, notarization, SBOM, fuzzing, and the full terminal matrix remain for the `1.0.0`
-gate.
+permission overlay. `0.9.2` adds project memory (`CODIE.MD`, `/init`, and the `project_memory` tool), Ctrl+V
+clipboard image attachments, full-width Markdown tables, and live `/theme` previews. Signing, notarization,
+SBOM, fuzzing, and the full terminal matrix remain for the `1.0.0` gate.
 
 ## Phase 0 exit criteria (met 2026-11-11)
 
