@@ -11,6 +11,28 @@ that major series, with migrations applied on read.
 
 ### Added
 
+- Nothing yet.
+
+### Changed
+
+- Nothing yet.
+
+### Fixed
+
+- Nothing yet.
+
+### Removed
+
+- Nothing yet.
+
+### Security
+
+- Nothing yet.
+
+## [0.9.2] - 2026-11-17
+
+### Added
+
 - Project memory: `CODIE.MD` is loaded into every system prompt as `<project_memory>`, and `/init` scaffolds
   `PLAN.MD` plus `CODIE.MD` with the detected toolchain commands.
 - `project_memory` tool for section-scoped, deduplicated memory writes with credential redaction and size caps.

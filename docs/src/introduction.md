@@ -7,7 +7,7 @@ with a Rust core, a stricter safety posture, and a deliberately narrow provider 
 
 ## Status
 
-**Current release (`0.9.1`).** The workspace, the error model, the test harness, and the
+**Current release (`0.9.2`).** The workspace, the error model, the test harness, and the
 documentation and specification baseline are in place, and the agent runs end to end. Phase 1 added the headless
 core (`codie -p "..."`, `--mode json`), Phase 2 the interactive terminal app, Phase 3 full-fidelity sessions,
 Phase 4 customization and trust, Phase 5 RPC mode, generated schemas, HTML export, update checks, and the
@@ -18,7 +18,8 @@ collapsed reasoning, `Esc`/`/stop` cancellation, a context meter and `/usage`, p
 navigation, folded turns, and session picker previews, and `0.9.0` adds Windows x64 preview packaging, a
 PowerShell tool, the one-command Windows installer, and the Windows preview documentation set. `0.9.1` adds
 Google Gemini, the codie-vs-opencode benchmark suite, text selection and clipboard copy, additional themes, and
-the refreshed permission overlay. See the
+the refreshed permission overlay. `0.9.2` adds project memory (`CODIE.MD`, `/init`, and the `project_memory`
+tool), Ctrl+V clipboard image attachments, full-width Markdown tables, and live `/theme` previews. See the
 [roadmap](roadmap.md), [RPC mode](rpc.md), [configuration](configuration.md), and
 [`ROADMAP.md`](../../ROADMAP.md).
 

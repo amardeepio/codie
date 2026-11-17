@@ -20,7 +20,7 @@ implementation language, the safety posture, and the provider scope.
 
 The command is `codie`.
 
-**Status: stable release (`0.9.1`).** The one-shot agent, the interactive app,
+**Status: stable release (`0.9.2`).** The one-shot agent, the interactive app,
 full-fidelity sessions, customization, automation, and out-of-process extensions all work end to end:
 streaming transcript, editor dock, additional themes, the startup banner, slash commands, steering,
 permission prompts, plain mode, resume/fork/compact, search tools, skills, prompt templates, project trust,
@@ -29,9 +29,10 @@ transcript export, `codie update --check`, extension hooks, tools, commands, and
 coding-model catalog with live `/provider` switching. The `0.8.0` release added rich edit/write previews,
 collapsed reasoning, `Esc`/`/stop` cancellation, a context meter with `/usage`, permission review previews,
 tool navigation, folded turns, and session picker previews. `0.9.0` adds a Windows x64 preview build, the
-`powershell` tool, a one-command PowerShell installer, and the Windows preview documentation set. `0.9.1` adds
+`powershell` tool, a one-command PowerShell installer, and the Windows preview documentation set. `0.9.2` adds
 Google Gemini, the codie-vs-opencode benchmark suite, text selection and clipboard copy, additional themes, and
-a refreshed permission overlay. See
+a refreshed permission overlay. `0.9.2` adds project memory (`CODIE.MD`, `/init`, and the `project_memory`
+tool), Ctrl+V clipboard image attachments, full-width Markdown tables, and live `/theme` previews. See
 [`docs/src/configuration.md`](docs/src/configuration.md), [`docs/src/rpc.md`](docs/src/rpc.md), and
 [`ROADMAP.md`](ROADMAP.md).
 
@@ -166,14 +167,14 @@ Pin a version or pick another directory:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh \
-  | sh -s -- --version 0.9.1
+  | sh -s -- --version 0.9.2
 
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh \
   | sh -s -- --bin-dir "$HOME/bin"
 ```
 
 ```powershell
-$env:CODIE_VERSION = "0.9.1"
+$env:CODIE_VERSION = "0.9.2"
 irm https://raw.githubusercontent.com/amardeepio/codie/main/install.ps1 | iex
 ```
 
