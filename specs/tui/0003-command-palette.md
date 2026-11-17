@@ -2,7 +2,7 @@
 id: SPEC-TUI-003
 title: Command palette and live pickers
 status: implemented
-version: 1.0.0
+version: 1.1.0
 owners: ["@codie-maintainers"]
 requirements: ["TUI-014", "TUI-015", "TUI-016", "TUI-017"]
 ---
@@ -29,9 +29,11 @@ Verification: `crates/codie-tui/src/app.rs::spec_tui_014_slash_opens_a_filterabl
 selection to the next request, updates the context window, and persists a model-change entry. The provider picker
 lists the supported providers, marks the current one, switches the active chat client in place, selects the new
 provider's default model, refreshes the model list, updates the context window, and persists a model-change
-entry. The theme picker applies `system`, `dark`, or `light` immediately. A switch that cannot resolve a
-credential reports an error and leaves the current provider active.
+entry. The theme picker (`system`, `dark`, `light`, and the ported themes) previews the highlighted theme as the
+cursor or filter moves, applies it on `Enter`, and restores the previous theme on `Esc`. A switch that cannot
+resolve a credential reports an error and leaves the current provider active.
 Verification: `crates/codie-tui/src/app.rs::spec_tui_015_model_and_theme_pickers_apply_selection`,
+`crates/codie-tui/src/app.rs::spec_tui_015_theme_picker_previews_and_cancels`,
 `crates/codie-tui/src/app.rs::spec_tui_015_provider_picker_switches_client_and_model`
 
 **TUI-016 (MUST)** The reasoning picker lists `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`,
@@ -61,6 +63,8 @@ only opened from an empty editor, so a leading `/` inside a multi-line prompt is
 - An empty result set shows "No matches." and `Enter` does nothing.
 - `/model <id>`, `/provider <id>`, and `/theme <name>` typed manually still work and persist the same state.
 - Selecting the current model, provider, or theme is allowed and only refreshes metadata.
+- The theme picker opens with the cursor on the active theme; moving or filtering previews without a transcript
+  line, and `Esc` restores the previous theme.
 - The model list falls back to the current model when the catalog is unavailable.
 - Provider switches keep the agent and tool registry alive by swapping the client behind one stable handle.
 - Switching provider selects that provider's default model; the next request uses the new provider.

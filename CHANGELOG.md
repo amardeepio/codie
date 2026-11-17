@@ -27,7 +27,10 @@ that major series, with migrations applied on read.
 
 ### Changed
 
-- Nothing yet.
+- Assistant markdown renders inline code without backticks or a chip background, tables span the transcript
+  width with a rule between every row, and long cells wrap onto extra lines instead of truncating with `…`.
+- The `/theme` picker previews the highlighted theme as the selection or filter moves, starts on the active
+  theme, and restores the previous theme on `Esc`.
 
 ### Fixed
 

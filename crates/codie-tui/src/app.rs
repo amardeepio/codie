@@ -559,6 +559,8 @@ pub struct App {
     pub editor: Editor,
     /// Active theme.
     pub theme: Theme,
+    /// Theme to restore if the `/theme` live preview is cancelled.
+    theme_preview: Option<Theme>,
     /// Footer metadata.
     pub footer: Footer,
     /// Current status.
@@ -690,6 +692,7 @@ impl App {
             transcript: Transcript::new(),
             editor: Editor::new(),
             theme,
+            theme_preview: None,
             footer: Footer {
                 cwd: cwd.display().to_string(),
                 git_branch,
@@ -1077,11 +1080,26 @@ impl App {
             return Action::None;
         };
         match key.code {
-            KeyCode::Up => list.move_by(-1),
-            KeyCode::Down => list.move_by(1),
-            KeyCode::PageUp => list.move_by(-5),
-            KeyCode::PageDown => list.move_by(5),
+            KeyCode::Up => {
+                list.move_by(-1);
+                self.preview_selected_theme(&list);
+            }
+            KeyCode::Down => {
+                list.move_by(1);
+                self.preview_selected_theme(&list);
+            }
+            KeyCode::PageUp => {
+                list.move_by(-5);
+                self.preview_selected_theme(&list);
+            }
+            KeyCode::PageDown => {
+                list.move_by(5);
+                self.preview_selected_theme(&list);
+            }
             KeyCode::Enter => {
+                if list.kind == ChoiceKind::Themes {
+                    self.theme_preview = None;
+                }
                 if let Some(item) = list.current().cloned()
                     && let Some(action) = self.apply_choice(list.kind, &item)
                 {
@@ -1089,10 +1107,16 @@ impl App {
                 }
                 return Action::None;
             }
-            KeyCode::Esc => return Action::None,
+            KeyCode::Esc => {
+                if list.kind == ChoiceKind::Themes {
+                    self.cancel_theme_preview();
+                }
+                return Action::None;
+            }
             KeyCode::Backspace => {
                 list.query.pop();
                 list.refresh();
+                self.preview_selected_theme(&list);
             }
             KeyCode::Char(character)
                 if !key.modifiers.contains(KeyModifiers::CONTROL)
@@ -1100,6 +1124,7 @@ impl App {
             {
                 list.query.push(character);
                 list.refresh();
+                self.preview_selected_theme(&list);
             }
             _ => {}
         }
@@ -1392,6 +1417,7 @@ impl App {
     }
 
     fn open_themes(&mut self) {
+        self.theme_preview = None;
         let current = self.theme.name.clone();
         let items = crate::theme::BUILTIN_THEMES
             .into_iter()
@@ -1409,12 +1435,45 @@ impl App {
                 value: name.to_owned(),
             })
             .collect();
-        self.overlay = Some(Overlay::List(ChoiceList::new(
+        let mut list = ChoiceList::new(
             ChoiceKind::Themes,
             " themes ",
             items,
-            "type to filter · ↑/↓ scroll · Enter select",
-        )));
+            "filter · ↑/↓ preview · Enter apply · Esc cancel",
+        );
+        list.selected = list
+            .visible
+            .iter()
+            .position(|index| list.items[*index].value == current)
+            .unwrap_or(0);
+        self.overlay = Some(Overlay::List(list));
+    }
+
+    /// Previews the highlighted theme without committing it.
+    fn preview_selected_theme(&mut self, list: &ChoiceList) {
+        if list.kind != ChoiceKind::Themes {
+            return;
+        }
+        let Some(item) = list.current() else {
+            return;
+        };
+        if self.theme_preview.is_none() {
+            self.theme_preview = Some(self.theme.clone());
+        }
+        if let Ok(theme) = Theme::load(Some(&item.value))
+            && theme != self.theme
+        {
+            self.theme = theme;
+            self.theme_revision = self.theme_revision.wrapping_add(1);
+        }
+    }
+
+    /// Restores the theme that was active before the `/theme` preview started.
+    fn cancel_theme_preview(&mut self) {
+        if let Some(theme) = self.theme_preview.take() {
+            self.theme = theme;
+            self.theme_revision = self.theme_revision.wrapping_add(1);
+        }
     }
 
     fn open_thinking(&mut self) {
@@ -1688,6 +1747,7 @@ impl App {
             Command::Debug => self.show_debug(),
             Command::Update => self.update_check_requested = true,
             Command::Theme(argument) => {
+                self.theme_preview = None;
                 if let Some(name) = argument {
                     match Theme::load(Some(&name)) {
                         Ok(theme) => {
@@ -3085,6 +3145,7 @@ async fn event_loop(
                     }
                 }
                 if app.tick % 30 == 0
+                    && app.theme_preview.is_none()
                     && let Some(theme) = app
                         .theme_watcher
                         .as_mut()
@@ -4558,9 +4619,46 @@ mod tests {
             Some(("deepseek", "deepseek-v4-pro"))
         );
 
+        // The cursor starts on the active theme, so Enter keeps it.
         assert!(app.handle_command("/theme"));
         app.handle_key(key(KeyCode::Enter));
-        assert_eq!(app.theme.name, "system");
+        assert_eq!(app.theme.name, "dark");
+    }
+
+    #[test]
+    #[spec("TUI-015")]
+    fn spec_tui_015_theme_picker_previews_and_cancels() {
+        let (_dir, mut app) = app_with_named_session();
+        assert_eq!(app.theme.name, "dark");
+
+        // The cursor starts on the active theme, and moving previews live.
+        assert!(app.handle_command("/theme"));
+        app.handle_key(key(KeyCode::Down));
+        assert_eq!(app.theme.name, "light");
+        assert!(matches!(app.overlay, Some(Overlay::List(_))));
+        app.handle_key(key(KeyCode::Down));
+        assert_eq!(app.theme.name, "dracula");
+
+        // Esc restores the theme that was active when the picker opened.
+        app.handle_key(key(KeyCode::Esc));
+        assert_eq!(app.theme.name, "dark");
+        assert!(app.overlay.is_none());
+
+        // Filtering previews the highlighted match as well.
+        assert!(app.handle_command("/theme"));
+        for character in "nord".chars() {
+            app.handle_key(key(KeyCode::Char(character)));
+        }
+        assert_eq!(app.theme.name, "nord");
+        app.handle_key(key(KeyCode::Esc));
+        assert_eq!(app.theme.name, "dark");
+
+        // Enter keeps the previewed theme and closes the picker.
+        assert!(app.handle_command("/theme"));
+        app.handle_key(key(KeyCode::Down));
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.theme.name, "light");
+        assert!(app.overlay.is_none());
     }
 
     #[test]

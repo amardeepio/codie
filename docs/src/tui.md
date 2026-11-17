@@ -31,22 +31,24 @@ answer starts streaming, the collapsed form reads `Thought  (click to view)`.
 
 Assistant messages are rendered as Markdown in the transcript: headings are styled by level without `#`
 markers, unordered lists use bullets, ordered lists keep their numbers and start value, and fenced code is
-highlighted by language.
+highlighted by language. Inline code keeps its color without backticks or a background chip.
 
-Tables render as width-aware grids with box-drawing borders, a header separator, and per-column alignment from
-the `:---:` row:
+Tables render as width-aware grids that span the transcript, with box-drawing borders, a rule between every
+row, and per-column alignment from the `:---:` row:
 
 ```text
 ┌──────────┬──────────────────────────────────┐
 │ Item     │ Spec                             │
 ├──────────┼──────────────────────────────────┤
 │ Model    │ Mac mini (Mac16,10), MCYT4HN/A   │
+├──────────┼──────────────────────────────────┤
+│ Chip     │ Apple M4                         │
 └──────────┴──────────────────────────────────┘
 ```
 
 When the terminal is too narrow for the grid, each row falls back to stacked `Key: value` lines. Cells that
-still overflow their column truncate with `…`. Wide characters are measured by display width, so CJK and emoji
-do not shift column borders.
+would overflow their column wrap onto additional lines instead of being truncated. Wide characters are
+measured by display width, so CJK and emoji do not shift column borders.
 
 ## Keys
 
@@ -145,7 +147,9 @@ diagnostics as a transcript line.
 `/theme`, `/provider`, `/model`, and `/thinking` without an argument open live pickers. The model picker lists
 the coding models for the active provider; OpenRouter entries carry their real context window and price from the
 catalog cache. `/provider` switches between DeepSeek, OpenRouter, and Gemini in place, selects the new
-provider's default model, and refreshes the model list. Model selection updates the context window and is persisted; reasoning
+provider's default model, and refreshes the model list. The theme picker starts on the active theme, previews
+each highlighted theme as you move or filter, and `Esc` restores the theme you started from; `Enter` keeps it.
+Model selection updates the context window and is persisted; reasoning
 selection is persisted with the session. The footer shows context usage and tokens per second, with a live
 estimate while streaming.
 
