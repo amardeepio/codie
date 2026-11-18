@@ -20,8 +20,8 @@ implementation language, the safety posture, and the provider scope.
 
 The command is `codie`.
 
-**Status: stable release (`0.9.2`).** The one-shot agent, interactive TUI, sessions, customization, automation, and
-out-of-process extensions work end to end. The current `main` adds a 25-provider registry, TUI `/connect` with API-key
+**Status: stable release (`0.9.3`).** The one-shot agent, interactive TUI, sessions, customization, automation, and
+out-of-process extensions work end to end. This release adds a 25-provider registry, TUI `/connect` with API-key
 validation, live OpenAI-compatible model catalogs, keyless local providers (Ollama, LM Studio, vLLM), and persisted
 provider/model selection. See [`docs/src/configuration.md`](docs/src/configuration.md),
 [`docs/src/rpc.md`](docs/src/rpc.md), and [`ROADMAP.md`](ROADMAP.md).
@@ -157,14 +157,14 @@ Pin a version or pick another directory:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh \
-  | sh -s -- --version 0.9.2
+  | sh -s -- --version 0.9.3
 
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh \
   | sh -s -- --bin-dir "$HOME/bin"
 ```
 
 ```powershell
-$env:CODIE_VERSION = "0.9.2"
+$env:CODIE_VERSION = "0.9.3"
 irm https://raw.githubusercontent.com/amardeepio/codie/main/install.ps1 | iex
 ```
 

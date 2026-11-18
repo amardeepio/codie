@@ -21,8 +21,10 @@ not commitments; the exit criteria are the real gate.
 one-command PowerShell installer, and the Windows preview documentation set. `0.9.1` adds Google Gemini, the
 codie-vs-opencode benchmark suite, text selection and clipboard copy, additional themes, and the refreshed
 permission overlay. `0.9.2` adds project memory (`CODIE.MD`, `/init`, and the `project_memory` tool), Ctrl+V
-clipboard image attachments, full-width Markdown tables, and live `/theme` previews. Signing, notarization,
-SBOM, fuzzing, and the full terminal matrix remain for the `1.0.0` gate.
+clipboard image attachments, full-width Markdown tables, and live `/theme` previews. `0.9.3` adds the provider
+registry, TUI `/connect` and key validation, 22 additional providers, live OpenAI-compatible model catalogs,
+keyless local providers, and persisted provider/model selection. Signing, notarization, SBOM, fuzzing, and the
+full terminal matrix remain for the `1.0.0` gate.
 
 ## Phase 0 exit criteria (met 2026-11-11)
 

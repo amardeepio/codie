@@ -11,6 +11,28 @@ that major series, with migrations applied on read.
 
 ### Added
 
+- Nothing yet.
+
+### Changed
+
+- Nothing yet.
+
+### Fixed
+
+- Nothing yet.
+
+### Removed
+
+- Nothing yet.
+
+### Security
+
+- Nothing yet.
+
+## [0.9.3] - 2026-11-18
+
+### Added
+
 - Static provider registry: provider identity, environment variable, base URL, default model, compatibility,
   headers, bundled models, catalog kind, and key-probe kind now live in `crates/codie-ai/src/provider/`. The CLI,
   TUI, auth commands, model picker, and probes discover providers from this registry.
