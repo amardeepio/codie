@@ -26,6 +26,62 @@ pub const PROVIDER_OPENROUTER: &str = "openrouter";
 /// The provider identifier used by Google Gemini.
 pub const PROVIDER_GEMINI: &str = "gemini";
 
+/// Providers bundled with the binary, in picker order.
+pub const SUPPORTED_PROVIDERS: &[&str] = &[
+    PROVIDER_DEEPSEEK,
+    PROVIDER_OPENROUTER,
+    PROVIDER_GEMINI,
+    "openai",
+    "groq",
+    "cerebras",
+    "mistral",
+    "xai",
+    "togetherai",
+    "deepinfra",
+    "fireworks-ai",
+    "moonshotai",
+    "zai",
+    "nvidia",
+    "nebius",
+    "sambanova",
+    "novita-ai",
+    "alibaba",
+    "baseten",
+    "requesty",
+    "opencode",
+    "opencode-go",
+    "lmstudio",
+    "ollama",
+    "vllm",
+];
+
+/// Returns the canonical identifier for a supported provider.
+///
+/// Matching is case-insensitive so configuration may spell `DeepSeek`, while
+/// stored credentials and wire identifiers always use the lowercase form.
+#[must_use]
+pub fn canonical_provider(provider: &str) -> Option<&'static str> {
+    crate::provider::find(provider).map(|spec| spec.id)
+}
+
+/// Returns the human-readable name for a known provider.
+#[must_use]
+pub fn provider_name(provider: &str) -> &'static str {
+    crate::provider::find(provider).map_or("Unknown provider", |spec| spec.name)
+}
+
+/// Returns the environment variable that supplies a provider's API key.
+#[must_use]
+pub fn provider_env_var(provider: &str) -> &'static str {
+    crate::provider::find(provider).map_or("DEEPSEEK_API_KEY", |spec| spec.env_var)
+}
+
+/// Returns the default model for a known provider.
+#[must_use]
+pub fn provider_default_model(provider: &str) -> &'static str {
+    crate::provider::find(provider).map_or("deepseek-flash", |spec| spec.default_model)
+}
+
 /// The default `HTTP-Referer` attribution value for OpenRouter.
 pub const DEFAULT_HTTP_REFERER: &str = "https://github.com/amardeepio/codie";
 
@@ -126,12 +182,43 @@ impl Compat {
         }
     }
 
-    /// The compatibility set used by the future native OpenAI format.
+    /// The compatibility set used by the native OpenAI format.
     #[must_use]
     pub const fn openai() -> Self {
         Self {
             supports_store: true,
             supports_developer_role: true,
+            max_tokens_field: MaxTokensField::MaxCompletionTokens,
+            requires_reasoning_content_on_assistant_messages: false,
+            thinking_format: ThinkingFormat::OpenAi,
+            supports_usage_in_streaming: true,
+            supports_finish_reason: true,
+        }
+    }
+
+    /// The compatibility set used by most third-party OpenAI-compatible APIs.
+    ///
+    /// These endpoints use `max_tokens`, do not support `store` or the
+    /// `developer` role, and accept a top-level `reasoning_effort`.
+    #[must_use]
+    pub const fn openai_compatible() -> Self {
+        Self {
+            supports_store: false,
+            supports_developer_role: false,
+            max_tokens_field: MaxTokensField::MaxTokens,
+            requires_reasoning_content_on_assistant_messages: false,
+            thinking_format: ThinkingFormat::OpenAi,
+            supports_usage_in_streaming: true,
+            supports_finish_reason: true,
+        }
+    }
+
+    /// Like [`Compat::openai_compatible`], but sends `max_completion_tokens`.
+    #[must_use]
+    pub const fn openai_compatible_max_completion() -> Self {
+        Self {
+            supports_store: false,
+            supports_developer_role: false,
             max_tokens_field: MaxTokensField::MaxCompletionTokens,
             requires_reasoning_content_on_assistant_messages: false,
             thinking_format: ThinkingFormat::OpenAi,
@@ -234,274 +321,33 @@ impl Model {
     }
 }
 
-fn provider_id(value: &str) -> ProviderId {
+pub(crate) fn provider_id(value: &str) -> ProviderId {
     ProviderId::Owned(value.to_owned())
 }
 
-fn api_id() -> ApiId {
+pub(crate) fn api_id() -> ApiId {
     ApiId::Borrowed(OPENAI_COMPLETIONS)
-}
-
-fn deepseek_thinking_levels() -> BTreeMap<ThinkingLevel, Option<String>> {
-    BTreeMap::from([
-        (ThinkingLevel::Off, None),
-        (ThinkingLevel::Minimal, Some("minimal".to_owned())),
-        (ThinkingLevel::Low, Some("low".to_owned())),
-        (ThinkingLevel::Medium, None),
-        (ThinkingLevel::High, Some("high".to_owned())),
-    ])
-}
-
-fn openrouter_thinking_levels() -> BTreeMap<ThinkingLevel, Option<String>> {
-    BTreeMap::from([
-        (ThinkingLevel::Off, Some("none".to_owned())),
-        (ThinkingLevel::Minimal, Some("minimal".to_owned())),
-        (ThinkingLevel::Low, Some("low".to_owned())),
-        (ThinkingLevel::Medium, Some("medium".to_owned())),
-        (ThinkingLevel::High, Some("high".to_owned())),
-    ])
-}
-
-/// Gemini 4 reasoning levels. `minimal` is mapped to `low` by the provider.
-fn gemini4_thinking_levels() -> BTreeMap<ThinkingLevel, Option<String>> {
-    BTreeMap::from([
-        (ThinkingLevel::Minimal, Some("low".to_owned())),
-        (ThinkingLevel::Low, Some("low".to_owned())),
-        (ThinkingLevel::Medium, Some("medium".to_owned())),
-        (ThinkingLevel::High, Some("high".to_owned())),
-    ])
-}
-
-/// Gemini 4 Hydrogen additionally accepts `xhigh`.
-fn gemini4_hydrogen_thinking_levels() -> BTreeMap<ThinkingLevel, Option<String>> {
-    let mut levels = gemini4_thinking_levels();
-    levels.insert(ThinkingLevel::XHigh, Some("xhigh".to_owned()));
-    levels
-}
-
-/// Gemini 3 reasoning levels. `minimal` is rejected by these models.
-fn gemini3_thinking_levels() -> BTreeMap<ThinkingLevel, Option<String>> {
-    BTreeMap::from([
-        (ThinkingLevel::Low, Some("low".to_owned())),
-        (ThinkingLevel::Medium, Some("medium".to_owned())),
-        (ThinkingLevel::High, Some("high".to_owned())),
-    ])
 }
 
 /// Returns the base URL for a known provider.
 #[must_use]
 pub fn provider_base_url(provider: &str) -> &'static str {
-    if provider.eq_ignore_ascii_case(PROVIDER_DEEPSEEK) {
-        "https://api.deepseek.com"
-    } else if provider.eq_ignore_ascii_case(PROVIDER_OPENROUTER) {
-        "https://openrouter.ai/api/v1"
-    } else if provider.eq_ignore_ascii_case(PROVIDER_GEMINI) {
-        "https://generativelanguage.googleapis.com/v1beta/openai"
-    } else {
-        ""
-    }
+    crate::provider::find(provider).map_or("", |spec| spec.base_url)
 }
 
 /// Returns the compatibility defaults for a known provider.
 #[must_use]
 pub fn provider_compat(provider: &str) -> Compat {
-    if provider.eq_ignore_ascii_case(PROVIDER_DEEPSEEK) {
-        Compat::deepseek()
-    } else if provider.eq_ignore_ascii_case(PROVIDER_OPENROUTER) {
-        Compat::openrouter()
-    } else if provider.eq_ignore_ascii_case(PROVIDER_GEMINI) {
-        Compat::gemini()
-    } else {
-        Compat::openai()
-    }
+    crate::provider::find(provider).map_or_else(Compat::openai, |spec| (spec.compat)())
 }
 
-/// Returns the built-in model catalog for Phase 1.
+/// Returns the bundled model catalog across every registered provider.
 ///
-/// DeepSeek pricing is USD per million tokens (`deepseek-flash`:
-/// $0.30 input, $1.20 output, $0.006 cache read). `openrouter/auto` is a safe
-/// default with unknown (zero) pricing so cost accounting never invents a
-/// price for a model OpenRouter has not resolved yet.
+/// Provider modules own their model entries; this function is a compatibility
+/// aggregate for callers that still need one flat list.
 #[must_use]
 pub fn builtin_models() -> Vec<Model> {
-    vec![
-        Model {
-            id: "deepseek-flash".to_owned(),
-            name: "DeepSeek Flash".to_owned(),
-            provider: provider_id(PROVIDER_DEEPSEEK),
-            api: api_id(),
-            base_url: provider_base_url(PROVIDER_DEEPSEEK).to_owned(),
-            context_window: 1_000_000,
-            max_output_tokens: 384_000,
-            reasoning: true,
-            reasoning_mandatory: false,
-            thinking_levels: deepseek_thinking_levels(),
-            cost: ModelCost {
-                input: 0.30,
-                output: 1.20,
-                cache_read: 0.006,
-                cache_write: 0.0,
-            },
-            compat: Compat::deepseek(),
-            headers: HeaderMap::new(),
-        },
-        Model {
-            id: "deepseek-v4-pro".to_owned(),
-            name: "DeepSeek V4 Pro".to_owned(),
-            provider: provider_id(PROVIDER_DEEPSEEK),
-            api: api_id(),
-            base_url: provider_base_url(PROVIDER_DEEPSEEK).to_owned(),
-            context_window: 1_000_000,
-            max_output_tokens: 384_000,
-            reasoning: true,
-            reasoning_mandatory: false,
-            thinking_levels: deepseek_thinking_levels(),
-            cost: ModelCost {
-                input: 1.32,
-                output: 3.96,
-                cache_read: 0.0,
-                cache_write: 0.0,
-            },
-            compat: Compat::deepseek(),
-            headers: HeaderMap::new(),
-        },
-        Model {
-            id: "openrouter/auto".to_owned(),
-            name: "OpenRouter Auto".to_owned(),
-            provider: provider_id(PROVIDER_OPENROUTER),
-            api: api_id(),
-            base_url: provider_base_url(PROVIDER_OPENROUTER).to_owned(),
-            context_window: 128_000,
-            max_output_tokens: 8192,
-            reasoning: false,
-            reasoning_mandatory: false,
-            thinking_levels: openrouter_thinking_levels(),
-            cost: ModelCost::default(),
-            compat: Compat::openrouter(),
-            headers: HeaderMap::new(),
-        },
-        Model {
-            id: "deepseek/deepseek-v4.1-flash-1017".to_owned(),
-            name: "DeepSeek V4.1 Flash (OpenRouter)".to_owned(),
-            provider: provider_id(PROVIDER_OPENROUTER),
-            api: api_id(),
-            base_url: provider_base_url(PROVIDER_OPENROUTER).to_owned(),
-            context_window: 1_000_000,
-            max_output_tokens: 384_000,
-            reasoning: true,
-            reasoning_mandatory: false,
-            thinking_levels: openrouter_thinking_levels(),
-            // OpenRouter reports the billed cost per request, so the catalog
-            // price is only an estimate for offline planning.
-            cost: ModelCost::default(),
-            compat: Compat::openrouter(),
-            headers: HeaderMap::new(),
-        },
-        // Gemini pricing is USD per million tokens as published on
-        // 2026-11-15. Gemini 4 prices double on 2026-12-01; update the
-        // catalog when the new prices take effect. Cache writes are billed as
-        // storage per hour, so the per-token write price stays zero here.
-        Model {
-            id: "gemini-4-hydrogen".to_owned(),
-            name: "Gemini 4 Hydrogen".to_owned(),
-            provider: provider_id(PROVIDER_GEMINI),
-            api: api_id(),
-            base_url: provider_base_url(PROVIDER_GEMINI).to_owned(),
-            context_window: 1_048_576,
-            max_output_tokens: 65_536,
-            reasoning: true,
-            reasoning_mandatory: true,
-            thinking_levels: gemini4_hydrogen_thinking_levels(),
-            cost: ModelCost {
-                input: 1.50,
-                output: 7.50,
-                cache_read: 0.075,
-                cache_write: 0.0,
-            },
-            compat: Compat::gemini(),
-            headers: HeaderMap::new(),
-        },
-        Model {
-            id: "gemini-4-argon".to_owned(),
-            name: "Gemini 4 Argon".to_owned(),
-            provider: provider_id(PROVIDER_GEMINI),
-            api: api_id(),
-            base_url: provider_base_url(PROVIDER_GEMINI).to_owned(),
-            context_window: 1_048_576,
-            max_output_tokens: 65_536,
-            reasoning: true,
-            reasoning_mandatory: true,
-            thinking_levels: gemini4_thinking_levels(),
-            cost: ModelCost {
-                input: 2.00,
-                output: 10.00,
-                cache_read: 0.10,
-                cache_write: 0.0,
-            },
-            compat: Compat::gemini(),
-            headers: HeaderMap::new(),
-        },
-        Model {
-            id: "gemini-4-carbon".to_owned(),
-            name: "Gemini 4 Carbon".to_owned(),
-            provider: provider_id(PROVIDER_GEMINI),
-            api: api_id(),
-            base_url: provider_base_url(PROVIDER_GEMINI).to_owned(),
-            context_window: 1_048_576,
-            max_output_tokens: 65_536,
-            reasoning: true,
-            reasoning_mandatory: true,
-            thinking_levels: gemini4_thinking_levels(),
-            cost: ModelCost {
-                input: 2.00,
-                output: 10.00,
-                cache_read: 0.10,
-                cache_write: 0.0,
-            },
-            compat: Compat::gemini(),
-            headers: HeaderMap::new(),
-        },
-        Model {
-            id: "gemini-3.8-flash".to_owned(),
-            name: "Gemini 3.8 Flash".to_owned(),
-            provider: provider_id(PROVIDER_GEMINI),
-            api: api_id(),
-            base_url: provider_base_url(PROVIDER_GEMINI).to_owned(),
-            context_window: 1_048_576,
-            max_output_tokens: 65_536,
-            reasoning: true,
-            reasoning_mandatory: true,
-            thinking_levels: gemini3_thinking_levels(),
-            cost: ModelCost {
-                input: 0.75,
-                output: 3.75,
-                cache_read: 0.075,
-                cache_write: 0.0,
-            },
-            compat: Compat::gemini(),
-            headers: HeaderMap::new(),
-        },
-        Model {
-            id: "gemini-3.5-flash-lite".to_owned(),
-            name: "Gemini 3.5 Flash-Lite".to_owned(),
-            provider: provider_id(PROVIDER_GEMINI),
-            api: api_id(),
-            base_url: provider_base_url(PROVIDER_GEMINI).to_owned(),
-            context_window: 1_048_576,
-            max_output_tokens: 65_536,
-            reasoning: true,
-            reasoning_mandatory: true,
-            thinking_levels: gemini3_thinking_levels(),
-            cost: ModelCost {
-                input: 0.30,
-                output: 2.50,
-                cache_read: 0.03,
-                cache_write: 0.0,
-            },
-            compat: Compat::gemini(),
-            headers: HeaderMap::new(),
-        },
-    ]
+    crate::provider::all_models()
 }
 
 /// Finds a built-in model by provider and identifier.

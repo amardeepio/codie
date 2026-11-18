@@ -9,6 +9,8 @@ use codie_session::Session;
 use codie_testkit::spec;
 use predicates::prelude::*;
 use tempfile::TempDir;
+use wiremock::matchers::{header, method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Returns a command handle isolated from the developer's real codie state.
 fn codie() -> (Command, TempDir) {
@@ -25,8 +27,10 @@ fn codie_with_home(home: &TempDir) -> Command {
         .env("CODIE_CONFIG_DIR", home.path().join("config"))
         .env("CODIE_DATA_DIR", home.path().join("data"))
         .env("CODIE_SESSION_DIR", home.path().join("sessions"))
-        .env_remove("DEEPSEEK_API_KEY")
-        .env_remove("OPENROUTER_API_KEY");
+        .env_remove("CODIE_BASE_URL");
+    for provider in codie_ai::provider::all() {
+        command.env_remove(provider.env_var);
+    }
     command
 }
 
@@ -106,12 +110,125 @@ fn auth_status_reports_configuration_without_secrets() {
     let value: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("auth status is valid JSON");
     let providers = value["providers"].as_array().expect("providers array");
-    assert_eq!(providers.len(), 3);
+    assert_eq!(providers.len(), codie_ai::provider::all().len());
     assert!(
         providers
             .iter()
             .all(|provider| provider["configured"] == false)
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn auth_login_verifies_before_storing() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .and(header("authorization", "Bearer sk-good"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": [{"id": "deepseek-flash"}]
+        })))
+        .mount(&server)
+        .await;
+
+    let (mut command, home) = codie();
+    command
+        .env("CODIE_BASE_URL", server.uri())
+        .args(["auth", "login", "deepseek", "--api-key", "sk-good"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Verified and stored"));
+
+    let auth = std::fs::read_to_string(home.path().join("data/auth.json")).expect("auth.json");
+    assert!(auth.contains("sk-good"), "{auth}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[spec("PROV-035")]
+async fn auth_login_does_not_store_a_rejected_key() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+            "error": {"message": "Invalid API key"}
+        })))
+        .mount(&server)
+        .await;
+
+    let (mut command, home) = codie();
+    command
+        .env("CODIE_BASE_URL", server.uri())
+        .args(["auth", "login", "deepseek", "--api-key", "sk-bad"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("did not store"));
+
+    assert!(
+        !home.path().join("data/auth.json").exists(),
+        "a rejected key must not create auth.json"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn auth_verify_reports_a_rejected_environment_key() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+            "error": {"message": "Invalid API key"}
+        })))
+        .mount(&server)
+        .await;
+
+    let (mut command, _home) = codie();
+    command
+        .env("CODIE_BASE_URL", server.uri())
+        .env("DEEPSEEK_API_KEY", "sk-bad")
+        .args(["auth", "verify", "deepseek"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("key rejected"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn auth_login_normalizes_the_provider_id() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .and(header("authorization", "Bearer sk-good"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+
+    let (mut command, home) = codie();
+    command
+        .env("CODIE_BASE_URL", server.uri())
+        .args(["auth", "login", "DeepSeek", "--api-key", "sk-good"])
+        .assert()
+        .success();
+
+    let auth = std::fs::read_to_string(home.path().join("data/auth.json")).expect("auth.json");
+    assert!(auth.contains("\"deepseek\""), "{auth}");
+}
+
+#[test]
+fn auth_login_no_verify_stores_offline() {
+    let (mut command, home) = codie();
+    command
+        .env("CODIE_BASE_URL", "http://127.0.0.1:9")
+        .args([
+            "auth",
+            "login",
+            "deepseek",
+            "--api-key",
+            "sk-offline",
+            "--no-verify",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("not verified"));
+
+    let auth = std::fs::read_to_string(home.path().join("data/auth.json")).expect("auth.json");
+    assert!(auth.contains("sk-offline"), "{auth}");
 }
 
 #[test]

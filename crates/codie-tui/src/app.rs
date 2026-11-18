@@ -7,6 +7,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use codie_ai::{
+    AuthStore, CredentialSource, ProbeOutcome, ProviderAuthStatus, auth_status, probe_key,
+    provider_name,
+};
 use codie_core::{
     Agent, AgentConfig, AgentEvent, ChatClient, Content, Message, ModelRef, RunStatus,
     ThinkingLevel, ToolResultMessage, Toolbox, Usage,
@@ -88,6 +92,9 @@ pub type ModelsLoader = Arc<dyn Fn(&str) -> Vec<ModelChoice> + Send + Sync>;
 /// Switches the active provider client and returns its runtime state.
 pub type ProviderSwitcher = Arc<dyn Fn(&str) -> Result<ProviderRuntime, String> + Send + Sync>;
 
+/// Persists the last provider and model selected in the TUI.
+pub type SelectionPersister = Arc<dyn Fn(&str, &str) + Send + Sync>;
+
 /// One selectable row in a list overlay.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChoiceItem {
@@ -108,6 +115,8 @@ pub enum ChoiceKind {
     Models,
     /// Supported providers.
     Providers,
+    /// Providers offered by the connect flow.
+    ConnectProviders,
     /// Built-in themes.
     Themes,
     /// Reasoning levels.
@@ -205,6 +214,77 @@ impl ChoiceList {
     }
 }
 
+/// Progress of one provider key check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConnectPhase {
+    /// The user is typing or pasting a key.
+    Editing,
+    /// A probe is in flight.
+    Checking,
+    /// The last probe failed; the message is safe to display.
+    Error(String),
+}
+
+/// State for the `/connect` key-entry overlay.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ConnectState {
+    /// Provider identifier.
+    pub provider: String,
+    /// Human-readable provider name.
+    pub provider_name: String,
+    /// Current key buffer. Never rendered unless `reveal` is true.
+    pub input: String,
+    /// True when the key is shown instead of masked.
+    pub reveal: bool,
+    /// Current phase.
+    pub phase: ConnectPhase,
+    /// Attempt counter used to ignore stale probe results.
+    pub generation: u64,
+}
+
+impl ConnectState {
+    /// Creates an editing state for `provider`.
+    #[must_use]
+    pub fn new(provider: impl Into<String>) -> Self {
+        let provider = provider.into();
+        let name = provider_name(&provider).to_owned();
+        Self {
+            provider,
+            provider_name: name,
+            input: String::new(),
+            reveal: false,
+            phase: ConnectPhase::Editing,
+            generation: 0,
+        }
+    }
+
+    /// Returns the masked or revealed key display.
+    #[must_use]
+    pub fn display(&self) -> String {
+        if self.input.is_empty() {
+            return "—".to_owned();
+        }
+        if self.reveal {
+            return self.input.clone();
+        }
+        "•".repeat(self.input.chars().count())
+    }
+}
+
+impl std::fmt::Debug for ConnectState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ConnectState")
+            .field("provider", &self.provider)
+            .field("provider_name", &self.provider_name)
+            .field("input", &"<redacted>")
+            .field("reveal", &self.reveal)
+            .field("phase", &self.phase)
+            .field("generation", &self.generation)
+            .finish()
+    }
+}
+
 /// Everything the interactive app needs from the CLI.
 pub struct TuiOptions {
     /// Provider client.
@@ -258,6 +338,16 @@ pub struct TuiOptions {
     pub customizations: Customizations,
     /// Loaded out-of-process extensions.
     pub extensions: Arc<codie_ext::ExtensionSet>,
+    /// Path to `auth.json`, used by the connect overlay.
+    pub auth_path: PathBuf,
+    /// Optional provider base URL override used for key checks.
+    pub base_url: Option<String>,
+    /// Provider whose key came from `--api-key` for this run.
+    pub explicit_key_provider: Option<String>,
+    /// Open the connect overlay on startup because no provider is configured.
+    pub startup_connect: bool,
+    /// Persists the last provider/model selection.
+    pub persist_selection: Option<SelectionPersister>,
 }
 
 /// Live status shown in the editor border.
@@ -355,6 +445,8 @@ pub enum Overlay {
     Picker(Picker),
     /// A command, model, theme, or reasoning list.
     List(ChoiceList),
+    /// API-key entry and verification for one provider.
+    Connect(ConnectState),
     /// Token, cost, and context usage details.
     Usage,
     /// A transient banner with an optional OK affordance.
@@ -481,6 +573,8 @@ pub struct Footer {
     pub cwd: String,
     /// Git branch, when inside a repository.
     pub git_branch: Option<String>,
+    /// Provider identifier.
+    pub provider: String,
     /// Model identifier.
     pub model: String,
     /// Thinking level.
@@ -520,6 +614,10 @@ pub enum Action {
     Cancel,
     /// Toggle automatic approval for mutating tools.
     ToggleAutoApprove,
+    /// Check the API key currently held by the connect overlay.
+    VerifyKey,
+    /// Store the connect overlay's API key without checking it.
+    SaveKey,
     /// Quit the app.
     Quit,
 }
@@ -597,6 +695,14 @@ pub struct App {
     pub providers: Vec<ProviderChoice>,
     /// Optional provider switcher.
     pub switch_provider: Option<ProviderSwitcher>,
+    /// Credential store used by the connect overlay.
+    pub auth_path: Option<PathBuf>,
+    /// Provider whose key came from `--api-key` for this run.
+    pub explicit_key_provider: Option<String>,
+    /// Monotonic counter for connect attempts, so stale results never match.
+    connect_generation: u64,
+    /// Persists the last provider/model selection.
+    persist_selection: Option<SelectionPersister>,
     /// When the current run started, for live tokens/sec.
     pub run_started: Option<std::time::Instant>,
     /// Conversation history.
@@ -696,6 +802,7 @@ impl App {
             footer: Footer {
                 cwd: cwd.display().to_string(),
                 git_branch,
+                provider: model.provider.clone(),
                 model: model.model.clone(),
                 thinking: thinking.as_str().to_owned(),
                 session: session_id,
@@ -720,6 +827,10 @@ impl App {
             models_loader: None,
             providers: Vec::new(),
             switch_provider: None,
+            auth_path: None,
+            explicit_key_provider: None,
+            connect_generation: 0,
+            persist_selection: None,
             run_started: None,
             history,
             session,
@@ -1025,6 +1136,9 @@ impl App {
         if matches!(self.overlay, Some(Overlay::Picker(_))) {
             return self.handle_picker_key(key);
         }
+        if matches!(self.overlay, Some(Overlay::Connect(_))) {
+            return self.handle_connect_key(key);
+        }
         let permission = matches!(self.overlay, Some(Overlay::Permission(_)));
         if !permission {
             if matches!(key.code, KeyCode::Esc | KeyCode::Enter)
@@ -1073,6 +1187,188 @@ impl App {
             self.resolve_permission(decision);
         }
         Action::None
+    }
+
+    fn handle_connect_key(&mut self, key: KeyEvent) -> Action {
+        let Some(Overlay::Connect(mut state)) = self.overlay.take() else {
+            return Action::None;
+        };
+
+        if state.phase == ConnectPhase::Checking {
+            if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                return Action::Quit;
+            }
+            // Esc closes the overlay; the probe result is ignored because the
+            // overlay no longer matches its provider and generation.
+            if key.code != KeyCode::Esc {
+                self.overlay = Some(Overlay::Connect(state));
+            }
+            return Action::None;
+        }
+
+        match key.code {
+            KeyCode::Esc => return Action::None,
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                return Action::Quit;
+            }
+            KeyCode::Enter => {
+                if state.input.trim().is_empty() {
+                    state.phase = ConnectPhase::Error("API key must not be empty.".to_owned());
+                } else {
+                    self.connect_generation = self.connect_generation.wrapping_add(1);
+                    state.generation = self.connect_generation;
+                    state.phase = ConnectPhase::Checking;
+                    self.overlay = Some(Overlay::Connect(state));
+                    return Action::VerifyKey;
+                }
+            }
+            KeyCode::Backspace => {
+                state.input.pop();
+                state.phase = ConnectPhase::Editing;
+            }
+            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                state.reveal = !state.reveal;
+            }
+            KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(text) = crate::clipboard::read_text() {
+                    let text = text.trim().replace(['\r', '\n', ' '], "");
+                    state.input.push_str(&text);
+                    state.phase = ConnectPhase::Editing;
+                }
+            }
+            KeyCode::Char('s')
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && matches!(state.phase, ConnectPhase::Error(_))
+                    && !state.input.trim().is_empty() =>
+            {
+                self.overlay = Some(Overlay::Connect(state));
+                return Action::SaveKey;
+            }
+            KeyCode::Char(character)
+                if !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                state.input.push(character);
+                state.phase = ConnectPhase::Editing;
+            }
+            _ => {}
+        }
+
+        self.overlay = Some(Overlay::Connect(state));
+        Action::None
+    }
+
+    /// Returns the provider, key, and generation for a pending check.
+    #[must_use]
+    pub fn take_connect_request(&self) -> Option<(String, String, u64)> {
+        let Some(Overlay::Connect(state)) = self.overlay.as_ref() else {
+            return None;
+        };
+        if state.phase != ConnectPhase::Checking {
+            return None;
+        }
+        let key = state.input.trim().to_owned();
+        (!key.is_empty()).then(|| (state.provider.clone(), key, state.generation))
+    }
+
+    /// Applies the result of a probe started for the connect overlay.
+    pub fn handle_connect_result(
+        &mut self,
+        provider: &str,
+        generation: u64,
+        outcome: ProbeOutcome,
+    ) {
+        let Some(Overlay::Connect(state)) = self.overlay.as_ref() else {
+            return;
+        };
+        if state.provider != provider || state.generation != generation {
+            return;
+        }
+        let key = state.input.trim().to_owned();
+        if key.is_empty() {
+            return;
+        }
+
+        if !outcome.accepted() {
+            if let Some(Overlay::Connect(state)) = self.overlay.as_mut() {
+                state.phase = ConnectPhase::Error(outcome.summary());
+            }
+            return;
+        }
+
+        let note = if matches!(outcome, ProbeOutcome::Throttled { .. }) {
+            outcome.summary()
+        } else {
+            "key accepted".to_owned()
+        };
+        match self.store_connect_key(provider, &key) {
+            Ok(()) => self.finish_connect(provider, &note),
+            Err(error) => {
+                if let Some(Overlay::Connect(state)) = self.overlay.as_mut() {
+                    state.phase = ConnectPhase::Error(format!(
+                        "the key is valid, but it could not be saved: {error}"
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Stores the connect overlay's key without contacting the provider.
+    pub fn save_connect_key(&mut self) {
+        let Some(Overlay::Connect(state)) = self.overlay.as_ref() else {
+            return;
+        };
+        let provider = state.provider.clone();
+        let key = state.input.trim().to_owned();
+        if key.is_empty() {
+            return;
+        }
+        match self.store_connect_key(&provider, &key) {
+            Ok(()) => self.finish_connect(&provider, "saved without checking"),
+            Err(error) => {
+                if let Some(Overlay::Connect(state)) = self.overlay.as_mut() {
+                    state.phase = ConnectPhase::Error(format!("cannot save the key: {error}"));
+                }
+            }
+        }
+    }
+
+    fn store_connect_key(&self, provider: &str, key: &str) -> std::result::Result<(), String> {
+        let path = self
+            .auth_path
+            .as_ref()
+            .ok_or_else(|| "credential storage is unavailable".to_owned())?;
+        AuthStore::new(path)
+            .set(provider, key)
+            .map_err(|error| error.to_string())
+    }
+
+    fn finish_connect(&mut self, provider: &str, note: &str) {
+        self.overlay = None;
+        let name = self
+            .providers
+            .iter()
+            .find(|choice| choice.id == provider)
+            .map_or_else(
+                || provider_name(provider).to_owned(),
+                |choice| choice.name.clone(),
+            );
+        self.switch_provider_to(provider);
+        self.transcript
+            .push_info(format!("Connected to {name} · {note}."));
+    }
+
+    /// Returns the credential status for one provider.
+    #[must_use]
+    pub fn provider_status(&self, provider: &str) -> ProviderAuthStatus {
+        if self.explicit_key_provider.as_deref() == Some(provider) {
+            return ProviderAuthStatus::configured(provider, CredentialSource::Explicit);
+        }
+        let store = self
+            .auth_path
+            .as_ref()
+            .map(|path| AuthStore::new(path.clone()));
+        auth_status(store.as_ref(), provider)
     }
 
     fn handle_list_key(&mut self, key: KeyEvent) -> Action {
@@ -1181,16 +1477,27 @@ impl App {
                     self.model.provider = choice.provider.clone();
                     self.model.model = choice.id.clone();
                     self.context_window = choice.context_window;
+                    self.footer.provider = choice.provider.clone();
                     self.footer.model = choice.id.clone();
                     if let Some(session) = self.session.as_mut() {
                         let _ = session.append_model_change(choice.provider, choice.id.clone());
                     }
                     self.refresh_context();
+                    self.persist_selection();
                     self.transcript
                         .push_info(format!("Model: {} ({})", choice.name, choice.id));
                 }
             }
-            ChoiceKind::Providers => self.switch_provider_to(&item.value),
+            ChoiceKind::Providers => {
+                if item.value == "__connect__" {
+                    self.open_connect();
+                } else if self.provider_status(&item.value).usable() {
+                    self.switch_provider_to(&item.value);
+                } else {
+                    self.open_connect_for(&item.value);
+                }
+            }
+            ChoiceKind::ConnectProviders => self.open_connect_for(&item.value),
             ChoiceKind::Themes => match Theme::load(Some(&item.value)) {
                 Ok(theme) => {
                     self.theme_watcher = std::path::Path::new(&theme.name)
@@ -1222,7 +1529,10 @@ impl App {
     fn open_palette(&mut self) {
         let commands = [
             ("help", "Show all commands"),
+            ("connect", "Add or replace a provider API key"),
             ("provider", "Choose a provider"),
+            ("logout", "Remove a stored API key"),
+            ("auth", "Show provider credential status"),
             ("model", "Choose a model"),
             ("theme", "Choose a theme"),
             ("thinking", "Set the reasoning level"),
@@ -1353,32 +1663,92 @@ impl App {
         let mut items = self
             .providers
             .iter()
-            .map(|provider| ChoiceItem {
-                label: if provider.id == current {
-                    format!("{} (current)", provider.name)
-                } else {
-                    provider.name.clone()
-                },
-                detail: provider.id.clone(),
-                value: provider.id.clone(),
+            .map(|provider| {
+                let status = self.provider_status(&provider.id);
+                let marker = if status.usable() { "✓" } else { "○" };
+                ChoiceItem {
+                    label: if provider.id == current {
+                        format!("{marker} {} (current)", provider.name)
+                    } else {
+                        format!("{marker} {}", provider.name)
+                    },
+                    detail: format!("{} · {}", provider.id, status.label()),
+                    value: provider.id.clone(),
+                }
             })
             .collect::<Vec<_>>();
-        if items.is_empty() {
-            items.push(ChoiceItem {
-                label: format!("{current} (current)"),
-                detail: "No other providers are configured".to_owned(),
-                value: current,
-            });
-        }
+        items.push(ChoiceItem {
+            label: "+ Connect or replace a key".to_owned(),
+            detail: "Choose any provider and enter an API key".to_owned(),
+            value: "__connect__".to_owned(),
+        });
         self.overlay = Some(Overlay::List(ChoiceList::new(
             ChoiceKind::Providers,
             " providers ",
             items,
-            "type to filter · ↑/↓ scroll · Enter select",
+            "Enter switch/connect · type to filter · Esc close",
         )));
     }
 
+    fn open_connect(&mut self) {
+        let current = self.model.provider.clone();
+        let items = self
+            .providers
+            .iter()
+            .map(|provider| {
+                let status = self.provider_status(&provider.id);
+                let marker = if status.usable() { "✓" } else { "○" };
+                ChoiceItem {
+                    label: if provider.id == current {
+                        format!("{marker} {} (current)", provider.name)
+                    } else {
+                        format!("{marker} {}", provider.name)
+                    },
+                    detail: format!("{} · {}", provider.id, status.label()),
+                    value: provider.id.clone(),
+                }
+            })
+            .collect::<Vec<_>>();
+        self.overlay = Some(Overlay::List(ChoiceList::new(
+            ChoiceKind::ConnectProviders,
+            " connect provider ",
+            items,
+            "Enter enter or replace a key · type to filter · Esc close",
+        )));
+    }
+
+    fn open_connect_for(&mut self, provider: &str) {
+        if self.status == Status::Streaming {
+            self.transcript
+                .push_info("Finish or cancel the current run before changing providers.");
+            return;
+        }
+        if !codie_ai::provider::requires_key(provider) {
+            self.switch_provider_to(provider);
+            return;
+        }
+        self.open_connect_overlay(provider);
+    }
+
+    fn open_connect_overlay(&mut self, provider: &str) {
+        self.connect_generation = self.connect_generation.wrapping_add(1);
+        let mut state = ConnectState::new(provider);
+        state.generation = self.connect_generation;
+        self.overlay = Some(Overlay::Connect(state));
+    }
+
+    fn persist_selection(&self) {
+        if let Some(persist) = &self.persist_selection {
+            persist(&self.model.provider, &self.model.model);
+        }
+    }
+
     fn switch_provider_to(&mut self, id: &str) {
+        if self.status == Status::Streaming {
+            self.transcript
+                .push_info("Finish or cancel the current run before switching providers.");
+            return;
+        }
         let Some(switch) = self.switch_provider.clone() else {
             self.transcript
                 .push_info("Provider switching is unavailable in this mode.");
@@ -1402,11 +1772,13 @@ impl App {
                 {
                     self.context_window = model.context_window;
                 }
+                self.footer.provider = id.to_owned();
                 self.footer.model = self.model.model.clone();
                 if let Some(session) = self.session.as_mut() {
                     let _ = session.append_model_change(id.to_owned(), self.model.model.clone());
                 }
                 self.refresh_context();
+                self.persist_selection();
                 self.transcript
                     .push_info(format!("Provider: {name} · model: {}", self.model.model));
             }
@@ -1768,9 +2140,73 @@ impl App {
             }
             Command::Provider(argument) => {
                 if let Some(provider) = argument {
-                    self.switch_provider_to(&provider);
+                    if self.provider_status(&provider).usable() {
+                        self.switch_provider_to(&provider);
+                    } else if self.providers.iter().any(|choice| choice.id == provider) {
+                        self.open_connect_for(&provider);
+                    } else {
+                        self.transcript
+                            .push_error(format!("Unknown provider `{provider}`."));
+                    }
                 } else {
                     self.open_providers();
+                }
+            }
+            Command::Connect(argument) => {
+                if let Some(provider) = argument {
+                    if self.providers.iter().any(|choice| choice.id == provider) {
+                        self.open_connect_for(&provider);
+                    } else {
+                        self.transcript
+                            .push_error(format!("Unknown provider `{provider}`."));
+                    }
+                } else {
+                    self.open_connect();
+                }
+            }
+            Command::Logout(argument) => {
+                let provider = argument.unwrap_or_else(|| self.model.provider.clone());
+                if !self.providers.iter().any(|choice| choice.id == provider) {
+                    self.transcript
+                        .push_error(format!("Unknown provider `{provider}`."));
+                } else {
+                    let Some(path) = self.auth_path.clone() else {
+                        self.transcript
+                            .push_error("Credential storage is unavailable in this mode.");
+                        return true;
+                    };
+                    let store = AuthStore::new(path);
+                    match store.remove(&provider) {
+                        Ok(true) => self
+                            .transcript
+                            .push_info(format!("Removed the stored API key for {provider}.")),
+                        Ok(false) => {
+                            let status = self.provider_status(&provider);
+                            if status.source == Some(CredentialSource::Environment) {
+                                self.transcript.push_info(format!(
+                                    "{provider} uses {}. Unset it to disconnect this provider.",
+                                    status.env_var
+                                ));
+                            } else {
+                                self.transcript
+                                    .push_info(format!("No stored API key for {provider}."));
+                            }
+                        }
+                        Err(error) => self
+                            .transcript
+                            .push_error(format!("Cannot remove the API key: {error}")),
+                    }
+                }
+            }
+            Command::Auth => {
+                if self.providers.is_empty() {
+                    self.transcript.push_info("No providers are available.");
+                } else {
+                    for provider in &self.providers {
+                        let status = self.provider_status(&provider.id);
+                        self.transcript
+                            .push_info(format!("{}: {}", provider.name, status.label()));
+                    }
                 }
             }
             Command::Model(argument) => {
@@ -1785,11 +2221,13 @@ impl App {
                     {
                         self.model.provider = choice.provider.clone();
                         self.context_window = choice.context_window;
+                        self.footer.provider = choice.provider.clone();
                         if let Some(session) = self.session.as_mut() {
                             let _ = session.append_model_change(choice.provider, choice.id.clone());
                         }
                     }
                     self.refresh_context();
+                    self.persist_selection();
                     self.transcript.push_info("Model changed for the next run.");
                 } else {
                     self.open_models();
@@ -1916,6 +2354,14 @@ impl App {
     /// A paste that looks like a path closes the command palette first, so an
     /// absolute path never lands in the palette filter.
     pub fn paste(&mut self, text: &str) {
+        if let Some(Overlay::Connect(state)) = &mut self.overlay {
+            if state.phase != ConnectPhase::Checking {
+                let text = text.trim().replace(['\r', '\n', ' ', '\t'], "");
+                state.input.push_str(&text);
+                state.phase = ConnectPhase::Editing;
+            }
+            return;
+        }
         if let Some(path) = codie_prompt::resolve_path_text(text, &self.cwd) {
             self.overlay = None;
             self.insert_attachment(path);
@@ -2459,7 +2905,15 @@ async fn run_full(mut options: TuiOptions) -> Result<u8> {
     app.models_loader = options.models_loader.clone();
     app.providers = options.providers.clone();
     app.switch_provider = options.switch_provider.clone();
+    app.auth_path = Some(options.auth_path.clone());
+    app.explicit_key_provider = options.explicit_key_provider.clone();
+    app.persist_selection = options.persist_selection.clone();
     app.extension_commands = options.extensions.command_names();
+
+    if options.startup_connect {
+        let provider = app.model.provider.clone();
+        app.open_connect_for(&provider);
+    }
 
     if !matches!(history.first(), Some(Message::System(_))) {
         let declarations = toolbox.declarations();
@@ -2554,6 +3008,19 @@ enum Input {
     Mouse(MouseEvent),
     Paste(String),
     Signal(i32),
+}
+
+/// A finished API-key probe.
+enum ConnectEvent {
+    /// The probe finished for one overlay attempt.
+    Result {
+        /// Provider checked.
+        provider: String,
+        /// Overlay generation that started the probe.
+        generation: u64,
+        /// Sanitized result.
+        outcome: ProbeOutcome,
+    },
 }
 
 /// Events produced by a manual or background update check.
@@ -2829,6 +3296,7 @@ async fn event_loop(
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
     let (compact_tx, mut compact_rx) = mpsc::unbounded_channel();
     let (update_tx, mut update_rx) = mpsc::unbounded_channel::<UpdateEvent>();
+    let (connect_tx, mut connect_rx) = mpsc::unbounded_channel::<ConnectEvent>();
     let mut tick = tokio::time::interval(Duration::from_millis(33));
     let mut dirty = true;
     let mut signal_code = 0_i32;
@@ -2873,6 +3341,24 @@ async fn event_loop(
                                         .push_info("Full access off: mutating tools ask again.");
                                 }
                             }
+                            Action::VerifyKey => {
+                                if let Some((provider, key, generation)) =
+                                    app.take_connect_request()
+                                {
+                                    let sender = connect_tx.clone();
+                                    let base_url = options.base_url.clone();
+                                    tokio::spawn(async move {
+                                        let outcome =
+                                            probe_key(&provider, &key, base_url.as_deref()).await;
+                                        let _ = sender.send(ConnectEvent::Result {
+                                            provider,
+                                            generation,
+                                            outcome,
+                                        });
+                                    });
+                                }
+                            }
+                            Action::SaveKey => app.save_connect_key(),
                             Action::Cancel => {
                                 app.cancel.cancel();
                                 app.transcript.push_info("Stopping…");
@@ -3041,6 +3527,16 @@ async fn event_loop(
                 dirty = true;
                 app.push_permission(request);
             }
+            Some(event) = connect_rx.recv() => {
+                dirty = true;
+                match event {
+                    ConnectEvent::Result {
+                        provider,
+                        generation,
+                        outcome,
+                    } => app.handle_connect_result(&provider, generation, outcome),
+                }
+            }
             Some(event) = event_rx.recv() => {
                 dirty = true;
                 handle_agent_event(app, event);
@@ -3155,7 +3651,15 @@ async fn event_loop(
                     app.theme_revision = app.theme_revision.wrapping_add(1);
                     dirty = true;
                 }
-                if app.status == Status::Streaming {
+                if app.status == Status::Streaming
+                    || matches!(
+                        app.overlay,
+                        Some(Overlay::Connect(ConnectState {
+                            phase: ConnectPhase::Checking,
+                            ..
+                        }))
+                    )
+                {
                     dirty = true;
                 }
             }
@@ -3603,6 +4107,19 @@ fn apply_compaction(
     }
 }
 
+fn assistant_auth_failed(message: &codie_core::AssistantMessage) -> bool {
+    let Some(error) = &message.error_message else {
+        return false;
+    };
+    let error = error.to_ascii_lowercase();
+    error.contains("401")
+        || error.contains("403")
+        || error.contains("unauthorized")
+        || error.contains("invalid api key")
+        || error.contains("invalid_api_key")
+        || error.contains("authentication")
+}
+
 fn handle_agent_event(app: &mut App, event: AgentEvent) {
     match event {
         AgentEvent::AgentStart => app.status = Status::Streaming,
@@ -3651,6 +4168,13 @@ fn handle_agent_event(app: &mut App, event: AgentEvent) {
                                 .map(|started| started.elapsed().as_millis() as u64)
                         }),
                     );
+                    if assistant_auth_failed(assistant) && app.overlay.is_none() {
+                        let provider = app.model.provider.clone();
+                        app.transcript.push_error(
+                            "The provider rejected the API key. Enter a new key to continue.",
+                        );
+                        app.open_connect_overlay(&provider);
+                    }
                 }
                 Message::ToolResult(result) => persist_tool_result(app, result),
                 _ => {}
@@ -4445,6 +4969,11 @@ mod tests {
             append: None,
             customizations: Customizations::default(),
             extensions: Arc::new(codie_ext::ExtensionSet::default()),
+            auth_path: dir.path().join("auth.json"),
+            base_url: None,
+            explicit_key_provider: None,
+            startup_connect: false,
+            persist_selection: None,
         };
         let agent = Arc::new(Agent::new(
             Arc::clone(&options.client),
@@ -4677,6 +5206,7 @@ mod tests {
                 name: "OpenRouter".to_owned(),
             },
         ];
+        app.explicit_key_provider = Some("openrouter".to_owned());
         app.switch_provider = Some(Arc::new(|id: &str| {
             assert_eq!(id, "openrouter");
             Ok(ProviderRuntime {
@@ -4733,5 +5263,221 @@ mod tests {
             Some(60.0),
             "missing duration must keep the previous rate"
         );
+    }
+
+    fn connect_app(path: PathBuf) -> App {
+        let mut app = app();
+        app.auth_path = Some(path);
+        app.providers = vec![
+            ProviderChoice {
+                id: "deepseek".to_owned(),
+                name: "DeepSeek".to_owned(),
+            },
+            ProviderChoice {
+                id: "openrouter".to_owned(),
+                name: "OpenRouter".to_owned(),
+            },
+        ];
+        app.switch_provider = Some(Arc::new(|id: &str| {
+            Ok(ProviderRuntime {
+                models: vec![ModelChoice {
+                    provider: id.to_owned(),
+                    id: "openrouter/auto".to_owned(),
+                    name: "OpenRouter Auto".to_owned(),
+                    context_window: 128_000,
+                }],
+                default_model: "openrouter/auto".to_owned(),
+            })
+        }));
+        app.overlay = Some(Overlay::Connect(ConnectState::new("openrouter")));
+        app
+    }
+
+    #[test]
+    fn connect_overlay_masks_the_key_and_requests_a_check() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut app = connect_app(directory.path().join("auth.json"));
+
+        for character in "sk-or-secret".chars() {
+            app.handle_key(key(KeyCode::Char(character)));
+        }
+        let Some(Overlay::Connect(state)) = &app.overlay else {
+            panic!("connect overlay must stay open");
+        };
+        assert_eq!(state.input, "sk-or-secret");
+        assert_eq!(state.display(), "•".repeat(12));
+        assert!(!format!("{state:?}").contains("sk-or-secret"));
+
+        assert_eq!(app.handle_key(key(KeyCode::Enter)), Action::VerifyKey);
+        assert_eq!(
+            app.take_connect_request(),
+            Some(("openrouter".to_owned(), "sk-or-secret".to_owned(), 1))
+        );
+    }
+
+    #[test]
+    fn valid_connect_result_stores_the_key_and_switches_provider() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("auth.json");
+        let mut app = connect_app(path.clone());
+
+        for character in "sk-or-good".chars() {
+            app.handle_key(key(KeyCode::Char(character)));
+        }
+        app.handle_key(key(KeyCode::Enter));
+        let (provider, _, generation) = app.take_connect_request().unwrap();
+        app.handle_connect_result(&provider, generation, ProbeOutcome::Valid);
+
+        assert!(app.overlay.is_none());
+        assert_eq!(app.model.provider, "openrouter");
+        assert_eq!(app.footer.provider, "openrouter");
+        assert_eq!(
+            AuthStore::new(path).get("openrouter").unwrap().as_deref(),
+            Some("sk-or-good")
+        );
+    }
+
+    #[test]
+    #[spec("TUI-035")]
+    fn spec_tui_035_rejected_key_does_not_overwrite_the_stored_key() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("auth.json");
+        AuthStore::new(&path).set("openrouter", "sk-old").unwrap();
+        let mut app = connect_app(path.clone());
+
+        for character in "sk-new-but-bad".chars() {
+            app.handle_key(key(KeyCode::Char(character)));
+        }
+        app.handle_key(key(KeyCode::Enter));
+        let (provider, _, generation) = app.take_connect_request().unwrap();
+        app.handle_connect_result(
+            &provider,
+            generation,
+            ProbeOutcome::Invalid {
+                status: 401,
+                message: "key rejected".to_owned(),
+            },
+        );
+
+        assert_eq!(
+            AuthStore::new(path).get("openrouter").unwrap().as_deref(),
+            Some("sk-old")
+        );
+        let Some(Overlay::Connect(state)) = &app.overlay else {
+            panic!("failed check must keep the overlay open");
+        };
+        assert!(matches!(state.phase, ConnectPhase::Error(_)));
+        assert_ne!(app.model.provider, "openrouter");
+    }
+
+    #[test]
+    #[spec("TUI-035")]
+    fn spec_tui_035_stale_connect_results_are_ignored() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut app = connect_app(directory.path().join("auth.json"));
+
+        for character in "sk-or-good".chars() {
+            app.handle_key(key(KeyCode::Char(character)));
+        }
+        app.handle_key(key(KeyCode::Enter));
+        let (provider, _, generation) = app.take_connect_request().unwrap();
+        app.handle_connect_result(&provider, generation + 1, ProbeOutcome::Valid);
+
+        assert_eq!(app.model.provider, "deepseek");
+        assert!(matches!(app.overlay, Some(Overlay::Connect(_))));
+    }
+
+    #[test]
+    #[spec("TUI-036")]
+    fn auth_errors_open_the_connect_overlay() {
+        let mut app = app();
+        app.model.provider = "openrouter".to_owned();
+        app.model.model = "openrouter/auto".to_owned();
+        app.providers = vec![ProviderChoice {
+            id: "openrouter".to_owned(),
+            name: "OpenRouter".to_owned(),
+        }];
+        let mut assistant =
+            codie_core::AssistantMessage::partial("openai-completions", "openrouter", "auto");
+        assistant.stop_reason = codie_core::StopReason::Error;
+        assistant.error_message = Some("401 Unauthorized: invalid api key".to_owned());
+
+        handle_agent_event(
+            &mut app,
+            AgentEvent::MessageEnd {
+                message: Message::Assistant(assistant),
+            },
+        );
+
+        assert!(matches!(app.overlay, Some(Overlay::Connect(_))));
+        assert_eq!(app.model.provider, "openrouter");
+    }
+
+    #[test]
+    #[spec("TUI-037")]
+    fn provider_switching_is_blocked_while_streaming() {
+        let (_dir, mut app) = app_with_named_session();
+        app.status = Status::Streaming;
+        app.switch_provider = Some(Arc::new(|_| panic!("must not switch mid-run")));
+
+        app.switch_provider_to("openrouter");
+
+        assert_eq!(app.model.provider, "deepseek");
+    }
+
+    #[test]
+    #[spec("TUI-038")]
+    fn model_choices_persist_the_selection() {
+        let calls = Arc::new(std::sync::Mutex::new(Vec::<(String, String)>::new()));
+        let captured = Arc::clone(&calls);
+        let mut app = app();
+        app.persist_selection = Some(Arc::new(move |provider: &str, model: &str| {
+            captured
+                .lock()
+                .unwrap()
+                .push((provider.to_owned(), model.to_owned()));
+        }));
+        app.models = vec![ModelChoice {
+            provider: "openrouter".to_owned(),
+            id: "openrouter/auto".to_owned(),
+            name: "OpenRouter Auto".to_owned(),
+            context_window: 128_000,
+        }];
+
+        app.apply_choice(
+            ChoiceKind::Models,
+            &ChoiceItem {
+                label: "OpenRouter Auto".to_owned(),
+                detail: String::new(),
+                value: "openrouter/auto".to_owned(),
+            },
+        );
+
+        assert_eq!(
+            calls.lock().unwrap().as_slice(),
+            [("openrouter".to_owned(), "openrouter/auto".to_owned())]
+        );
+    }
+
+    #[test]
+    #[spec("TUI-034")]
+    fn spec_tui_034_connect_lists_unconfigured_providers_and_offers_key_entry() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut app = app();
+        app.auth_path = Some(directory.path().join("auth.json"));
+        app.providers = vec![ProviderChoice {
+            id: "openrouter".to_owned(),
+            name: "OpenRouter".to_owned(),
+        }];
+
+        assert!(app.handle_command("/provider"));
+        let Some(Overlay::List(list)) = &app.overlay else {
+            panic!("provider picker must open");
+        };
+        assert!(list.items.iter().any(|item| item.value == "__connect__"));
+        assert!(list.items[0].label.starts_with('○'));
+
+        app.handle_key(key(KeyCode::Enter));
+        assert!(matches!(app.overlay, Some(Overlay::Connect(_))));
     }
 }

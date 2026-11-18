@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://www.rust-lang.org/"><img alt="Rust 1.88" src="https://img.shields.io/badge/Rust-1.88-000000?style=flat-square&logo=rust&logoColor=white"></a>
-  <img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-6E4AFF?style=flat-square">
+  <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-6E4AFF?style=flat-square">
   <img alt="Status: stable" src="https://img.shields.io/badge/status-stable-2EA043?style=flat-square">
   <img alt="Platform: macOS 13+, Linux, Windows preview" src="https://img.shields.io/badge/platform-macOS%2013%2B%20%C2%B7%20Linux%20%C2%B7%20Windows%20preview-111827?style=flat-square&logo=apple&logoColor=white">
   <img alt="Windows x64 preview" src="https://img.shields.io/badge/Windows-x64%20preview-0078D4?style=flat-square&logo=windows&logoColor=white">
@@ -20,21 +20,11 @@ implementation language, the safety posture, and the provider scope.
 
 The command is `codie`.
 
-**Status: stable release (`0.9.2`).** The one-shot agent, the interactive app,
-full-fidelity sessions, customization, automation, and out-of-process extensions all work end to end:
-streaming transcript, editor dock, additional themes, the startup banner, slash commands, steering,
-permission prompts, plain mode, resume/fork/compact, search tools, skills, prompt templates, project trust,
-system instructions, `@file` and image inputs, guarded `web_fetch`, RPC mode, generated JSON schemas, HTML
-transcript export, `codie update --check`, extension hooks, tools, commands, and examples, and an OpenRouter
-coding-model catalog with live `/provider` switching. The `0.8.0` release added rich edit/write previews,
-collapsed reasoning, `Esc`/`/stop` cancellation, a context meter with `/usage`, permission review previews,
-tool navigation, folded turns, and session picker previews. `0.9.0` adds a Windows x64 preview build, the
-`powershell` tool, a one-command PowerShell installer, and the Windows preview documentation set. `0.9.2` adds
-Google Gemini, the codie-vs-opencode benchmark suite, text selection and clipboard copy, additional themes, and
-a refreshed permission overlay. `0.9.2` adds project memory (`CODIE.MD`, `/init`, and the `project_memory`
-tool), Ctrl+V clipboard image attachments, full-width Markdown tables, and live `/theme` previews. See
-[`docs/src/configuration.md`](docs/src/configuration.md), [`docs/src/rpc.md`](docs/src/rpc.md), and
-[`ROADMAP.md`](ROADMAP.md).
+**Status: stable release (`0.9.2`).** The one-shot agent, interactive TUI, sessions, customization, automation, and
+out-of-process extensions work end to end. The current `main` adds a 25-provider registry, TUI `/connect` with API-key
+validation, live OpenAI-compatible model catalogs, keyless local providers (Ollama, LM Studio, vLLM), and persisted
+provider/model selection. See [`docs/src/configuration.md`](docs/src/configuration.md),
+[`docs/src/rpc.md`](docs/src/rpc.md), and [`ROADMAP.md`](ROADMAP.md).
 
 <p align="center">
   <img src="assets/tui.png" alt="Codie TUI showing the startup banner and command palette" width="1000">
@@ -45,8 +35,8 @@ tool), Ctrl+V clipboard image attachments, full-width Markdown tables, and live 
 - **One static binary.** No Node or Bun runtime, predictable memory, fast startup.
 - **Safe by default.** Read-only tools are allowed; writes and shell commands ask interactively and are denied
   in headless mode unless explicitly allowed.
-- **Provider discipline.** OpenRouter and DeepSeek at launch, behind one OpenAI-compatible adapter with
-  recorded-fixture conformance. No live API calls in CI.
+- **Provider discipline.** 25 cloud and local providers behind one OpenAI-compatible adapter, driven by a static
+  registry with recorded-fixture conformance and no live API calls in CI.
 - **Sessions you can trust.** Append-only JSONL with resume, branch, fork, clone, and compaction. The file is
   the source of truth; the model-visible context is a projection.
 - **Extensible without a plugin runtime.** Skills, templates, themes, and out-of-process extensions add tools,
@@ -67,7 +57,7 @@ tool), Ctrl+V clipboard image attachments, full-width Markdown tables, and live 
 
 ```mermaid
 flowchart LR
-    P["Provider adapter<br/>OpenAI-compatible<br/>DeepSeek · OpenRouter"] -->|"SSE deltas"| S["Assistant event stream"]
+    P["Provider adapter<br/>OpenAI-compatible<br/>25 cloud + local providers"] -->|"SSE deltas"| S["Assistant event stream"]
     S --> L["Agent loop<br/>turns · steering · cancellation"]
     L <-->|"append / projection"| DB["Session store<br/>append-only JSONL tree<br/>resume · fork · compact"]
     L --> PM["Context assembly<br/>system prompt · skills · templates<br/>project instructions · @files"]
@@ -88,7 +78,7 @@ flowchart TD
     CLI["codie-cli<br/>args · config · modes · exit codes"]
 
     CORE["codie-core<br/>messages · events · agent loop"]
-    AI["codie-ai<br/>providers · SSE · catalog · auth"]
+    AI["codie-ai<br/>provider registry · SSE · catalogs · auth"]
     TOOLS["codie-tools<br/>read · write · edit · bash / powershell<br/>grep · find · ls · web_fetch"]
     SESSION["codie-session<br/>JSONL tree · projection · export"]
     PROMPT["codie-prompt<br/>system prompt · skills · templates · trust"]
@@ -204,64 +194,60 @@ cargo run -- --version
 Then authenticate once and run:
 
 ```bash
-codie auth login openrouter
+codie auth login openrouter   # verifies before storing
 codie auth status
 codie models
-
-# or through cargo while developing:
-cargo run -- auth login openrouter
 ```
 
 Run one prompt:
 
 ```bash
-cargo run -- -p --provider openrouter --model deepseek/deepseek-v4.1-flash-1017 \
+cargo run -- -p --provider openai --model gpt-6.2-sol \
   "Reply with exactly: codie-ok"
+
+# Local, no key required
+cargo run -- --provider ollama --model qwen3-coder -p "Explain this repository"
 
 # Tool-using run in another directory (headless defaults deny mutating tools)
 cargo run -- -p --allow-all --cwd /path/to/project \
   "Make the failing test pass, then run it"
 
-# Automation
+# Automation and extensions
 cargo run -- --mode json -p "Summarize this repository"
 cargo run -- --mode rpc          # line-delimited JSON commands on stdin
 cargo run -- update --check      # report newer releases without installing
-
-# Extensions
 cargo run -- --extension examples/extensions/todo -p "/todo"
-cargo run -- --extension examples/extensions/todo --allow todo_add -p "add a todo: write docs"
 ```
 
 Environment variables and `.env`:
 
 ```bash
 cp .env.example .env      # optional; .env is gitignored
-# or
 cargo run -- --env-file .env.local models
 ```
 
-Process environment always wins over `.env`. Supported variables: `DEEPSEEK_API_KEY`,
-`OPENROUTER_API_KEY`, `GEMINI_API_KEY`, `CODIE_PROVIDER`, `CODIE_MODEL`, `CODIE_THINKING`, `CODIE_MAX_TURNS`,
-`CODIE_ALLOW`, `CODIE_BASE_URL`, `CODIE_CONFIG_DIR`, `CODIE_DATA_DIR`, `CODIE_CACHE_DIR`,
-`CODIE_SESSION_DIR`, `CODIE_ENV_FILE`, `CODIE_NO_UPDATE_CHECK`.
+Process environment wins over `.env`. Configuration uses `CODIE_PROVIDER`, `CODIE_MODEL`, `CODIE_THINKING`,
+`CODIE_MAX_TURNS`, `CODIE_ALLOW`, `CODIE_BASE_URL`, `CODIE_CONFIG_DIR`, `CODIE_DATA_DIR`, `CODIE_CACHE_DIR`,
+`CODIE_SESSION_DIR`, `CODIE_ENV_FILE`, and `CODIE_NO_UPDATE_CHECK`. Each remote provider reads its documented
+`*_API_KEY`; local providers need none.
 
-Run `codie` with no arguments in a terminal for the interactive app. Use `-p/--print` for one-shot output and
-`--mode json` for automation. See [`docs/src/tui.md`](docs/src/tui.md) for keys, commands, themes, and
-permissions. The full planned command surface is documented in [`PLAN.MD`](PLAN.MD) §4.2.
+Run `codie` with no arguments for the interactive app: `/connect` adds a key, `/provider` switches, `/auth` shows
+credential status, and the last selection is reused next time. Use `-p/--print` for one-shot output and
+`--mode json` for automation. See [`docs/src/tui.md`](docs/src/tui.md) for keys, commands, themes, and permissions.
 
 ## Providers
 
-| Provider | Status | API | Auth |
-|---|---|---|---|
-| DeepSeek | Phase 1 | OpenAI-compatible | `DEEPSEEK_API_KEY` |
-| OpenRouter | Phase 1 | OpenAI-compatible | `OPENROUTER_API_KEY` |
-| Google Gemini | OpenAI-compatible endpoint | OpenAI-compatible | `GEMINI_API_KEY` |
+25 providers share one OpenAI-compatible adapter:
 
-All three are accessed through one adapter that handles SSE framing, tool-call accumulation, stop-reason and
-usage mapping, retries, and per-provider compatibility flags. Gemini tool calls replay the provider's thought
-signature so multi-turn tool use works. Anthropic-native passthrough, OAuth login, and additional vendors are
-out of scope for v1.0. See [`docs/src/providers.md`](docs/src/providers.md) and
-[`specs/provider/0001-openai-compatible.md`](specs/provider/0001-openai-compatible.md).
+- **Hosted:** OpenAI, DeepSeek, OpenRouter, Google Gemini, Groq, Cerebras, Mistral, xAI, Together AI, DeepInfra,
+  Fireworks AI, Moonshot AI, Z.AI, NVIDIA NIM, Nebius, SambaNova, Novita AI, Alibaba DashScope, Baseten, Requesty,
+  OpenCode, and OpenCode Go.
+- **Local, keyless:** Ollama, LM Studio, and vLLM.
+
+`/connect` validates a key before storing it; `/provider` shows connection state and switches at runtime.
+OpenRouter and generic `/models` catalogs refresh in the background, and only chat models reach the picker.
+Anthropic-native, Azure, Vertex, Bedrock, and Copilot OAuth remain out of scope. See
+[`docs/src/providers.md`](docs/src/providers.md).
 
 ## Benchmarks
 
@@ -270,28 +256,9 @@ out of scope for v1.0. See [`docs/src/providers.md`](docs/src/providers.md) and
 tasks: a greenfield todo UI, a brownfield feature addition, a hidden-test bug fix, and a JSON API. Browser,
 hidden-test, and HTTP verifiers run only after each harness exits.
 
-Latest full run (macOS arm64, 3 runs per harness per task):
-
-| Metric | codie | opencode |
-|---|---|---|
-| Binary launch (median) | **4 ms** | 38 ms |
-| Trivial request, total (median) | **1.15 s** | 1.82 s |
-| Task suite, pooled median | **28.2 s** | 59.0 s |
-| Task success | 11/12 | **12/12** |
-| Cost per successful task | **$0.0046** | $0.0108 |
-| Input + output tokens | **161,617** | 324,374 |
-
-| Task | codie (median) | opencode (median) |
-|---|---|---|
-| `todo-ui` | **56.9 s** | 67.7 s |
-| `feature-add` | **22.5 s** | 62.9 s |
-| `bug-fix` | **11.7 s** | 13.1 s |
-| `api-todo` | **33.9 s** (2/3) | 55.1 s (3/3) |
-
-On this run codie was **2.09x faster** on the pooled median, **2.58x cheaper**, and used **2.01x fewer**
-tokens. It failed one API run (empty text was accepted and a deleted todo remained), so the honest headline is
-faster and cheaper with slightly lower reliability at three samples. See [`benchmark/REPORT.md`](benchmark/REPORT.md)
-for confidence intervals, telemetry (turns, tool calls, time to first edit), and per-run details.
+Latest full run (macOS arm64, 3 runs per harness per task): codie was **2.09x faster** on the pooled median,
+**2.58x cheaper**, and used **2.01x fewer** tokens; task success was 11/12 versus opencode's 12/12. See
+[`benchmark/REPORT.md`](benchmark/REPORT.md) for per-task timings, confidence intervals, and telemetry.
 
 Run it with:
 
@@ -336,10 +303,4 @@ labeled in the tracker. Security reports follow the process in `SECURITY.md`.
 
 ## License
 
-Licensed under either of:
-
-- Apache License, Version 2.0 ([`LICENSE-APACHE`](LICENSE-APACHE))
-- MIT License ([`LICENSE-MIT`](LICENSE-MIT))
-
-at your option. Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in
-this project shall be dual-licensed as above, without any additional terms or conditions.
+Licensed under the MIT License ([`LICENSE-MIT`](LICENSE-MIT)).

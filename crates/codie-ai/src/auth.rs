@@ -55,6 +55,136 @@ pub enum AuthError {
     },
 }
 
+/// Where a provider's credential came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CredentialSource {
+    /// An explicit key passed for this run only.
+    Explicit,
+    /// A key stored in `auth.json`.
+    Stored,
+    /// A key read from the provider's environment variable.
+    Environment,
+    /// The provider is a local endpoint that does not need a key.
+    Keyless,
+}
+
+impl CredentialSource {
+    /// Returns a short human-readable description.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Explicit => "key for this run",
+            Self::Stored => "stored key",
+            Self::Environment => "environment key",
+            Self::Keyless => "no key required",
+        }
+    }
+}
+
+/// The credential state of one provider.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderAuthStatus {
+    /// Provider identifier.
+    pub provider: String,
+    /// True when a non-empty key is available from any source.
+    pub configured: bool,
+    /// Source that supplied the key, when configured.
+    pub source: Option<CredentialSource>,
+    /// Environment variable checked for this provider.
+    pub env_var: String,
+    /// Error encountered while reading `auth.json`, if any.
+    pub error: Option<String>,
+}
+
+impl ProviderAuthStatus {
+    /// Builds an unconfigured status for `provider`.
+    #[must_use]
+    pub fn missing(provider: &str) -> Self {
+        Self {
+            provider: provider.to_owned(),
+            configured: false,
+            source: None,
+            env_var: crate::model::provider_env_var(provider).to_owned(),
+            error: None,
+        }
+    }
+
+    /// Builds a configured status for `provider`.
+    #[must_use]
+    pub fn configured(provider: &str, source: CredentialSource) -> Self {
+        Self {
+            provider: provider.to_owned(),
+            configured: true,
+            source: Some(source),
+            env_var: crate::model::provider_env_var(provider).to_owned(),
+            error: None,
+        }
+    }
+
+    /// Returns true when the provider can be used without another credential.
+    ///
+    /// Keyless local providers are usable but are not counted as configured
+    /// credentials by `codie auth status`.
+    #[must_use]
+    pub fn usable(&self) -> bool {
+        self.configured || self.source == Some(CredentialSource::Keyless)
+    }
+
+    /// Returns a compact description for pickers and status output.
+    #[must_use]
+    pub fn label(&self) -> String {
+        if let Some(error) = &self.error
+            && !self.configured
+        {
+            return format!("credentials error: {error}");
+        }
+        match self.source {
+            Some(CredentialSource::Explicit) => CredentialSource::Explicit.label().to_owned(),
+            Some(CredentialSource::Stored) => CredentialSource::Stored.label().to_owned(),
+            Some(CredentialSource::Environment) => format!("env {}", self.env_var),
+            Some(CredentialSource::Keyless) => CredentialSource::Keyless.label().to_owned(),
+            None => "not connected".to_owned(),
+        }
+    }
+}
+
+/// Reads the stored and environment credential state for one provider.
+///
+/// This never returns the key itself and never performs a network request.
+#[must_use]
+pub fn auth_status(store: Option<&AuthStore>, provider: &str) -> ProviderAuthStatus {
+    let env_var = crate::model::provider_env_var(provider);
+    if !crate::provider::requires_key(provider) {
+        let mut status = ProviderAuthStatus::missing(provider);
+        status.source = Some(CredentialSource::Keyless);
+        return status;
+    }
+
+    let mut status = ProviderAuthStatus::missing(provider);
+
+    if let Some(store) = store {
+        match store.get(provider) {
+            Ok(Some(key)) if !key.trim().is_empty() => {
+                status.configured = true;
+                status.source = Some(CredentialSource::Stored);
+            }
+            Ok(_) => {}
+            Err(error) => status.error = Some(error.to_string()),
+        }
+    }
+
+    if !status.configured
+        && std::env::var(env_var)
+            .ok()
+            .is_some_and(|value| !value.trim().is_empty())
+    {
+        status.configured = true;
+        status.source = Some(CredentialSource::Environment);
+    }
+
+    status
+}
+
 /// A JSON-backed credential store.
 #[derive(Debug, Clone)]
 pub struct AuthStore {
@@ -301,6 +431,22 @@ mod tests {
         let store = AuthStore::new(directory.path().join("auth.json"));
         assert_eq!(store.get("deepseek").unwrap(), None);
         assert!(store.list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn status_reports_the_source_without_the_key() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = AuthStore::new(directory.path().join("auth.json"));
+        let missing = auth_status(Some(&store), "gemini");
+        assert!(!missing.configured);
+        assert_eq!(missing.source, None);
+
+        store.set("gemini", "sk-secret").unwrap();
+        let stored = auth_status(Some(&store), "gemini");
+        assert!(stored.configured);
+        assert_eq!(stored.source, Some(CredentialSource::Stored));
+        assert!(!format!("{stored:?}").contains("sk-secret"));
+        assert!(!stored.label().contains("sk-secret"));
     }
 
     #[test]

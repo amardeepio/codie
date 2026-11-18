@@ -18,9 +18,8 @@ use serde_json::{Map, Value, json};
 use tokio_util::sync::CancellationToken;
 
 use crate::model::{
-    Compat, DEFAULT_HTTP_REFERER, DEFAULT_X_TITLE, HeaderMap, MaxTokensField, Model, ModelCost,
-    PROVIDER_DEEPSEEK, PROVIDER_GEMINI, PROVIDER_OPENROUTER, ThinkingFormat, builtin_models,
-    fallback_model, provider_base_url,
+    Compat, HeaderMap, MaxTokensField, Model, ModelCost, PROVIDER_DEEPSEEK, PROVIDER_GEMINI,
+    PROVIDER_OPENROUTER, ThinkingFormat, fallback_model,
 };
 use crate::record::Recorder;
 use crate::redact::{redact_text, redacted_headers};
@@ -75,18 +74,9 @@ impl OpenAiProvider {
     /// (`SPEC-PROV-001` provider differences).
     #[must_use]
     pub fn deepseek(api_key: impl Into<String>) -> Self {
-        let models = builtin_models()
-            .into_iter()
-            .filter(|model| model.provider == PROVIDER_DEEPSEEK)
-            .collect();
-        Self::new(
-            PROVIDER_DEEPSEEK,
-            provider_base_url(PROVIDER_DEEPSEEK),
-            api_key,
-            models,
-            Compat::deepseek(),
-            HeaderMap::new(),
-        )
+        let spec =
+            crate::provider::find(PROVIDER_DEEPSEEK).expect("the DeepSeek provider is registered");
+        Self::from_spec(spec, api_key)
     }
 
     /// Creates an OpenRouter provider with `openrouter/auto` as its model.
@@ -95,21 +85,9 @@ impl OpenAiProvider {
     /// here; callers can override them through [`OpenAiProvider::new`].
     #[must_use]
     pub fn openrouter(api_key: impl Into<String>) -> Self {
-        let models = builtin_models()
-            .into_iter()
-            .filter(|model| model.provider == PROVIDER_OPENROUTER)
-            .collect();
-        let mut headers = HeaderMap::new();
-        headers.insert("HTTP-Referer".to_owned(), DEFAULT_HTTP_REFERER.to_owned());
-        headers.insert("X-Title".to_owned(), DEFAULT_X_TITLE.to_owned());
-        Self::new(
-            PROVIDER_OPENROUTER,
-            provider_base_url(PROVIDER_OPENROUTER),
-            api_key,
-            models,
-            Compat::openrouter(),
-            headers,
-        )
+        let spec = crate::provider::find(PROVIDER_OPENROUTER)
+            .expect("the OpenRouter provider is registered");
+        Self::from_spec(spec, api_key)
     }
 
     /// Creates a Google Gemini provider with the bundled model catalog.
@@ -118,17 +96,20 @@ impl OpenAiProvider {
     /// adapter handles SSE framing, retries, tool calls, and usage.
     #[must_use]
     pub fn gemini(api_key: impl Into<String>) -> Self {
-        let models = builtin_models()
-            .into_iter()
-            .filter(|model| model.provider == PROVIDER_GEMINI)
-            .collect();
+        let spec =
+            crate::provider::find(PROVIDER_GEMINI).expect("the Gemini provider is registered");
+        Self::from_spec(spec, api_key)
+    }
+
+    /// Creates a provider from its registry declaration.
+    fn from_spec(spec: &crate::provider::ProviderSpec, api_key: impl Into<String>) -> Self {
         Self::new(
-            PROVIDER_GEMINI,
-            provider_base_url(PROVIDER_GEMINI),
+            spec.id,
+            spec.base_url,
             api_key,
-            models,
-            Compat::gemini(),
-            HeaderMap::new(),
+            (spec.models)(),
+            (spec.compat)(),
+            (spec.headers)(),
         )
     }
 
@@ -232,9 +213,11 @@ impl OpenAiProvider {
         // `RequestBuilder::json` installs `Content-Type: application/json`;
         // adding it again here would send a duplicate header.
         let mut request = request
-            .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Accept", "text/event-stream")
             .header("User-Agent", format!("codie/{}", codie_core::VERSION));
+        if !self.api_key.trim().is_empty() {
+            request = request.header("Authorization", format!("Bearer {}", self.api_key));
+        }
 
         if self.provider_id.eq_ignore_ascii_case(PROVIDER_OPENROUTER)
             && let Some(session_id) = session_id.filter(|value| !value.is_empty())

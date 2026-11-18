@@ -858,10 +858,12 @@ fn draw_footer(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
             Style::default().fg(context_color(percent, app.context_window, &palette)),
         ));
     }
-    parts.push((
-        app.footer.model.clone(),
-        Style::default().fg(palette.secondary),
-    ));
+    let model = if app.footer.provider.is_empty() {
+        app.footer.model.clone()
+    } else {
+        format!("{}/{}", app.footer.provider, app.footer.model)
+    };
+    parts.push((model, Style::default().fg(palette.secondary)));
     parts.push((
         app.footer.thinking.clone(),
         Style::default().fg(palette.muted),
@@ -909,8 +911,13 @@ fn draw_footer(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         used += width;
     }
     if spans.is_empty() {
+        let model = if app.footer.provider.is_empty() {
+            app.footer.model.clone()
+        } else {
+            format!("{}/{}", app.footer.provider, app.footer.model)
+        };
         spans.push(Span::styled(
-            truncate(&app.footer.model, available),
+            truncate(&model, available),
             Style::default().fg(palette.secondary),
         ));
     }
@@ -1628,6 +1635,10 @@ fn draw_overlay(frame: &mut Frame<'_>, area: Rect, overlay: &Overlay, app: &App)
                 "/debug             print diagnostics",
                 "/update            install a newer release",
                 "/theme [name]      choose a theme",
+                "/connect [provider] add or replace an API key",
+                "/provider [id]     switch provider",
+                "/logout [provider] remove a stored API key",
+                "/auth              show credential status",
                 "/model [id]        change the model",
                 "/thinking [level]  change reasoning effort",
                 "/compact [note]    compact the context",
@@ -1666,6 +1677,24 @@ fn draw_overlay(frame: &mut Frame<'_>, area: Rect, overlay: &Overlay, app: &App)
                 .join("\n"),
         ),
         Overlay::List(_) => (" list ", String::new()),
+        Overlay::Connect(connect) => {
+            let key = truncate(&connect.display(), 64);
+            let body = match &connect.phase {
+                crate::app::ConnectPhase::Editing => format!(
+                    "Provider: {} ({})\n\nPaste the API key below. It is stored only after the provider accepts it.\n\n  {key}\n\nEnter check · Ctrl+V paste · Ctrl+R reveal · Esc cancel",
+                    connect.provider_name, connect.provider
+                ),
+                crate::app::ConnectPhase::Checking => format!(
+                    "Provider: {} ({})\n\nChecking the key with {}…\n\nEsc cancel",
+                    connect.provider_name, connect.provider, connect.provider_name
+                ),
+                crate::app::ConnectPhase::Error(message) => format!(
+                    "Provider: {} ({})\n\n{message}\n\nEnter edit and retry · Ctrl+S save without checking · Esc cancel",
+                    connect.provider_name, connect.provider
+                ),
+            };
+            (" connect provider ", body)
+        }
         Overlay::Usage => (" usage ", usage_body(app)),
         Overlay::Notice { title, body, ok } => (
             title.as_str(),
@@ -2277,6 +2306,20 @@ mod tests {
             ..Footer::default()
         };
         app
+    }
+
+    #[test]
+    #[spec("TUI-035")]
+    fn spec_tui_035_connect_overlay_never_renders_a_masked_key() {
+        let mut app = app();
+        let mut connect = crate::app::ConnectState::new("openrouter");
+        connect.input = "sk-or-very-secret".to_owned();
+        app.overlay = Some(Overlay::Connect(connect));
+
+        let text = buffer(&mut app);
+        assert!(text.contains("connect provider"), "{text}");
+        assert!(text.contains('•'), "{text}");
+        assert!(!text.contains("sk-or-very-secret"), "{text}");
     }
 
     #[test]

@@ -11,11 +11,29 @@ that major series, with migrations applied on read.
 
 ### Added
 
-- Nothing yet.
+- Static provider registry: provider identity, environment variable, base URL, default model, compatibility,
+  headers, bundled models, catalog kind, and key-probe kind now live in `crates/codie-ai/src/provider/`. The CLI,
+  TUI, auth commands, model picker, and probes discover providers from this registry.
+- Generic OpenAI-compatible model catalog for `CatalogKind::OpenAiModels`: per-provider `GET /models` refresh,
+  ETag caching under `<provider>-models.json`, chat-model filtering, background refresh when a key is available,
+  stale-on-failure behavior, and curated-first merging.
+- Provider support for OpenAI, Groq, Cerebras, Mistral, xAI, Together AI, DeepInfra, Fireworks AI, Moonshot AI,
+  Z.AI, NVIDIA NIM, Nebius, SambaNova, Novita AI, Alibaba DashScope, Baseten, Requesty, OpenCode, OpenCode Go,
+  Ollama, LM Studio, and vLLM. Each includes curated coding models and a live `/models` catalog.
+- Keyless local providers: Ollama, LM Studio, and vLLM start without credentials and switch without a key prompt.
+- The TUI now reopens the connect overlay on a provider `401`/`403`, refuses provider switches while a run is
+  streaming, and persists the last provider/model in `state.json`.
+- TUI provider connect flow: `/connect` and `/login` open a picker and a masked API-key field, `/logout` removes a
+  stored key, and `/auth` reports credential status. `/provider` now shows connection state and opens the connect
+  flow for unconfigured providers.
+- First interactive run without a credential opens the TUI on the connect overlay instead of exiting.
+- `codie auth verify <provider>` and `codie auth status --verify` check a stored or environment key.
 
 ### Changed
 
-- Nothing yet.
+- `codie auth login` now checks the key with the provider before storing it. A rejected key leaves any existing
+  credential untouched. Use `--no-verify` for offline or proxy endpoints.
+- The footer shows `provider/model`, and provider switches persist the provider in the session model change.
 
 ### Fixed
 
@@ -27,7 +45,8 @@ that major series, with migrations applied on read.
 
 ### Security
 
-- Nothing yet.
+- Keys entered through the TUI are masked, never rendered in the transcript, and never logged. Probe errors redact
+  the key before display.
 
 ## [0.9.2] - 2026-11-17
 

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use codie_core::ThinkingLevel;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// The per-user configuration file.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -41,8 +41,12 @@ pub(crate) struct Config {
     pub(crate) session_dir: PathBuf,
     /// Default provider id.
     pub(crate) default_provider: String,
+    /// True when the provider came from the environment or `config.toml`.
+    pub(crate) provider_configured: bool,
     /// Default model id.
     pub(crate) default_model: Option<String>,
+    /// True when the model came from the environment or `config.toml`.
+    pub(crate) model_configured: bool,
     /// Default thinking level.
     pub(crate) thinking: ThinkingLevel,
     /// Maximum assistant requests per run.
@@ -55,7 +59,52 @@ pub(crate) struct Config {
     pub(crate) extensions_disabled: Vec<String>,
 }
 
+/// The provider and model last selected in the TUI.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub(crate) struct SelectionState {
+    /// Last provider identifier.
+    pub(crate) provider: Option<String>,
+    /// Last model identifier.
+    pub(crate) model: Option<String>,
+}
+
 impl Config {
+    /// Path to the TUI selection state.
+    #[must_use]
+    pub(crate) fn state_path(&self) -> PathBuf {
+        self.data_dir.join("state.json")
+    }
+
+    /// Loads the last TUI selection, returning defaults when it is absent or
+    /// malformed. Selection state is a convenience, never a startup failure.
+    #[must_use]
+    pub(crate) fn load_selection(&self) -> SelectionState {
+        std::fs::read_to_string(self.state_path())
+            .ok()
+            .and_then(|data| serde_json::from_str(&data).ok())
+            .unwrap_or_default()
+    }
+
+    /// Saves the last TUI selection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the state file cannot be written.
+    pub(crate) fn save_selection(&self, provider: &str, model: &str) -> Result<()> {
+        let path = self.state_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("cannot create {}", parent.display()))?;
+        }
+        let state = SelectionState {
+            provider: Some(provider.to_owned()),
+            model: Some(model.to_owned()),
+        };
+        let data = serde_json::to_vec_pretty(&state)?;
+        std::fs::write(&path, data).with_context(|| format!("cannot write {}", path.display()))?;
+        Ok(())
+    }
+
     /// Loads configuration from environment variables and `config.toml`.
     ///
     /// Precedence is CLI (applied later) > environment > file > default.
@@ -106,15 +155,27 @@ impl Config {
             );
         }
 
+        let provider_env = env_string("CODIE_PROVIDER");
+        let provider_file = file.default_provider.clone();
+        let provider_configured = provider_env.is_some() || provider_file.is_some();
+        let default_provider = provider_env
+            .or(provider_file)
+            .unwrap_or_else(|| "deepseek".to_owned());
+
+        let model_env = env_string("CODIE_MODEL");
+        let model_file = file.default_model.clone();
+        let model_configured = model_env.is_some() || model_file.is_some();
+        let default_model = model_env.or(model_file);
+
         Ok(Self {
             data_dir,
             config_dir,
             cache_dir,
             session_dir,
-            default_provider: env_string("CODIE_PROVIDER")
-                .or(file.default_provider)
-                .unwrap_or_else(|| "deepseek".to_owned()),
-            default_model: env_string("CODIE_MODEL").or(file.default_model),
+            default_provider,
+            provider_configured,
+            default_model,
+            model_configured,
             thinking,
             max_turns,
             base_url: env_string("CODIE_BASE_URL").or(file.base_url),
@@ -194,13 +255,28 @@ mod tests {
             cache_dir: PathBuf::from("/tmp/c"),
             session_dir,
             default_provider: "deepseek".into(),
+            provider_configured: false,
             default_model: None,
+            model_configured: false,
             thinking: ThinkingLevel::Medium,
             max_turns: 200,
             base_url: None,
             allow: Vec::new(),
             extensions_disabled: Vec::new(),
         }
+    }
+
+    #[test]
+    fn selection_state_round_trips() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = test_config(directory.path().join("sessions"));
+        let mut config = config;
+        config.data_dir = directory.path().to_path_buf();
+
+        config.save_selection("groq", "qwen/qwen3.8-27b").unwrap();
+        let state = config.load_selection();
+        assert_eq!(state.provider.as_deref(), Some("groq"));
+        assert_eq!(state.model.as_deref(), Some("qwen/qwen3.8-27b"));
     }
 
     #[test]

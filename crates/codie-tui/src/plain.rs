@@ -7,6 +7,7 @@ use std::io::Write;
 use std::sync::Arc;
 
 use anyhow::Result;
+use codie_ai::{AuthStore, auth_status, provider_env_var};
 use codie_core::{Agent, AgentConfig, AgentEvent, Content, Message, RunStatus, Toolbox};
 use codie_prompt::{PromptInput, build_system_message, load_project_context, load_project_memory};
 use codie_session::Session;
@@ -27,6 +28,12 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
         Some(hooks) => Agent::with_hooks(Arc::clone(&options.client), toolbox.clone(), hooks),
         None => Agent::new(Arc::clone(&options.client), toolbox.clone()),
     });
+
+    if options.startup_connect {
+        println!(
+            "No provider is connected. Run `/connect` here for instructions, or run `codie auth login <provider>`."
+        );
+    }
 
     let mut history = options.history.clone();
     let mut last_assistant = String::new();
@@ -154,7 +161,7 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
                 }
                 Command::Help | Command::Hotkeys => {
                     println!(
-                        "/help /quit /stop /usage /new /session /tree /fork /clone /name /export [path] /export html [path] /copy /debug /update /theme /provider [id] /model [id] /thinking [level] /compact /skill:<name> /template:<name> /reload /init"
+                        "/help /quit /stop /usage /new /session /tree /fork /clone /name /export [path] /export html [path] /copy /debug /update /theme /connect [provider] /provider [id] /logout [provider] /auth /model [id] /thinking [level] /compact /skill:<name> /template:<name> /reload /init"
                     )
                 }
                 Command::Theme(argument) => match argument {
@@ -192,6 +199,34 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
                         }
                     }
                 },
+                Command::Connect(argument) => {
+                    let provider = argument.unwrap_or_else(|| options.model.provider.clone());
+                    println!(
+                        "Enter the key for {provider} in the full-screen interface, or run `codie auth login {provider}`."
+                    );
+                }
+                Command::Logout(argument) => {
+                    let provider = argument.unwrap_or_else(|| options.model.provider.clone());
+                    let store = AuthStore::new(options.auth_path.clone());
+                    match store.remove(&provider) {
+                        Ok(true) => println!("Removed the stored API key for {provider}."),
+                        Ok(false) => println!("No stored API key for {provider}."),
+                        Err(error) => println!("Cannot remove the API key: {error}"),
+                    }
+                }
+                Command::Auth => {
+                    let store = AuthStore::new(options.auth_path.clone());
+                    for provider in &options.providers {
+                        let status = auth_status(Some(&store), &provider.id);
+                        let env = provider_env_var(&provider.id);
+                        let suffix = if status.configured {
+                            String::new()
+                        } else {
+                            format!(" · set {env} or run `codie auth login {}`", provider.id)
+                        };
+                        println!("{}: {}{suffix}", provider.name, status.label());
+                    }
+                }
                 Command::Model(argument) => {
                     if let Some(model) = argument {
                         options.model.model = model;
