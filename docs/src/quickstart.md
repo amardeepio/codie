@@ -21,7 +21,7 @@ irm https://raw.githubusercontent.com/amardeepio/codie/main/install.ps1 | iex
 Pin a specific version explicitly:
 
 ```powershell
-$env:CODIE_VERSION = "0.9.2"
+$env:CODIE_VERSION = "0.9.3"
 irm https://raw.githubusercontent.com/amardeepio/codie/main/install.ps1 | iex
 ```
 
