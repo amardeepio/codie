@@ -41,6 +41,12 @@ pub enum Command {
     Model(Option<String>),
     /// Change or report the provider.
     Provider(Option<String>),
+    /// Connect a provider by entering and checking an API key.
+    Connect(Option<String>),
+    /// Remove a stored API key.
+    Logout(Option<String>),
+    /// Show provider credential status.
+    Auth,
     /// Change or report the thinking level.
     Thinking(Option<String>),
     /// Manual compaction (Phase 3).
@@ -109,8 +115,11 @@ pub fn parse(input: &str) -> Option<Command> {
         "debug" => Command::Debug,
         "update" => Command::Update,
         "theme" => Command::Theme(argument),
-        "model" => Command::Model(argument),
+        "model" | "models" => Command::Model(argument),
         "provider" => Command::Provider(argument),
+        "connect" | "login" => Command::Connect(argument),
+        "logout" => Command::Logout(argument),
+        "auth" => Command::Auth,
         "thinking" => Command::Thinking(argument),
         "compact" => Command::Compact(argument),
         "usage" => Command::Usage,
@@ -146,7 +155,11 @@ pub fn names() -> &'static [&'static str] {
         "/update",
         "/theme",
         "/model",
+        "/models",
         "/provider",
+        "/connect",
+        "/logout",
+        "/auth",
         "/thinking",
         "/compact",
         "/usage",
@@ -179,6 +192,7 @@ mod tests {
             parse("/model openrouter/auto"),
             Some(Command::Model(Some("openrouter/auto".to_owned())))
         );
+        assert_eq!(parse("/models"), Some(Command::Model(None)));
         assert_eq!(parse("/provider"), Some(Command::Provider(None)));
         assert_eq!(
             parse("/provider openrouter"),
@@ -229,6 +243,21 @@ mod tests {
         );
         assert_eq!(parse("/reload"), Some(Command::Reload));
         assert_eq!(parse("/init"), Some(Command::Init));
+    }
+
+    #[test]
+    fn parses_connect_logout_and_auth() {
+        assert_eq!(parse("/connect"), Some(Command::Connect(None)));
+        assert_eq!(
+            parse("/connect openrouter"),
+            Some(Command::Connect(Some("openrouter".to_owned())))
+        );
+        assert_eq!(
+            parse("/login gemini"),
+            Some(Command::Connect(Some("gemini".to_owned())))
+        );
+        assert_eq!(parse("/logout"), Some(Command::Logout(None)));
+        assert_eq!(parse("/auth"), Some(Command::Auth));
     }
 
     #[test]

@@ -8,13 +8,15 @@ use std::sync::atomic::{AtomicI32, Ordering};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
+use codie_ai::provider::{self, CatalogKind};
 use codie_ai::{
-    AuthStore, Model, OpenAiProvider, OpenRouterCatalog, PROVIDER_GEMINI, PROVIDER_OPENROUTER,
-    builtin_models, fallback_model, merge_models, provider_base_url, resolve_key,
+    AuthStore, Model, OpenAiCatalog, OpenRouterCatalog, canonical_provider, fallback_model,
+    merge_models, provider_env_var, resolve_key,
 };
 use codie_core::{
-    Agent, AgentConfig, AgentEvent, ChatClient, Message, ModelRef, RunStatus, StopReason,
-    ThinkingLevel, Tool, Toolbox,
+    Agent, AgentConfig, AgentEvent, AssistantDelta, AssistantEventStream, AssistantMessage,
+    ChatClient, Message, ModelRef, RunStatus, StopReason, StreamOptions, ThinkingLevel, Tool,
+    Toolbox,
 };
 use codie_ext::{ExtensionSet, LoadOptions};
 use codie_prompt::{
@@ -31,7 +33,6 @@ use codie_tui::app::{ProviderChoice, ProviderRuntime};
 use codie_tui::{TuiOptions, TuiRunMode};
 use tokio_util::sync::CancellationToken;
 
-use crate::auth_cmd::env_var;
 use crate::config::{self, Config};
 
 /// Interactive rendering mode.
@@ -261,11 +262,24 @@ pub(crate) async fn run(args: RunArgs, deferred_flags: BTreeMap<String, String>)
         .map_err(anyhow::Error::msg)?;
     let extensions = Arc::new(extensions);
 
-    let provider_id = args
-        .provider
-        .clone()
-        .unwrap_or_else(|| config.default_provider.clone());
-    validate_provider(&provider_id)?;
+    let interactive = !args.print
+        && !matches!(args.mode, OutputMode::Json | OutputMode::Rpc)
+        && std::io::stdin().is_terminal()
+        && (std::io::stdout().is_terminal() || matches!(args.tui_mode, TuiModeArg::Plain));
+
+    let saved = config.load_selection();
+    let requested_provider = args.provider.clone().or_else(|| {
+        if config.provider_configured {
+            None
+        } else {
+            saved
+                .provider
+                .clone()
+                .filter(|provider| provider::find(provider).is_some())
+        }
+    });
+    let provider_id = requested_provider.unwrap_or_else(|| config.default_provider.clone());
+    let mut provider_id = validate_provider(&provider_id)?.to_owned();
 
     let thinking = match args.thinking.as_deref() {
         Some(value) => ThinkingLevel::parse(value)
@@ -273,60 +287,121 @@ pub(crate) async fn run(args: RunArgs, deferred_flags: BTreeMap<String, String>)
         None => config.thinking,
     };
 
+    let base_url_override = args.base_url.clone().or_else(|| config.base_url.clone());
+    let explicit_key_value = args
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|key| !key.is_empty());
+    let explicit_key = explicit_key_value.is_some();
     let store = AuthStore::new(config.auth_path());
-    let key = resolve_key(
-        args.api_key.as_deref(),
+    let mut key = resolve_key(
+        explicit_key_value,
         &store,
         &provider_id,
-        env_var(&provider_id),
-    )
-    .with_context(|| {
-        format!(
-            "no API key for {provider_id}; run `codie auth login {provider_id}` or set {}",
-            env_var(&provider_id)
-        )
-    })?;
+        provider_env_var(&provider_id),
+    );
 
-    let mut provider = match provider_id.as_str() {
-        PROVIDER_OPENROUTER => OpenAiProvider::openrouter(key),
-        PROVIDER_GEMINI => OpenAiProvider::gemini(key),
-        _ => OpenAiProvider::deepseek(key),
+    // When the configured provider has no key but a different provider does,
+    // prefer the connected one so the TUI can start usefully. Explicit
+    // `--provider`, `--model`, and `--api-key` choices are always respected.
+    if interactive
+        && key.is_err()
+        && args.provider.is_none()
+        && args.model.is_none()
+        && !explicit_key
+        && base_url_override.is_none()
+        && let Some((next_provider, next_key)) = first_configured_key(&store, &provider_id)
+    {
+        provider_id = next_provider;
+        key = Ok(next_key);
+    }
+
+    let requires_key = provider::requires_key(&provider_id);
+    let key = match key {
+        Ok(key) => Some(key),
+        Err(_) if !requires_key => Some(String::new()),
+        Err(error) if !interactive => {
+            return Err(anyhow::Error::new(error)).with_context(|| {
+                format!(
+                    "no API key for {provider_id}; run `codie auth login {provider_id}` or set {}",
+                    provider_env_var(&provider_id)
+                )
+            });
+        }
+        Err(_) => None,
     };
-    if let Some(base_url) = args.base_url.clone().or_else(|| config.base_url.clone()) {
+    let connected = key.is_some();
+    let startup_connect = interactive && !connected;
+
+    let spec = provider::find(&provider_id).context("validated provider is not registered")?;
+    let mut provider = provider::build_client(&provider_id, key.clone().unwrap_or_default())
+        .context("validated provider is not buildable")?;
+    if let Some(base_url) = base_url_override.clone() {
         provider = provider.with_base_url(base_url);
     }
 
-    let catalog = (provider_id == PROVIDER_OPENROUTER).then(|| {
-        Arc::new(
-            OpenRouterCatalog::new(config.cache_dir.join("openrouter-models.json")).with_endpoint(
-                format!("{}/models", provider.base_url().trim_end_matches('/')),
-            ),
-        )
-    });
-    let catalog_models = catalog
-        .as_ref()
-        .map(|catalog| catalog.cached_coding_models())
-        .unwrap_or_default();
-    let provider_models = merge_models(
-        builtin_models()
-            .into_iter()
-            .filter(|candidate| candidate.provider.as_ref() == provider_id)
-            .collect(),
-        catalog_models,
-    );
+    let catalog_models = match spec.catalog {
+        CatalogKind::OpenRouter => {
+            let catalog = Arc::new(
+                OpenRouterCatalog::new(config.cache_dir.join("openrouter-models.json"))
+                    .with_endpoint(format!(
+                        "{}/models",
+                        provider.base_url().trim_end_matches('/')
+                    )),
+            );
+            let models = catalog.cached_coding_models();
+            Arc::clone(&catalog).spawn_refresh();
+            models
+        }
+        CatalogKind::OpenAiModels => {
+            let mut catalog = OpenAiCatalog::new(
+                *spec,
+                config.cache_dir.join(format!("{}-models.json", spec.id)),
+            )
+            .with_endpoint(format!(
+                "{}/models",
+                provider.base_url().trim_end_matches('/')
+            ));
+            if let Some(key) = &key {
+                catalog = catalog.with_api_key(key.clone());
+            }
+            let models = catalog.cached_models();
+            if connected {
+                Arc::new(catalog).spawn_refresh();
+            }
+            models
+        }
+        CatalogKind::Bundled => Vec::new(),
+    };
+    let provider_models = merge_models((spec.models)(), catalog_models);
     let provider = provider.with_models(provider_models.clone());
 
-    let switchable = Arc::new(SwitchableClient::new(Arc::new(provider)));
+    let initial_client: Arc<dyn ChatClient> = if connected {
+        Arc::new(provider)
+    } else {
+        Arc::new(DisconnectedClient::new(provider_id.clone()))
+    };
+    let switchable = Arc::new(SwitchableClient::new(initial_client));
 
     let configured_model = config
         .default_model
         .clone()
         .filter(|id| provider_models.iter().any(|model| &model.id == id));
+    let saved_model = if config.model_configured {
+        None
+    } else {
+        saved
+            .model
+            .clone()
+            .filter(|id| provider_models.iter().any(|model| &model.id == id))
+    };
     let model_id = args
         .model
         .clone()
         .or(configured_model)
-        .unwrap_or_else(|| default_model(&provider_id).to_owned());
+        .or(saved_model)
+        .unwrap_or_else(|| spec.default_model.to_owned());
     let model = provider_models
         .iter()
         .find(|candidate| candidate.id == model_id)
@@ -368,21 +443,29 @@ pub(crate) async fn run(args: RunArgs, deferred_flags: BTreeMap<String, String>)
     let models = model_choices(&provider_models);
     let models_loader = {
         let cache_dir = config.cache_dir.clone();
-        let base_url = args.base_url.clone().or_else(|| config.base_url.clone());
+        let base_url = base_url_override.clone();
         let loader = move |provider: &str| -> Vec<codie_tui::app::ModelChoice> {
-            let curated = builtin_models()
-                .into_iter()
-                .filter(|candidate| candidate.provider.as_ref() == provider)
-                .collect::<Vec<_>>();
-            if provider == PROVIDER_OPENROUTER {
-                let base_url = base_url
-                    .clone()
-                    .unwrap_or_else(|| provider_base_url(PROVIDER_OPENROUTER).to_owned());
-                let catalog = OpenRouterCatalog::new(cache_dir.join("openrouter-models.json"))
-                    .with_endpoint(format!("{}/models", base_url.trim_end_matches('/')));
-                model_choices(&merge_models(curated, catalog.cached_coding_models()))
-            } else {
-                model_choices(&curated)
+            let Some(spec) = provider::find(provider) else {
+                return Vec::new();
+            };
+            let curated = (spec.models)();
+            let endpoint_base = base_url.clone().unwrap_or_else(|| spec.base_url.to_owned());
+            let endpoint = format!("{}/models", endpoint_base.trim_end_matches('/'));
+            match spec.catalog {
+                CatalogKind::OpenRouter => {
+                    let catalog = OpenRouterCatalog::new(cache_dir.join("openrouter-models.json"))
+                        .with_endpoint(endpoint);
+                    model_choices(&merge_models(curated, catalog.cached_coding_models()))
+                }
+                CatalogKind::OpenAiModels => {
+                    let catalog = OpenAiCatalog::new(
+                        *spec,
+                        cache_dir.join(format!("{}-models.json", spec.id)),
+                    )
+                    .with_endpoint(endpoint);
+                    model_choices(&merge_models(curated, catalog.cached_models()))
+                }
+                CatalogKind::Bundled => model_choices(&curated),
             }
         };
         Some(Arc::new(loader)
@@ -391,55 +474,70 @@ pub(crate) async fn run(args: RunArgs, deferred_flags: BTreeMap<String, String>)
             >)
     };
 
-    let providers = vec![
-        ProviderChoice {
-            id: "deepseek".to_owned(),
-            name: "DeepSeek".to_owned(),
-        },
-        ProviderChoice {
-            id: PROVIDER_OPENROUTER.to_owned(),
-            name: "OpenRouter".to_owned(),
-        },
-        ProviderChoice {
-            id: PROVIDER_GEMINI.to_owned(),
-            name: "Gemini".to_owned(),
-        },
-    ];
+    let providers = provider::all()
+        .iter()
+        .map(|spec| ProviderChoice {
+            id: spec.id.to_owned(),
+            name: spec.name.to_owned(),
+        })
+        .collect::<Vec<_>>();
     let switch_provider = {
         let switchable = Arc::clone(&switchable);
         let auth_path = config.auth_path();
         let cache_dir = config.cache_dir.clone();
         let api_key = args.api_key.clone();
-        let base_url = args.base_url.clone().or_else(|| config.base_url.clone());
+        let explicit_key_provider = explicit_key.then(|| provider_id.clone());
+        let base_url = base_url_override.clone();
         let switch = move |provider: &str| -> Result<ProviderRuntime, String> {
-            validate_provider(provider).map_err(|error| format!("{error:#}"))?;
+            let provider = validate_provider(provider).map_err(|error| format!("{error:#}"))?;
+            let spec = provider::find(provider)
+                .ok_or_else(|| format!("provider `{provider}` is not registered"))?;
             let store = AuthStore::new(&auth_path);
-            let key = resolve_key(api_key.as_deref(), &store, provider, env_var(provider))
-                .map_err(|error| format!("{error:#}"))?;
-            let mut client = match provider {
-                PROVIDER_OPENROUTER => OpenAiProvider::openrouter(key),
-                PROVIDER_GEMINI => OpenAiProvider::gemini(key),
-                _ => OpenAiProvider::deepseek(key),
+            let explicit = explicit_key_provider
+                .as_deref()
+                .filter(|configured| *configured == provider)
+                .and(api_key.as_deref());
+            let key = match resolve_key(explicit, &store, provider, spec.env_var) {
+                Ok(key) => key,
+                Err(_) if !spec.requires_key => String::new(),
+                Err(error) => return Err(format!("{error:#}")),
             };
+            let mut client = provider::build_client(provider, key.clone())
+                .ok_or_else(|| format!("provider `{provider}` is not buildable"))?;
             if let Some(base_url) = &base_url {
                 client = client.with_base_url(base_url.clone());
             }
-            let mut models = builtin_models()
-                .into_iter()
-                .filter(|candidate| candidate.provider.as_ref() == provider)
-                .collect::<Vec<_>>();
-            if provider == PROVIDER_OPENROUTER {
-                let catalog =
-                    OpenRouterCatalog::new(cache_dir.join("openrouter-models.json")).with_endpoint(
-                        format!("{}/models", client.base_url().trim_end_matches('/')),
-                    );
-                let cached = catalog.cached_coding_models();
-                Arc::new(catalog).spawn_refresh();
-                models = merge_models(models, cached);
+            let mut models = (spec.models)();
+            match spec.catalog {
+                CatalogKind::OpenRouter => {
+                    let catalog = OpenRouterCatalog::new(cache_dir.join("openrouter-models.json"))
+                        .with_endpoint(format!(
+                            "{}/models",
+                            client.base_url().trim_end_matches('/')
+                        ));
+                    let cached = catalog.cached_coding_models();
+                    Arc::new(catalog).spawn_refresh();
+                    models = merge_models(models, cached);
+                }
+                CatalogKind::OpenAiModels => {
+                    let catalog = OpenAiCatalog::new(
+                        *spec,
+                        cache_dir.join(format!("{}-models.json", spec.id)),
+                    )
+                    .with_endpoint(format!(
+                        "{}/models",
+                        client.base_url().trim_end_matches('/')
+                    ))
+                    .with_api_key(key);
+                    let cached = catalog.cached_models();
+                    Arc::new(catalog).spawn_refresh();
+                    models = merge_models(models, cached);
+                }
+                CatalogKind::Bundled => {}
             }
             switchable.set(Arc::new(client.with_models(models.clone())));
             Ok(ProviderRuntime {
-                default_model: default_model(provider).to_owned(),
+                default_model: spec.default_model.to_owned(),
                 models: model_choices(&models),
             })
         };
@@ -452,17 +550,6 @@ pub(crate) async fn run(args: RunArgs, deferred_flags: BTreeMap<String, String>)
         bail!("--max-turns must be greater than zero");
     }
 
-    // Refresh the catalog for every mode. The task never blocks the run and
-    // never fails it (`PROV-021`).
-    if let Some(catalog) = &catalog {
-        Arc::clone(catalog).spawn_refresh();
-    }
-
-    let interactive = !args.print
-        && !matches!(args.mode, OutputMode::Json | OutputMode::Rpc)
-        && std::io::stdin().is_terminal()
-        && (std::io::stdout().is_terminal() || matches!(args.tui_mode, TuiModeArg::Plain));
-
     if interactive {
         let session = open_session(&args, &cwd, &session_dir)?;
         let history = session
@@ -470,6 +557,12 @@ pub(crate) async fn run(args: RunArgs, deferred_flags: BTreeMap<String, String>)
             .map(Session::projection)
             .unwrap_or_default();
         let initial_prompt = (!args.message.is_empty()).then(|| args.message.join(" "));
+        let persist_selection = {
+            let config = config.clone();
+            Some(Arc::new(move |provider: &str, model: &str| {
+                let _ = config.save_selection(provider, model);
+            }) as Arc<dyn Fn(&str, &str) + Send + Sync>)
+        };
         let options = TuiOptions {
             client: Arc::clone(&provider),
             cwd: cwd.clone(),
@@ -500,6 +593,11 @@ pub(crate) async fn run(args: RunArgs, deferred_flags: BTreeMap<String, String>)
             append: append.clone(),
             customizations: customizations.clone(),
             extensions: Arc::clone(&extensions),
+            auth_path: config.auth_path(),
+            base_url: base_url_override,
+            explicit_key_provider: explicit_key.then(|| provider_id.clone()),
+            startup_connect,
+            persist_selection,
         };
         return codie_tui::run(options).await;
     }
@@ -914,19 +1012,26 @@ fn ensure_system_message(
     Ok(())
 }
 
-fn validate_provider(provider: &str) -> Result<()> {
-    match provider {
-        "deepseek" | "openrouter" | "gemini" => Ok(()),
-        other => bail!("unsupported provider `{other}`; expected deepseek, openrouter, or gemini"),
-    }
+fn validate_provider(provider: &str) -> Result<&'static str> {
+    canonical_provider(provider).ok_or_else(|| {
+        anyhow::anyhow!(
+            "unsupported provider `{provider}`; expected {}",
+            provider::ids().join(", ")
+        )
+    })
 }
 
-fn default_model(provider: &str) -> &'static str {
-    match provider {
-        PROVIDER_OPENROUTER => "openrouter/auto",
-        PROVIDER_GEMINI => "gemini-4-hydrogen",
-        _ => "deepseek-flash",
-    }
+/// Finds the first other provider with a usable stored or environment key.
+fn first_configured_key(store: &AuthStore, preferred: &str) -> Option<(String, String)> {
+    provider::all()
+        .iter()
+        .filter(|spec| spec.requires_key && !spec.id.eq_ignore_ascii_case(preferred))
+        .find_map(|spec| {
+            resolve_key(None, store, spec.id, spec.env_var)
+                .ok()
+                .filter(|key| !key.is_empty())
+                .map(|key| (spec.id.to_owned(), key))
+        })
 }
 
 /// A chat client whose inner provider can be swapped at runtime.
@@ -965,6 +1070,42 @@ impl ChatClient for SwitchableClient {
             .unwrap_or_else(|error| error.into_inner())
             .clone();
         client.stream(context, options)
+    }
+}
+
+/// A client used before the TUI has a usable provider credential.
+///
+/// A submitted prompt fails immediately with an actionable message instead of
+/// sending an empty bearer token. Connecting a provider replaces this client
+/// through [`SwitchableClient`].
+struct DisconnectedClient {
+    provider: String,
+}
+
+impl DisconnectedClient {
+    fn new(provider: String) -> Self {
+        Self { provider }
+    }
+}
+
+impl ChatClient for DisconnectedClient {
+    fn stream(&self, _context: &[Message], options: &StreamOptions) -> AssistantEventStream {
+        let (stream, sender) = AssistantEventStream::channel(1);
+        let mut message = AssistantMessage::partial(
+            options.model.api.clone(),
+            options.model.provider.clone(),
+            options.model.model.clone(),
+        );
+        message.stop_reason = StopReason::Error;
+        message.error_message = Some(format!(
+            "No provider is connected. Run /connect to add an API key for {}.",
+            provider::find(&self.provider).map_or("the provider", |spec| spec.name)
+        ));
+        let _ = sender.try_send(AssistantDelta::Error {
+            reason: StopReason::Error,
+            message,
+        });
+        stream
     }
 }
 

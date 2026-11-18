@@ -20,6 +20,14 @@ struct PtySession {
 
 impl PtySession {
     fn spawn(args: &[&str]) -> Self {
+        Self::spawn_with_key(args, "dummy")
+    }
+
+    fn spawn_unconfigured(args: &[&str]) -> Self {
+        Self::spawn_with_key(args, "")
+    }
+
+    fn spawn_with_key(args: &[&str], key: &str) -> Self {
         let home = TempHome::new().expect("temp home");
         let work = tempfile::tempdir().expect("temp work");
         let pty = native_pty_system();
@@ -36,8 +44,12 @@ impl PtySession {
         for (key, value) in home.envs() {
             command.env(key, value);
         }
-        command.env("DEEPSEEK_API_KEY", "dummy");
-        command.env("OPENROUTER_API_KEY", "");
+        for provider in codie_ai::provider::all() {
+            command.env(provider.env_var, "");
+        }
+        command.env("DEEPSEEK_API_KEY", key);
+        command.env("CODIE_PROVIDER", "deepseek");
+        command.env("CODIE_MODEL", "deepseek-flash");
         command.env("TERM", "xterm-256color");
         command.args(["--no-session", "--cwd"]);
         command.arg(work.path());
@@ -152,6 +164,28 @@ fn spec_tui_009_terminal_restored_on_signals() {
             "the cursor was not restored: {text:?}"
         );
     }
+}
+
+#[test]
+#[spec("TUI-033")]
+fn spec_tui_033_first_run_opens_the_connect_overlay() {
+    let mut session = PtySession::spawn_unconfigured(&[]);
+    assert!(
+        session.wait_for("connect provider", Duration::from_secs(10)),
+        "the connect overlay did not open: {:?}",
+        session.text()
+    );
+    assert!(
+        session.text().contains("DeepSeek"),
+        "the selected provider is missing: {:?}",
+        session.text()
+    );
+
+    session.write("\u{1b}");
+    std::thread::sleep(Duration::from_millis(300));
+    session.write("/quit\r");
+    let code = session.wait(Duration::from_secs(10));
+    assert_eq!(code, Some(0));
 }
 
 #[test]

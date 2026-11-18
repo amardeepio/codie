@@ -2,9 +2,8 @@
 
 use anyhow::Result;
 use clap::Args;
-use codie_ai::{
-    OpenRouterCatalog, PROVIDER_OPENROUTER, builtin_models, merge_models, provider_base_url,
-};
+use codie_ai::provider::{self, CatalogKind};
+use codie_ai::{OpenAiCatalog, OpenRouterCatalog, merge_models};
 
 use crate::config::Config;
 
@@ -19,34 +18,52 @@ pub(crate) struct ModelsArgs {
     pub(crate) json: bool,
 }
 
-/// Lists the bundled catalog plus cached OpenRouter coding models.
+/// Lists the bundled catalog plus every cached remote provider catalog.
 pub(crate) fn run(args: ModelsArgs, config: &Config) -> Result<()> {
-    let openrouter = args
+    let selected = args
         .provider
         .as_deref()
-        .is_none_or(|provider| provider == PROVIDER_OPENROUTER);
+        .and_then(provider::find)
+        .into_iter()
+        .collect::<Vec<_>>();
+    let specs = if selected.is_empty() && args.provider.is_none() {
+        provider::all().iter().collect::<Vec<_>>()
+    } else {
+        selected
+    };
 
     let mut catalog_stale = false;
-    let mut models = builtin_models();
-    if openrouter {
-        let base_url = config
+    let mut models = Vec::new();
+    for spec in specs {
+        let mut provider_models = (spec.models)();
+        let endpoint_base = config
             .base_url
             .clone()
-            .unwrap_or_else(|| provider_base_url(PROVIDER_OPENROUTER).to_owned());
-        let catalog = OpenRouterCatalog::new(config.cache_dir.join("openrouter-models.json"))
-            .with_endpoint(format!("{}/models", base_url.trim_end_matches('/')));
-        catalog_stale = catalog.has_stale_cache();
-        models = merge_models(models, catalog.cached_coding_models());
-    }
+            .filter(|_| args.provider.is_some() || spec.catalog == CatalogKind::OpenRouter)
+            .unwrap_or_else(|| spec.base_url.to_owned());
+        let endpoint = format!("{}/models", endpoint_base.trim_end_matches('/'));
 
-    let models = models
-        .into_iter()
-        .filter(|model| {
-            args.provider
-                .as_ref()
-                .is_none_or(|provider| model.provider == provider.as_str())
-        })
-        .collect::<Vec<_>>();
+        match spec.catalog {
+            CatalogKind::OpenRouter => {
+                let catalog =
+                    OpenRouterCatalog::new(config.cache_dir.join("openrouter-models.json"))
+                        .with_endpoint(endpoint);
+                catalog_stale |= catalog.has_stale_cache();
+                provider_models = merge_models(provider_models, catalog.cached_coding_models());
+            }
+            CatalogKind::OpenAiModels => {
+                let catalog = OpenAiCatalog::new(
+                    *spec,
+                    config.cache_dir.join(format!("{}-models.json", spec.id)),
+                )
+                .with_endpoint(endpoint);
+                catalog_stale |= catalog.has_stale_cache();
+                provider_models = merge_models(provider_models, catalog.cached_models());
+            }
+            CatalogKind::Bundled => {}
+        }
+        models.extend(provider_models);
+    }
 
     if args.json {
         let values = models
@@ -94,9 +111,9 @@ pub(crate) fn run(args: ModelsArgs, config: &Config) -> Result<()> {
         );
     }
 
-    if openrouter && catalog_stale {
+    if catalog_stale {
         eprintln!(
-            "hint: the OpenRouter catalog cache is stale; run `codie` once to refresh it in the background"
+            "hint: a remote model catalog cache is stale; run `codie` once to refresh it in the background"
         );
     }
     Ok(())

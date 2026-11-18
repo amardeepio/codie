@@ -101,9 +101,10 @@ async fn main() -> ExitCode {
     }
 
     let result = match cli.command {
-        Some(Commands::Auth(args)) => {
-            config::Config::load().and_then(|config| auth_cmd::run(args, &config))
-        }
+        Some(Commands::Auth(args)) => match config::Config::load() {
+            Ok(config) => auth_cmd::run(args, &config).await,
+            Err(error) => Err(error),
+        },
         Some(Commands::Models(args)) => config::Config::load()
             .and_then(|config| models_cmd::run(args, &config))
             .map(|()| 0),

@@ -146,6 +146,21 @@ fn spec_prov_033_errors_never_include_the_key() {
     assert!(!debug.contains(secret));
 }
 
+#[spec("PROV-036")]
+#[test]
+fn keyless_local_providers_are_usable_without_a_key() {
+    let status = codie_ai::auth_status(None, "ollama");
+    assert!(
+        !status.configured,
+        "keyless providers are not configured credentials"
+    );
+    assert!(status.usable(), "keyless providers are still usable");
+    assert_eq!(status.source, Some(codie_ai::CredentialSource::Keyless));
+    assert_eq!(status.label(), "no key required");
+    assert!(codie_ai::provider::requires_key("deepseek"));
+    assert!(!codie_ai::provider::requires_key("lmstudio"));
+}
+
 #[test]
 fn empty_values_are_absent() {
     let directory = tempfile::tempdir().expect("temp dir");

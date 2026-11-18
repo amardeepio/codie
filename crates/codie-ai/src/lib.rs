@@ -21,12 +21,17 @@ pub mod auth;
 pub mod catalog;
 pub mod model;
 pub mod openai;
+pub mod openai_catalog;
+pub mod probe;
+pub mod provider;
 pub mod record;
 pub mod redact;
 pub mod sse;
 pub mod update;
 
-pub use auth::{AuthError, AuthStore, resolve_key};
+pub use auth::{
+    AuthError, AuthStore, CredentialSource, ProviderAuthStatus, auth_status, resolve_key,
+};
 pub use catalog::{
     AliasTarget, Architecture, ArtificialAnalysis, Benchmarks, CATALOG_FRESHNESS, CATALOG_TIMEOUT,
     CODING_INDEX_THRESHOLD, CatalogCache, CatalogModel, FALLBACK_CONTEXT_WINDOW,
@@ -36,13 +41,17 @@ pub use catalog::{
 };
 pub use model::{
     Compat, DEFAULT_HTTP_REFERER, DEFAULT_X_TITLE, HeaderMap, MaxTokensField, Model, ModelCost,
-    PROVIDER_DEEPSEEK, PROVIDER_GEMINI, PROVIDER_OPENROUTER, ThinkingFormat, builtin_models,
-    fallback_model, find_model, provider_base_url, provider_compat,
+    PROVIDER_DEEPSEEK, PROVIDER_GEMINI, PROVIDER_OPENROUTER, SUPPORTED_PROVIDERS, ThinkingFormat,
+    builtin_models, canonical_provider, fallback_model, find_model, provider_base_url,
+    provider_compat, provider_default_model, provider_env_var, provider_name,
 };
 pub use openai::{
     MAX_ATTEMPTS, MAX_ERROR_BODY_CHARS, MAX_RETRY_DELAY, OpenAiProvider, backoff_delay,
     build_request_body, estimate_cost, map_stop_reason, normalize_transport_error, normalize_usage,
 };
+pub use openai_catalog::{OpenAiCatalog, is_openai_chat_model};
+pub use probe::{PROBE_TIMEOUT, ProbeOutcome, probe_key};
+pub use provider::{CatalogKind, ProbeKind, ProviderSpec};
 pub use redact::{is_secret_header, redact_header, redact_text, redacted_headers};
 pub use sse::{SseEvent, SseParser};
 pub use update::{
