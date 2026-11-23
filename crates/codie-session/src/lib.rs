@@ -25,7 +25,7 @@ pub use key::session_dir_key;
 pub use migration::{
     MIGRATIONS, MIN_SUPPORTED_VERSION, Migration, is_supported, migrate_value, validate_table,
 };
-pub use session::{Session, SessionSummary, TreeEntry};
+pub use session::{Session, SessionSummary, TreeEntry, estimate_message_tokens};
 
 /// Returns the session format version written by this build.
 #[must_use]

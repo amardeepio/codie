@@ -10,8 +10,8 @@ use unicode_width::UnicodeWidthStr;
 use codie_protocol::ext::ExtRenderKind;
 
 use crate::app::{
-    App, CachedToolView, CachedTranscript, Hit, HitTarget, Overlay, Status, ToolViewKey,
-    TranscriptCacheKey,
+    App, CachedEntry, CachedEntryKey, CachedToolView, CachedTranscript, EntryLayout, Hit,
+    HitTarget, Overlay, Status, ToolViewKey,
 };
 use crate::markdown;
 use crate::theme::Palette;
@@ -253,43 +253,7 @@ fn draw_list_overlay(frame: &mut Frame<'_>, area: Rect, list: &crate::app::Choic
 
 fn draw_transcript(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
     let width = area.width.max(1);
-    let key = TranscriptCacheKey {
-        revision: app.transcript.revision(),
-        width,
-        theme_revision: app.theme_revision,
-        animation_tick: if app.transcript.is_animated() {
-            app.tick
-        } else {
-            0
-        },
-    };
-    let stale = app
-        .transcript_cache
-        .borrow()
-        .as_ref()
-        .is_none_or(|cache| cache.key != key);
-    if stale {
-        let (lines, targets) = transcript_lines(app, area.width.saturating_sub(1));
-        let mut rows = Vec::new();
-        let mut row_targets = Vec::new();
-        for (line, target) in lines.into_iter().zip(targets) {
-            for row in tool_view::wrap_line(line, usize::from(width)) {
-                rows.push(row);
-                row_targets.push(target);
-            }
-        }
-        *app.transcript_cache.borrow_mut() = Some(CachedTranscript {
-            key,
-            rows,
-            targets: row_targets,
-        });
-    }
-
-    let total = app
-        .transcript_cache
-        .borrow()
-        .as_ref()
-        .map_or(0, |cache| cache.rows.len());
+    let total = ensure_transcript_cache(app, width);
     let maximum = u16::try_from(total.saturating_sub(usize::from(area.height))).unwrap_or(u16::MAX);
     app.transcript.clamp_scroll(maximum);
     let start = usize::from(app.transcript.scroll()).min(total);
@@ -302,19 +266,35 @@ fn draw_transcript(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         let Some(cache) = cache.as_ref() else {
             return;
         };
-        for (offset, (line, target)) in cache.rows[start..end]
-            .iter()
-            .zip(&cache.targets[start..end])
-            .enumerate()
-        {
-            visible.push(line.clone());
-            if let Some(target) = target {
-                app.hits.push(Hit {
-                    row: area
-                        .y
-                        .saturating_add(u16::try_from(offset).unwrap_or(u16::MAX)),
-                    target: *target,
-                });
+        if app.transcript.is_empty() {
+            visible.extend(
+                cache.banner[start.min(cache.banner.len())..end.min(cache.banner.len())]
+                    .iter()
+                    .cloned(),
+            );
+        } else {
+            let mut offset = 0_usize;
+            for entry in &cache.entries {
+                let next = offset.saturating_add(entry.rows.len());
+                if next > start && offset < end {
+                    let from = start.saturating_sub(offset).min(entry.rows.len());
+                    let to = end.saturating_sub(offset).min(entry.rows.len());
+                    for (row, target) in entry.rows[from..to].iter().zip(&entry.targets[from..to]) {
+                        if let Some(target) = target {
+                            app.hits.push(Hit {
+                                row: area.y.saturating_add(
+                                    u16::try_from(visible.len()).unwrap_or(u16::MAX),
+                                ),
+                                target: *target,
+                            });
+                        }
+                        visible.push(row.clone());
+                    }
+                }
+                offset = next;
+                if offset >= end {
+                    break;
+                }
             }
         }
     }
@@ -327,285 +307,410 @@ fn draw_transcript(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
     frame.render_widget(paragraph, area);
 }
 
-fn transcript_lines(app: &App, width: u16) -> (Vec<Line<'static>>, Vec<Option<HitTarget>>) {
-    let palette = app.theme.palette;
-    let mut body = TranscriptBody::default();
+/// Rebuilds only the transcript entries whose content, layout, or animation
+/// changed, and returns the total number of laid-out rows.
+fn ensure_transcript_cache(app: &App, width: u16) -> usize {
+    let mut slot = app.transcript_cache.borrow_mut();
+    let cache = slot.get_or_insert_with(|| CachedTranscript {
+        width,
+        theme_revision: app.theme_revision,
+        entries: Vec::new(),
+        banner: Vec::new(),
+    });
+    if cache.width != width || cache.theme_revision != app.theme_revision {
+        cache.width = width;
+        cache.theme_revision = app.theme_revision;
+        cache.entries.clear();
+        cache.banner.clear();
+    }
 
     if app.transcript.is_empty() {
-        body.push(Line::default());
-        if width >= 40 {
-            for row in BANNER {
-                body.push(Line::from(Span::styled(
-                    row,
-                    Style::default()
-                        .fg(palette.primary)
-                        .add_modifier(Modifier::BOLD),
-                )));
-            }
+        cache.entries.clear();
+        if cache.banner.is_empty() {
+            cache.banner = wrap_lines(
+                empty_state_lines(&app.theme.palette, width.saturating_sub(1)),
+                usize::from(width),
+            );
+        }
+        return cache.banner.len();
+    }
+
+    let transcript = &app.transcript;
+    let len = transcript.entries().len();
+    cache.entries.truncate(len);
+
+    let layout_width = width.saturating_sub(1);
+    let mut skipping = false;
+    for index in 0..len {
+        let entry = &transcript.entries()[index];
+        let turn_start = transcript.is_turn_start(index);
+        if turn_start {
+            skipping = false;
+        }
+        let layout = if skipping && !turn_start {
+            EntryLayout::Skipped
+        } else if matches!(entry, Entry::User(_))
+            && turn_start
+            && transcript.is_turn_collapsed(index)
+        {
+            skipping = true;
+            EntryLayout::Collapsed
         } else {
-            body.push(Line::from(Span::styled(
-                "Codie!",
+            EntryLayout::Visible
+        };
+        let revision = match layout {
+            EntryLayout::Collapsed => turn_fingerprint(transcript, index),
+            EntryLayout::Visible | EntryLayout::Skipped => transcript.entry_revision(index),
+        };
+        let key = CachedEntryKey {
+            revision,
+            layout,
+            animation_tick: entry_animation_tick(entry, app.tick),
+        };
+        if cache
+            .entries
+            .get(index)
+            .is_none_or(|cached| cached.key != key)
+        {
+            let (lines, targets) = entry_lines(app, index, layout, layout_width);
+            let (rows, targets) = wrap_rows(lines, targets, usize::from(width));
+            let cached = CachedEntry { key, rows, targets };
+            if index < cache.entries.len() {
+                cache.entries[index] = cached;
+            } else {
+                cache.entries.push(cached);
+            }
+        }
+    }
+    cache.entries.iter().map(|entry| entry.rows.len()).sum()
+}
+
+/// Returns a fingerprint that changes when any entry inside one turn changes.
+fn turn_fingerprint(transcript: &crate::transcript::Transcript, start: usize) -> u64 {
+    let mut fingerprint = transcript.entry_revision(start);
+    for index in start + 1..transcript.entries().len() {
+        if transcript.is_turn_start(index) {
+            break;
+        }
+        fingerprint = fingerprint.wrapping_add(transcript.entry_revision(index));
+    }
+    fingerprint
+}
+
+/// Returns the animation tick an entry needs, or zero when it is static.
+fn entry_animation_tick(entry: &Entry, tick: u64) -> u64 {
+    match entry {
+        Entry::Tool(block) if block.status == ToolStatus::Running => tick,
+        Entry::Assistant(assistant) if assistant.streaming && !assistant.thinking.is_empty() => {
+            tick
+        }
+        _ => 0,
+    }
+}
+
+fn wrap_lines(lines: Vec<Line<'static>>, width: usize) -> Vec<Line<'static>> {
+    lines
+        .into_iter()
+        .flat_map(|line| tool_view::wrap_line(line, width))
+        .collect()
+}
+
+fn wrap_rows(
+    lines: Vec<Line<'static>>,
+    targets: Vec<Option<HitTarget>>,
+    width: usize,
+) -> (Vec<Line<'static>>, Vec<Option<HitTarget>>) {
+    let mut rows = Vec::new();
+    let mut row_targets = Vec::new();
+    for (line, target) in lines.into_iter().zip(targets) {
+        for row in tool_view::wrap_line(line, width) {
+            rows.push(row);
+            row_targets.push(target);
+        }
+    }
+    (rows, row_targets)
+}
+
+fn empty_state_lines(palette: &Palette, width: u16) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::default()];
+    if width >= 40 {
+        for row in BANNER {
+            lines.push(Line::from(Span::styled(
+                row,
                 Style::default()
                     .fg(palette.primary)
                     .add_modifier(Modifier::BOLD),
             )));
         }
-        body.push(Line::default());
-        body.push(Line::from(Span::styled(
-            "Type a prompt, or press / for the command palette.",
-            Style::default().fg(palette.foreground),
+    } else {
+        lines.push(Line::from(Span::styled(
+            "Codie!",
+            Style::default()
+                .fg(palette.primary)
+                .add_modifier(Modifier::BOLD),
         )));
-        body.push(Line::from(vec![
-            Span::styled(
-                "Enter",
-                Style::default()
-                    .fg(palette.primary)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" submit  ·  ", Style::default().fg(palette.muted)),
-            Span::styled(
-                "Shift+Enter",
-                Style::default()
-                    .fg(palette.primary)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" newline  ·  ", Style::default().fg(palette.muted)),
-            Span::styled(
-                "@",
-                Style::default()
-                    .fg(palette.primary)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" attach files", Style::default().fg(palette.muted)),
-        ]));
+    }
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        "Type a prompt, or press / for the command palette.",
+        Style::default().fg(palette.foreground),
+    )));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "Enter",
+            Style::default()
+                .fg(palette.primary)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" submit  ·  ", Style::default().fg(palette.muted)),
+        Span::styled(
+            "Shift+Enter",
+            Style::default()
+                .fg(palette.primary)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" newline  ·  ", Style::default().fg(palette.muted)),
+        Span::styled(
+            "@",
+            Style::default()
+                .fg(palette.primary)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" attach files", Style::default().fg(palette.muted)),
+    ]));
+    lines.push(Line::default());
+    lines
+}
+
+/// Lays out one transcript entry in isolation.
+fn entry_lines(
+    app: &App,
+    index: usize,
+    layout: EntryLayout,
+    width: u16,
+) -> (Vec<Line<'static>>, Vec<Option<HitTarget>>) {
+    if layout == EntryLayout::Skipped {
+        return (Vec::new(), Vec::new());
+    }
+    let palette = app.theme.palette;
+    let entry = &app.transcript.entries()[index];
+    let mut body = TranscriptBody::default();
+
+    if layout == EntryLayout::Collapsed {
+        let Entry::User(text) = entry else {
+            return (Vec::new(), Vec::new());
+        };
         body.push(Line::default());
+        let label = match text.split_once('\n') {
+            Some((first, _)) => format!("{first} …"),
+            None => text.clone(),
+        };
+        body.push_target(
+            Line::from(vec![
+                Span::styled(
+                    "▸ ",
+                    Style::default()
+                        .fg(palette.primary)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(label, Style::default().fg(palette.user).bg(palette.surface)),
+                Span::styled(
+                    format!("  {}", turn_summary(&app.transcript, index)),
+                    Style::default().fg(palette.muted),
+                ),
+            ]),
+            HitTarget::Turn(index),
+        );
+        return (body.lines, body.targets);
     }
 
-    let mut skip_turn = false;
-    for (index, entry) in app.transcript.entries().iter().enumerate() {
-        let turn_start = app.transcript.is_turn_start(index);
-        if turn_start {
-            skip_turn = false;
-        }
-        if skip_turn && !turn_start {
-            continue;
-        }
-        if let Entry::User(text) = entry
-            && turn_start
-            && app.transcript.is_turn_collapsed(index)
-        {
+    match entry {
+        Entry::User(text) => {
             body.push(Line::default());
-            let label = match text.split_once('\n') {
-                Some((first, _)) => format!("{first} …"),
-                None => text.clone(),
-            };
-            body.push_target(
-                Line::from(vec![
-                    Span::styled(
-                        "▸ ",
-                        Style::default()
-                            .fg(palette.primary)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(label, Style::default().fg(palette.user).bg(palette.surface)),
-                    Span::styled(
-                        format!("  {}", turn_summary(&app.transcript, index)),
-                        Style::default().fg(palette.muted),
-                    ),
-                ]),
-                HitTarget::Turn(index),
+            let mut lines = markdown::render_user(text, &palette, usize::from(width));
+            if lines.is_empty() {
+                lines.push(Line::default());
+            }
+            lines[0].spans.insert(
+                0,
+                Span::styled(
+                    "▾ ",
+                    Style::default()
+                        .fg(palette.primary)
+                        .add_modifier(Modifier::BOLD),
+                ),
             );
-            skip_turn = true;
-            continue;
-        }
-        match entry {
-            Entry::User(text) => {
-                body.push(Line::default());
-                let mut lines = markdown::render_user(text, &palette, usize::from(width));
-                if lines.is_empty() {
-                    lines.push(Line::default());
-                }
-                lines[0].spans.insert(
-                    0,
-                    Span::styled(
-                        "▾ ",
-                        Style::default()
-                            .fg(palette.primary)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                );
-                let turn_start = app.transcript.is_turn_start(index);
-                for (offset, line) in lines.into_iter().enumerate() {
-                    if turn_start && offset == 0 {
-                        body.push_target(line, HitTarget::Turn(index));
-                    } else {
-                        body.push(line);
-                    }
+            let turn_start = app.transcript.is_turn_start(index);
+            for (offset, line) in lines.into_iter().enumerate() {
+                if turn_start && offset == 0 {
+                    body.push_target(line, HitTarget::Turn(index));
+                } else {
+                    body.push(line);
                 }
             }
-            Entry::Assistant(assistant) => {
-                if !assistant.thinking.is_empty() {
-                    let marker = if assistant.streaming {
-                        SPINNER[app.tick as usize % SPINNER.len()]
-                    } else {
-                        "✻"
-                    };
-                    let mut spans = vec![Span::styled(
-                        format!("{marker} "),
+        }
+        Entry::Assistant(assistant) => {
+            if !assistant.thinking.is_empty() {
+                let marker = if assistant.streaming {
+                    SPINNER[app.tick as usize % SPINNER.len()]
+                } else {
+                    "✻"
+                };
+                let mut spans = vec![Span::styled(
+                    format!("{marker} "),
+                    Style::default()
+                        .fg(palette.primary)
+                        .add_modifier(Modifier::BOLD),
+                )];
+                if assistant.thinking_expanded {
+                    spans.push(Span::styled("Thinking", Style::default().fg(palette.muted)));
+                    spans.push(Span::styled(
+                        "  (Esc to hide)",
+                        Style::default().fg(palette.muted),
+                    ));
+                } else {
+                    spans.push(Span::styled(
+                        if assistant.streaming {
+                            "Thinking…"
+                        } else {
+                            "Thought"
+                        },
                         Style::default()
-                            .fg(palette.primary)
-                            .add_modifier(Modifier::BOLD),
-                    )];
-                    if assistant.thinking_expanded {
-                        spans.push(Span::styled("Thinking", Style::default().fg(palette.muted)));
-                        spans.push(Span::styled(
-                            "  (Esc to hide)",
-                            Style::default().fg(palette.muted),
-                        ));
-                    } else {
-                        spans.push(Span::styled(
-                            if assistant.streaming {
-                                "Thinking…"
-                            } else {
-                                "Thought"
-                            },
+                            .fg(palette.muted)
+                            .add_modifier(Modifier::ITALIC),
+                    ));
+                    spans.push(Span::styled(
+                        "  (click to view)",
+                        Style::default().fg(palette.muted),
+                    ));
+                }
+                body.push_target(Line::from(spans), HitTarget::Thinking(index));
+                if assistant.thinking_expanded {
+                    for line in assistant.thinking.lines() {
+                        body.push(Line::from(Span::styled(
+                            format!("  {line}"),
                             Style::default()
                                 .fg(palette.muted)
                                 .add_modifier(Modifier::ITALIC),
-                        ));
-                        spans.push(Span::styled(
-                            "  (click to view)",
-                            Style::default().fg(palette.muted),
-                        ));
-                    }
-                    body.push_target(Line::from(spans), HitTarget::Thinking(index));
-                    if assistant.thinking_expanded {
-                        for line in assistant.thinking.lines() {
-                            body.push(Line::from(Span::styled(
-                                format!("  {line}"),
-                                Style::default()
-                                    .fg(palette.muted)
-                                    .add_modifier(Modifier::ITALIC),
-                            )));
-                        }
-                        body.push(Line::default());
-                    }
-                }
-                body.extend(markdown::render(
-                    &assistant.text,
-                    &palette,
-                    usize::from(width),
-                ));
-                if assistant.streaming {
-                    body.push(Line::from(Span::styled(
-                        "▌",
-                        Style::default().fg(palette.primary),
-                    )));
-                }
-                body.push(Line::default());
-            }
-            Entry::Tool(block) => {
-                body.push_target(
-                    Line::from(tool_header(block, app.tick, &palette)),
-                    HitTarget::Tool(index),
-                );
-
-                let mut rendered = false;
-                if let Some((lines, truncated)) =
-                    rich_tool_body(app, block, width, &palette, block.expanded)
-                {
-                    let body_len = lines.len();
-                    body.extend(lines);
-                    rendered = true;
-                    if truncated {
-                        body.push(Line::from(Span::styled(
-                            "  … more lines · Ctrl+O to expand",
-                            Style::default().fg(palette.muted),
-                        )));
-                    } else if block.expanded && body_len > tool_view::PREVIEW_ROWS {
-                        body.push(Line::from(Span::styled(
-                            "  Ctrl+O to collapse",
-                            Style::default().fg(palette.muted),
                         )));
                     }
                     body.push(Line::default());
                 }
+            }
+            body.extend(markdown::render(
+                &assistant.text,
+                &palette,
+                usize::from(width),
+            ));
+            if assistant.streaming {
+                body.push(Line::from(Span::styled(
+                    "▌",
+                    Style::default().fg(palette.primary),
+                )));
+            }
+            body.push(Line::default());
+        }
+        Entry::Tool(block) => {
+            body.push_target(
+                Line::from(tool_header(block, app.tick, &palette)),
+                HitTarget::Tool(index),
+            );
 
-                if !rendered && block.expanded {
-                    let mut expanded = Vec::new();
-                    if let Some(render) = &block.render {
-                        if let Some(title) = &render.title {
-                            expanded.push(Line::from(Span::styled(
-                                format!("  {title}"),
-                                Style::default().fg(palette.heading),
-                            )));
-                        }
-                        match render.kind {
-                            codie_protocol::ext::ExtRenderKind::Diff => {
-                                let (lines, _) = tool_view::render_diff(
-                                    &render.text,
-                                    tool_path(block),
-                                    usize::from(width),
-                                    &palette,
-                                    usize::MAX,
-                                );
-                                expanded.extend(lines);
-                            }
-                            codie_protocol::ext::ExtRenderKind::Code => {
-                                let (lines, _) = tool_view::render_code(
-                                    &render.text,
-                                    tool_path(block),
-                                    usize::from(width),
-                                    &palette,
-                                    usize::MAX,
-                                );
-                                expanded.extend(lines);
-                            }
-                            _ => {
-                                for line in render.text.lines().take(200) {
-                                    expanded.push(Line::from(Span::styled(
-                                        format!("  {line}"),
-                                        Style::default().fg(palette.foreground),
-                                    )));
-                                }
-                            }
-                        }
-                    } else if !block.output.is_empty() {
-                        for line in block.output.lines().take(200) {
-                            let color = if line.starts_with('+') {
-                                palette.diff_add
-                            } else if line.starts_with('-') {
-                                palette.diff_del
-                            } else {
-                                palette.foreground
-                            };
-                            expanded.push(Line::from(Span::styled(
-                                format!("  {line}"),
-                                Style::default().fg(color),
-                            )));
-                        }
-                    }
-                    body.extend(expanded);
+            let mut rendered = false;
+            if let Some((lines, truncated)) =
+                rich_tool_body(app, block, width, &palette, block.expanded)
+            {
+                let body_len = lines.len();
+                body.extend(lines);
+                rendered = true;
+                if truncated {
+                    body.push(Line::from(Span::styled(
+                        "  … more lines · Ctrl+O to expand",
+                        Style::default().fg(palette.muted),
+                    )));
+                } else if block.expanded && body_len > tool_view::PREVIEW_ROWS {
+                    body.push(Line::from(Span::styled(
+                        "  Ctrl+O to collapse",
+                        Style::default().fg(palette.muted),
+                    )));
                 }
+                body.push(Line::default());
+            }
 
-                if block.status != ToolStatus::Running && !block.expanded && !rendered {
-                    if let Some(last) = body.lines.last_mut() {
-                        last.spans.push(Span::styled(
-                            "  (Ctrl+O to expand)",
-                            Style::default().fg(palette.muted),
-                        ));
+            if !rendered && block.expanded {
+                let mut expanded = Vec::new();
+                if let Some(render) = &block.render {
+                    if let Some(title) = &render.title {
+                        expanded.push(Line::from(Span::styled(
+                            format!("  {title}"),
+                            Style::default().fg(palette.heading),
+                        )));
                     }
+                    match render.kind {
+                        codie_protocol::ext::ExtRenderKind::Diff => {
+                            let (lines, _) = tool_view::render_diff(
+                                &render.text,
+                                tool_path(block),
+                                usize::from(width),
+                                &palette,
+                                usize::MAX,
+                            );
+                            expanded.extend(lines);
+                        }
+                        codie_protocol::ext::ExtRenderKind::Code => {
+                            let (lines, _) = tool_view::render_code(
+                                &render.text,
+                                tool_path(block),
+                                usize::from(width),
+                                &palette,
+                                usize::MAX,
+                            );
+                            expanded.extend(lines);
+                        }
+                        _ => {
+                            for line in render.text.lines().take(200) {
+                                expanded.push(Line::from(Span::styled(
+                                    format!("  {line}"),
+                                    Style::default().fg(palette.foreground),
+                                )));
+                            }
+                        }
+                    }
+                } else if !block.output.is_empty() {
+                    for line in block.output.lines().take(200) {
+                        let color = if line.starts_with('+') {
+                            palette.diff_add
+                        } else if line.starts_with('-') {
+                            palette.diff_del
+                        } else {
+                            palette.foreground
+                        };
+                        expanded.push(Line::from(Span::styled(
+                            format!("  {line}"),
+                            Style::default().fg(color),
+                        )));
+                    }
+                }
+                body.extend(expanded);
+            }
+
+            if block.status != ToolStatus::Running && !block.expanded && !rendered {
+                if let Some(last) = body.lines.last_mut() {
+                    last.spans.push(Span::styled(
+                        "  (Ctrl+O to expand)",
+                        Style::default().fg(palette.muted),
+                    ));
                 }
             }
-            Entry::Info(text) => body.push(Line::from(Span::styled(
-                text.clone(),
-                Style::default().fg(palette.muted),
-            ))),
-            Entry::Error(text) => body.push(Line::from(Span::styled(
-                format!("! {text}"),
-                Style::default().fg(palette.error),
-            ))),
         }
+        Entry::Info(text) => body.push(Line::from(Span::styled(
+            text.clone(),
+            Style::default().fg(palette.muted),
+        ))),
+        Entry::Error(text) => body.push(Line::from(Span::styled(
+            format!("! {text}"),
+            Style::default().fg(palette.error),
+        ))),
     }
     (body.lines, body.targets)
 }
@@ -2772,6 +2877,65 @@ mod tests {
         assert!(app.handle_click(0, row));
         let expanded = buffer(&mut app);
         assert!(expanded.contains("first answer"), "{expanded}");
+    }
+
+    #[test]
+    fn collapsed_summary_refreshes_when_a_hidden_entry_changes() {
+        let mut app = app();
+        app.transcript.push_user("first question");
+        app.transcript.tool_start(
+            "call_1".into(),
+            "bash".into(),
+            serde_json::json!({"command": "cargo test"}),
+        );
+        app.transcript
+            .tool_end("call_1", "ok".into(), false, None, None);
+        app.transcript.push_user("second question");
+
+        let collapsed = buffer(&mut app);
+        assert!(collapsed.contains("1 tool"), "{collapsed}");
+
+        app.transcript
+            .tool_end("call_1", "failed".into(), true, None, None);
+        let refreshed = buffer(&mut app);
+        assert!(refreshed.contains("1 error"), "{refreshed}");
+    }
+
+    #[test]
+    fn layout_cache_rebuilds_only_changed_entries() {
+        let mut app = app();
+        app.transcript.push_user("question");
+        app.transcript.start_assistant();
+        app.transcript.set_text("first".into());
+        let _ = buffer(&mut app);
+
+        let (user_before, assistant_before) = {
+            let cache = app.transcript_cache.borrow();
+            let cache = cache.as_ref().expect("cache");
+            (cache.entries[0].key, cache.entries[1].key)
+        };
+        app.transcript.set_text("second".into());
+        let text = buffer(&mut app);
+        assert!(text.contains("second"), "{text}");
+
+        let cache = app.transcript_cache.borrow();
+        let cache = cache.as_ref().expect("cache");
+        assert_eq!(cache.entries[0].key, user_before);
+        assert_ne!(cache.entries[1].key, assistant_before);
+    }
+
+    #[test]
+    fn clearing_the_transcript_does_not_reuse_stale_rows() {
+        let mut app = app();
+        app.transcript.push_info("old line");
+        let first = buffer(&mut app);
+        assert!(first.contains("old line"), "{first}");
+
+        app.transcript.clear();
+        app.transcript.push_info("new line");
+        let second = buffer(&mut app);
+        assert!(second.contains("new line"), "{second}");
+        assert!(!second.contains("old line"), "{second}");
     }
 
     #[test]

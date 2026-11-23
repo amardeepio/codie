@@ -18,7 +18,7 @@ use codie_core::{
 use codie_prompt::{
     Customizations, PromptInput, build_system_message, load_project_context, load_project_memory,
 };
-use codie_session::{Session, SessionSummary, TreeEntry};
+use codie_session::{Session, SessionSummary, TreeEntry, estimate_message_tokens};
 use codie_subagents::{
     DelegationIntent, DelegationMode, FORCED_DIRECTIVE, NudgeState, RunSnapshot, SubagentConfig,
     SubagentRuntime, detect_intent, effective_mode, mode_directive,
@@ -417,28 +417,50 @@ pub(crate) struct CachedToolView {
     pub truncated: bool,
 }
 
-/// Identity of one fully laid-out transcript.
+/// How one transcript entry is laid out in the current turn state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct TranscriptCacheKey {
-    /// Transcript content revision.
+pub(crate) enum EntryLayout {
+    /// Rendered in full.
+    Visible,
+    /// Hidden inside a collapsed turn.
+    Skipped,
+    /// Collapsed to a single summary row.
+    Collapsed,
+}
+
+/// Identity of one laid-out transcript entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CachedEntryKey {
+    /// Entry revision, or the turn fingerprint for a collapsed summary.
     pub revision: u64,
+    /// Current layout mode.
+    pub layout: EntryLayout,
+    /// Animation tick, or zero when the entry has no spinner.
+    pub animation_tick: u64,
+}
+
+/// One laid-out transcript entry.
+#[derive(Debug, Clone)]
+pub(crate) struct CachedEntry {
+    /// Cache identity.
+    pub key: CachedEntryKey,
+    /// Wrapped rows for this entry.
+    pub rows: Vec<Line<'static>>,
+    /// One optional target per row.
+    pub targets: Vec<Option<HitTarget>>,
+}
+
+/// Pre-wrapped transcript rows, cached per entry.
+#[derive(Debug, Clone)]
+pub(crate) struct CachedTranscript {
     /// Transcript width in columns.
     pub width: u16,
     /// Palette revision.
     pub theme_revision: u64,
-    /// Animation tick, or zero when no spinner is visible.
-    pub animation_tick: u64,
-}
-
-/// Pre-wrapped transcript rows and their click targets.
-#[derive(Debug, Clone)]
-pub(crate) struct CachedTranscript {
-    /// Cache identity.
-    pub key: TranscriptCacheKey,
-    /// Every laid-out row.
-    pub rows: Vec<Line<'static>>,
-    /// One optional target per row.
-    pub targets: Vec<Option<HitTarget>>,
+    /// Laid-out entries, aligned with `Transcript::entries`.
+    pub entries: Vec<CachedEntry>,
+    /// Empty-state banner rows.
+    pub banner: Vec<Line<'static>>,
 }
 
 /// One overlay on top of the transcript.
@@ -847,7 +869,7 @@ impl App {
             .is_file()
             .then(|| crate::theme::ThemeWatcher::new(&theme.name));
         let session_id = session.as_ref().map(|session| session.id().to_owned());
-        let context_tokens = history.iter().map(message_chars).sum::<u64>() / 4;
+        let context_tokens = history.iter().map(estimate_message_tokens).sum::<u64>();
         let context_percent = if context_window == 0 {
             0
         } else {
@@ -949,6 +971,22 @@ impl App {
             return self.dispatch_action(ActionId::ToggleAutoApprove);
         }
         if self.overlay.is_some() {
+            // Session controls must not be swallowed by a modal overlay. Resolve
+            // them through the keymap so remapped shortcuts keep working. The
+            // connect overlay keeps its own Ctrl+C handling.
+            let action = self.bindings.action_for(&key);
+            if action == Some(ActionId::Quit) {
+                return Action::Quit;
+            }
+            if action == Some(ActionId::Cancel)
+                && !matches!(self.overlay, Some(Overlay::Connect(_)))
+            {
+                return if self.status == Status::Streaming {
+                    self.dispatch_action(ActionId::Cancel)
+                } else {
+                    Action::Quit
+                };
+            }
             return self.handle_overlay_key(key);
         }
 
@@ -2015,7 +2053,11 @@ impl App {
     }
 
     fn refresh_context(&mut self) {
-        let tokens = self.history.iter().map(message_chars).sum::<u64>() / 4;
+        let tokens = self
+            .history
+            .iter()
+            .map(estimate_message_tokens)
+            .sum::<u64>();
         let percent = tokens.saturating_mul(100) / u64::from(self.context_window.max(1));
         self.footer.context_tokens = Some(tokens);
         self.footer.context_percent = Some(u8::try_from(percent.min(100)).unwrap_or(100));
@@ -2992,7 +3034,12 @@ impl App {
             .as_ref()
             .map_or_else(|| "ephemeral".to_owned(), |session| session.id().to_owned());
         let tokens = self.session.as_ref().map_or_else(
-            || self.history.iter().map(message_chars).sum::<u64>() / 4,
+            || {
+                self.history
+                    .iter()
+                    .map(estimate_message_tokens)
+                    .sum::<u64>()
+            },
             codie_session::Session::estimate_tokens,
         );
         let percent = self
@@ -3179,32 +3226,6 @@ fn quote_completion(display: &str) -> String {
 /// palette; a slash or a leading `~` means the user is typing a path.
 fn path_like_query(query: &str) -> bool {
     !query.contains(':') && (query.contains('/') || query.starts_with('~'))
-}
-
-fn message_chars(message: &Message) -> u64 {
-    match message {
-        Message::System(system) => system.content.chars().count() as u64,
-        Message::User(user) => user
-            .content
-            .iter()
-            .map(|content| content.as_text().map_or(0, |text| text.len() as u64))
-            .sum(),
-        Message::Assistant(assistant) => assistant
-            .content
-            .iter()
-            .map(|content| match content {
-                Content::Text { text, .. } => text.chars().count() as u64,
-                Content::Thinking { thinking, .. } => thinking.chars().count() as u64,
-                Content::ToolCall { arguments, .. } => arguments.to_string().chars().count() as u64,
-                Content::Image { .. } => 4_800,
-            })
-            .sum(),
-        Message::ToolResult(result) => result
-            .content
-            .iter()
-            .map(|content| content.as_text().map_or(0, |text| text.len() as u64))
-            .sum(),
-    }
 }
 
 /// Runs the interactive interface and returns the process exit code.
@@ -4314,6 +4335,28 @@ fn expand_prompt(app: &mut App, cwd: &std::path::Path, prompt: &str) -> Message 
     Message::user_with_content(expansion.content)
 }
 
+/// Applies the state and configuration shared by every run.
+fn prepare_run(app: &mut App, options: &TuiOptions) -> Option<AgentConfig> {
+    app.status = Status::Streaming;
+    app.run_started = Some(std::time::Instant::now());
+    app.footer.tokens_per_sec = None;
+
+    let mut config = match AgentConfig::new(app.model.clone(), options.cwd.clone()) {
+        Ok(config) => config,
+        Err(error) => {
+            app.transcript.push_error(error);
+            app.status = Status::Error;
+            return None;
+        }
+    };
+    config.thinking = app.thinking;
+    config.max_turns = options.max_turns;
+    config.session_id = app.session.as_ref().map(|session| session.id().to_owned());
+    app.cancel = tokio_util::sync::CancellationToken::new();
+    config.cancel = app.cancel.clone();
+    Some(config)
+}
+
 fn start_run(
     app: &mut App,
     agent: &Arc<Agent>,
@@ -4323,27 +4366,11 @@ fn start_run(
     prompt: String,
 ) {
     app.transcript.push_user(prompt);
-    app.status = Status::Streaming;
-    app.run_started = Some(std::time::Instant::now());
-    app.footer.tokens_per_sec = None;
-
-    let mut config = match AgentConfig::new(app.model.clone(), options.cwd.clone()) {
-        Ok(config) => config,
-        Err(error) => {
-            app.transcript.push_error(error);
-            app.status = Status::Error;
-            return;
-        }
+    let Some(config) = prepare_run(app, options) else {
+        return;
     };
-    config.thinking = app.thinking;
-    config.max_turns = options.max_turns;
-    config.session_id = app.session.as_ref().map(|session| session.id().to_owned());
-    app.cancel = tokio_util::sync::CancellationToken::new();
-    config.cancel = app.cancel.clone();
-
     let history = app.history.clone();
-    let stream = agent.run(message, history, config);
-    forward_events(stream, sender.clone());
+    forward_events(agent.run(message, history, config), sender.clone());
 }
 
 fn start_resume(
@@ -4352,27 +4379,11 @@ fn start_resume(
     options: &TuiOptions,
     sender: &mpsc::UnboundedSender<AgentEvent>,
 ) {
-    app.status = Status::Streaming;
-    app.run_started = Some(std::time::Instant::now());
-    app.footer.tokens_per_sec = None;
-
-    let mut config = match AgentConfig::new(app.model.clone(), options.cwd.clone()) {
-        Ok(config) => config,
-        Err(error) => {
-            app.transcript.push_error(error);
-            app.status = Status::Error;
-            return;
-        }
+    let Some(config) = prepare_run(app, options) else {
+        return;
     };
-    config.thinking = app.thinking;
-    config.max_turns = options.max_turns;
-    config.session_id = app.session.as_ref().map(|session| session.id().to_owned());
-    app.cancel = tokio_util::sync::CancellationToken::new();
-    config.cancel = app.cancel.clone();
-
     let history = app.history.clone();
-    let stream = agent.resume(history, config);
-    forward_events(stream, sender.clone());
+    forward_events(agent.resume(history, config), sender.clone());
 }
 
 fn forward_events(
@@ -5196,6 +5207,45 @@ mod tests {
         app.status = Status::Idle;
         assert_eq!(
             app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            Action::Quit
+        );
+    }
+
+    #[test]
+    fn ctrl_c_and_ctrl_d_are_not_swallowed_by_overlays() {
+        let mut idle = app();
+        assert!(idle.handle_command("/help"));
+        assert_eq!(
+            idle.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            Action::Quit
+        );
+
+        let mut running = app();
+        assert!(running.handle_command("/help"));
+        running.status = Status::Streaming;
+        assert_eq!(
+            running.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            Action::Cancel
+        );
+        assert_eq!(running.status, Status::Waiting);
+        assert_eq!(
+            running.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            Action::Quit
+        );
+
+        let mut quitting = app();
+        assert!(quitting.handle_command("/help"));
+        assert_eq!(
+            quitting.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL)),
+            Action::Quit
+        );
+
+        // The connect overlay owns Ctrl+C and still quits even mid-run.
+        let mut connecting = app();
+        connecting.overlay = Some(Overlay::Connect(ConnectState::new("openrouter")));
+        connecting.status = Status::Streaming;
+        assert_eq!(
+            connecting.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
             Action::Quit
         );
     }

@@ -24,7 +24,7 @@ use crate::file_mutation::with_file_mutation;
 pub const MAX_PROJECT_PLAN_BYTES: usize = 128 * 1024;
 
 /// Maximum length of one memory entry.
-pub const MAX_ENTRY_BYTES: usize = 1024;
+pub const MAX_ENTRY_BYTES: usize = 7 * 1024;
 
 /// Known `CODIE.MD` sections, offered as schema hints.
 const MEMORY_SECTIONS: [&str; 7] = [

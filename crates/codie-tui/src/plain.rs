@@ -303,11 +303,21 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
                                 options.model.provider = provider.clone();
                                 options.model.model = runtime.default_model.clone();
                                 options.models = runtime.models;
+                                if let Some(window) = model_window(
+                                    &options.models,
+                                    &options.model.provider,
+                                    &options.model.model,
+                                ) {
+                                    options.context_window = window;
+                                }
                                 if let Some(session) = session.as_mut() {
                                     session.append_model_change(
                                         provider.clone(),
                                         runtime.default_model.clone(),
                                     )?;
+                                }
+                                if let Some(persist) = &options.persist_selection {
+                                    persist(&options.model.provider, &options.model.model);
                                 }
                                 session_info.model = Some(runtime.default_model.clone());
                                 println!("Provider: {provider} · model: {}", runtime.default_model);
@@ -353,7 +363,22 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
                 }
                 Command::Model(argument) => {
                     if let Some(model) = argument {
-                        options.model.model = model;
+                        options.model.model.clone_from(&model);
+                        if let Some(window) =
+                            model_window(&options.models, &options.model.provider, &model)
+                        {
+                            options.context_window = window;
+                        }
+                        if let Some(session) = session.as_mut() {
+                            session.append_model_change(
+                                options.model.provider.clone(),
+                                model.clone(),
+                            )?;
+                        }
+                        if let Some(persist) = &options.persist_selection {
+                            persist(&options.model.provider, &options.model.model);
+                        }
+                        session_info.model = Some(model);
                     }
                     println!("Model: {}", options.model.model);
                 }
@@ -941,4 +966,41 @@ async fn read_line() -> Option<String> {
     .await
     .ok()
     .flatten()
+}
+
+/// Returns the catalog context window for a model on one provider.
+fn model_window(models: &[crate::app::ModelChoice], provider: &str, model: &str) -> Option<u32> {
+    models
+        .iter()
+        .find(|choice| choice.provider == provider && choice.id == model)
+        .map(|choice| choice.context_window)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::ModelChoice;
+
+    fn choice(provider: &str, id: &str, context_window: u32) -> ModelChoice {
+        ModelChoice {
+            provider: provider.to_owned(),
+            id: id.to_owned(),
+            name: id.to_owned(),
+            context_window,
+        }
+    }
+
+    #[test]
+    fn model_window_matches_the_provider_and_model() {
+        let models = vec![
+            choice("deepseek", "flash", 128_000),
+            choice("deepseek", "pro", 200_000),
+            choice("openai", "flash", 64_000),
+        ];
+
+        assert_eq!(model_window(&models, "deepseek", "pro"), Some(200_000));
+        assert_eq!(model_window(&models, "deepseek", "flash"), Some(128_000));
+        assert_eq!(model_window(&models, "openai", "flash"), Some(64_000));
+        assert_eq!(model_window(&models, "deepseek", "missing"), None);
+    }
 }

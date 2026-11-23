@@ -1270,7 +1270,11 @@ fn truncate_preview(text: &str) -> String {
 }
 
 /// Estimates tokens for one message with the documented `chars / 4` rule.
-fn estimate_message_tokens(message: &Message) -> u64 {
+///
+/// Images count as 4,800 characters (`CTX-002`) and the result rounds up per
+/// message, matching [`Session::estimate_tokens`].
+#[must_use]
+pub fn estimate_message_tokens(message: &Message) -> u64 {
     let chars = match message {
         Message::System(system) => system.content.chars().count() as u64,
         Message::User(user) => message_chars(&user.content),

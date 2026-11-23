@@ -1,7 +1,9 @@
 //! Streaming render benchmark (`TUI-002`, Phase 2 exit criteria).
 //!
-//! Simulates 5,000 tokens arriving over 60 frames and renders each frame. The
-//! budget is one second in total (60 fps), with no frame exceeding 16.7 ms.
+//! Simulates 5,000 tokens arriving over 60 frames and renders each frame. A
+//! long, fully expanded history is seeded first so the benchmark also catches
+//! a regression to whole-transcript re-layout on every delta. The budget is one
+//! second in total (60 fps), with no frame exceeding 16.7 ms.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -18,6 +20,7 @@ use ratatui::backend::TestBackend;
 const TOKENS: usize = 5_000;
 const FRAMES: usize = 60;
 const CHARS_PER_TOKEN: usize = 4;
+const HISTORY_TURNS: usize = 200;
 
 fn main() {
     let mut app = App::new(
@@ -37,6 +40,20 @@ fn main() {
         Arc::new(std::sync::atomic::AtomicI32::new(0)),
         Bindings::default(),
     );
+    for turn in 0..HISTORY_TURNS {
+        app.transcript.push_user(format!("history question {turn}"));
+        app.transcript.start_assistant();
+        app.transcript.set_text(format!(
+            "history answer {turn}: {}",
+            "some rendered markdown text ".repeat(12)
+        ));
+        app.transcript.finish_assistant();
+    }
+    // `push_user` folds earlier turns; expand everything to make the first
+    // frame represent a full long transcript.
+    app.transcript.toggle_all_turns();
+    app.transcript.toggle_all_turns();
+
     app.transcript.start_assistant();
 
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("test terminal");
@@ -67,7 +84,9 @@ fn main() {
     let average = total / u32::try_from(FRAMES).unwrap_or(1);
     let tokens_per_second = TOKENS as f64 / total.as_secs_f64();
 
-    println!("streaming benchmark: {TOKENS} tokens over {FRAMES} frames");
+    println!(
+        "streaming benchmark: {TOKENS} tokens over {FRAMES} frames after {HISTORY_TURNS} history turns"
+    );
     println!("  total      {:>8.2} ms", total.as_secs_f64() * 1000.0);
     println!(
         "  average    {:>8.2} ms/frame",

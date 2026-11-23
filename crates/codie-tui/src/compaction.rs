@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use codie_core::{ChatClient, Content, Message, ModelRef, StreamOptions, ThinkingLevel, Usage};
-use codie_session::Session;
+use codie_session::{Session, estimate_message_tokens};
 use tokio_util::sync::CancellationToken;
 
 /// Tokens reserved for the model's response and the next turn (`CTX-001`).
@@ -171,7 +171,7 @@ pub async fn summarize_with_cancel(
 /// Estimates tokens for a transcript with the documented `CTX-002` rule.
 #[must_use]
 pub fn estimate_messages_tokens(messages: &[Message]) -> u64 {
-    messages.iter().map(estimate_tokens).sum()
+    messages.iter().map(estimate_message_tokens).sum()
 }
 
 /// Returns true when a request would exceed the window minus the reserve.
@@ -260,7 +260,7 @@ fn cut_point(messages: &[&codie_session::Entry]) -> Option<String> {
         let Some(message) = messages[position].message() else {
             continue;
         };
-        total = total.saturating_add(estimate_tokens(message));
+        total = total.saturating_add(estimate_message_tokens(message));
         if total > DEFAULT_KEEP_TOKENS {
             index = position + 1;
             break;
@@ -325,29 +325,6 @@ fn cap_message(text: String) -> String {
     let mut capped: String = text.chars().take(MESSAGE_LIMIT).collect();
     capped.push_str("\n[truncated]");
     capped
-}
-
-/// The `chars / 4` estimate used by the cut point (`CTX-002`).
-fn estimate_tokens(message: &Message) -> u64 {
-    let chars = match message {
-        Message::System(system) => system.content.chars().count() as u64,
-        Message::User(user) => content_chars(&user.content),
-        Message::Assistant(assistant) => content_chars(&assistant.content),
-        Message::ToolResult(result) => content_chars(&result.content),
-    };
-    chars.div_ceil(4)
-}
-
-fn content_chars(content: &[Content]) -> u64 {
-    content
-        .iter()
-        .map(|content| match content {
-            Content::Text { text, .. } => text.chars().count() as u64,
-            Content::Thinking { thinking, .. } => thinking.chars().count() as u64,
-            Content::ToolCall { arguments, .. } => arguments.to_string().chars().count() as u64,
-            Content::Image { .. } => 4_800,
-        })
-        .sum()
 }
 
 #[cfg(test)]
