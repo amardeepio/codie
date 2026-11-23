@@ -224,11 +224,11 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
                         }
                         let directive = Message::system(mode_directive(mode), Vec::new());
                         if let Some(session) = session.as_mut() {
-                            let _ = session.append_custom(
+                            session.append_custom(
                                 "subagent_settings",
                                 serde_json::json!({"mode": mode.as_str(), "force_once": false}),
-                            );
-                            let _ = session.append_message(&directive);
+                            )?;
+                            session.append_message(&directive)?;
                         }
                         history.push(directive);
                         println!("{message}");
@@ -803,7 +803,7 @@ async fn run_prompt(
     if plan.is_forced() {
         let directive = Message::system(FORCED_DIRECTIVE, Vec::new());
         if let Some(session) = session.as_mut() {
-            let _ = session.append_message(&directive);
+            session.append_message(&directive)?;
         }
         history.push(directive);
         println!("Subagents requested for this run.");

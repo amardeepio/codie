@@ -1,7 +1,7 @@
 //! Application state, key handling, and the interactive run loop.
 
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -457,10 +457,110 @@ pub(crate) struct CachedTranscript {
     pub width: u16,
     /// Palette revision.
     pub theme_revision: u64,
+    /// Layout generation from the transcript.
+    pub layout_generation: u64,
+    /// Animation tick of the last rebuild.
+    pub tick: u64,
     /// Laid-out entries, aligned with `Transcript::entries`.
     pub entries: Vec<CachedEntry>,
+    /// Fenwick tree over entry row counts, for O(log n) scroll lookup.
+    pub row_index: RowIndex,
+    /// Entries with a live spinner.
+    pub animated: HashSet<usize>,
     /// Empty-state banner rows.
     pub banner: Vec<Line<'static>>,
+}
+
+/// Fenwick tree over per-entry row counts.
+///
+/// It turns "which entry contains global row N" into a binary search over
+/// prefix sums, so a frame never scans the whole transcript.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RowIndex {
+    /// 1-based Fenwick nodes; index zero is unused.
+    tree: Vec<usize>,
+    len: usize,
+}
+
+impl RowIndex {
+    /// Builds an index from per-entry row counts.
+    #[must_use]
+    pub(crate) fn from_counts(counts: impl IntoIterator<Item = usize>) -> Self {
+        let counts = counts.into_iter().collect::<Vec<_>>();
+        let len = counts.len();
+        let mut tree: Vec<usize> = vec![0; len + 1];
+        for (index, count) in counts.into_iter().enumerate() {
+            let mut node = index + 1;
+            while node <= len {
+                tree[node] = tree[node].saturating_add(count);
+                node += low_bit(node);
+            }
+        }
+        Self { tree, len }
+    }
+
+    /// Returns the number of indexed entries.
+    #[must_use]
+    pub(crate) const fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Returns the total number of rows.
+    #[must_use]
+    pub(crate) fn total(&self) -> usize {
+        self.sum(self.len)
+    }
+
+    /// Replaces one entry's row count.
+    pub(crate) fn set(&mut self, index: usize, rows: usize, previous: usize) {
+        if index >= self.len || rows == previous {
+            return;
+        }
+        let added = rows.saturating_sub(previous);
+        let removed = previous.saturating_sub(rows);
+        let mut node = index + 1;
+        while node <= self.len {
+            self.tree[node] = self.tree[node]
+                .saturating_add(added)
+                .saturating_sub(removed);
+            node += low_bit(node);
+        }
+    }
+
+    /// Returns the entry and in-entry offset that contain a global row.
+    #[must_use]
+    pub(crate) fn find(&self, row: usize) -> Option<(usize, usize)> {
+        if row >= self.total() {
+            return None;
+        }
+        let mut position = 0;
+        let mut remaining = row;
+        let mut step = self.len.next_power_of_two() >> 1;
+        while step > 0 {
+            let next = position + step;
+            if next <= self.len && self.tree[next] <= remaining {
+                remaining -= self.tree[next];
+                position = next;
+            }
+            step >>= 1;
+        }
+        (position < self.len).then_some((position, remaining))
+    }
+
+    /// Returns the prefix sum of the first `len` entries.
+    fn sum(&self, mut len: usize) -> usize {
+        let mut total: usize = 0;
+        while len > 0 {
+            total = total.saturating_add(self.tree[len]);
+            len -= low_bit(len);
+        }
+        total
+    }
+}
+
+/// Returns the lowest set bit of `value`.
+fn low_bit(value: usize) -> usize {
+    value & value.wrapping_neg()
 }
 
 /// One overlay on top of the transcript.
@@ -1641,8 +1741,13 @@ impl App {
                     self.context_window = choice.context_window;
                     self.footer.provider = choice.provider.clone();
                     self.footer.model = choice.id.clone();
-                    if let Some(session) = self.session.as_mut() {
-                        let _ = session.append_model_change(choice.provider, choice.id.clone());
+                    if let Some(session) = self.session.as_mut()
+                        && let Err(error) =
+                            session.append_model_change(choice.provider, choice.id.clone())
+                    {
+                        self.transcript.push_error(format!(
+                            "Cannot record the model change in the session: {error}"
+                        ));
                     }
                     self.refresh_context();
                     self.sync_subagent_model();
@@ -1679,8 +1784,12 @@ impl App {
                     self.thinking = level;
                     self.sync_subagent_thinking();
                     self.footer.thinking = level.as_str().to_owned();
-                    if let Some(session) = self.session.as_mut() {
-                        let _ = session.append_thinking_level_change(level);
+                    if let Some(session) = self.session.as_mut()
+                        && let Err(error) = session.append_thinking_level_change(level)
+                    {
+                        self.transcript.push_error(format!(
+                            "Cannot record the reasoning level in the session: {error}"
+                        ));
                     }
                     self.transcript
                         .push_info(format!("Reasoning level: {}", level.as_str()));
@@ -1943,8 +2052,13 @@ impl App {
                 }
                 self.footer.provider = id.to_owned();
                 self.footer.model = self.model.model.clone();
-                if let Some(session) = self.session.as_mut() {
-                    let _ = session.append_model_change(id.to_owned(), self.model.model.clone());
+                if let Some(session) = self.session.as_mut()
+                    && let Err(error) =
+                        session.append_model_change(id.to_owned(), self.model.model.clone())
+                {
+                    self.transcript.push_error(format!(
+                        "Cannot record the model change in the session: {error}"
+                    ));
                 }
                 self.refresh_context();
                 self.sync_subagent_model();
@@ -2442,8 +2556,13 @@ impl App {
                         self.model.provider = choice.provider.clone();
                         self.context_window = choice.context_window;
                         self.footer.provider = choice.provider.clone();
-                        if let Some(session) = self.session.as_mut() {
-                            let _ = session.append_model_change(choice.provider, choice.id.clone());
+                        if let Some(session) = self.session.as_mut()
+                            && let Err(error) =
+                                session.append_model_change(choice.provider, choice.id.clone())
+                        {
+                            self.transcript.push_error(format!(
+                                "Cannot record the model change in the session: {error}"
+                            ));
                         }
                     }
                     self.refresh_context();
@@ -2460,8 +2579,12 @@ impl App {
                         self.thinking = level;
                         self.sync_subagent_thinking();
                         self.footer.thinking = level.as_str().to_owned();
-                        if let Some(session) = self.session.as_mut() {
-                            let _ = session.append_thinking_level_change(level);
+                        if let Some(session) = self.session.as_mut()
+                            && let Err(error) = session.append_thinking_level_change(level)
+                        {
+                            self.transcript.push_error(format!(
+                                "Cannot record the reasoning level in the session: {error}"
+                            ));
                         }
                         self.transcript
                             .push_info(format!("Reasoning level: {}", level.as_str()));
@@ -2505,11 +2628,19 @@ impl App {
                         }
                         let directive = Message::system(mode_directive(mode), Vec::new());
                         if let Some(session) = self.session.as_mut() {
-                            let _ = session.append_custom(
+                            if let Err(error) = session.append_custom(
                                 "subagent_settings",
                                 serde_json::json!({"mode": mode.as_str(), "force_once": false}),
-                            );
-                            let _ = session.append_message(&directive);
+                            ) {
+                                self.transcript.push_error(format!(
+                                    "Cannot record the subagent settings in the session: {error}"
+                                ));
+                            }
+                            if let Err(error) = session.append_message(&directive) {
+                                self.transcript.push_error(format!(
+                                    "Cannot record the subagent directive in the session: {error}"
+                                ));
+                            }
                         }
                         self.history.push(directive);
                         self.transcript.push_info(message);
@@ -2817,8 +2948,12 @@ impl App {
                 } => Some(id.clone()),
                 _ => None,
             });
-            if let Some(id) = target {
-                let _ = session.append_context_edit(id, Some(Content::text(updated)));
+            if let Some(id) = target
+                && let Err(error) = session.append_context_edit(id, Some(Content::text(updated)))
+            {
+                self.transcript.push_error(format!(
+                    "Cannot update the project memory in the session: {error}"
+                ));
             }
         }
         true
@@ -4289,8 +4424,12 @@ fn submit_prompt(
     }
     if plan.is_forced() {
         let directive = Message::system(FORCED_DIRECTIVE, Vec::new());
-        if let Some(session) = app.session.as_mut() {
-            let _ = session.append_message(&directive);
+        if let Some(session) = app.session.as_mut()
+            && let Err(error) = session.append_message(&directive)
+        {
+            app.transcript.push_error(format!(
+                "Cannot record the subagent directive in the session: {error}"
+            ));
         }
         app.history.push(directive);
         app.transcript
@@ -4430,7 +4569,10 @@ fn maybe_recover_overflow(app: &mut App) -> bool {
             .iter()
             .any(|entry| entry.id() == leaf && entry.message().is_some())
     {
-        let _ = session.append_context_edit(&leaf, None);
+        if let Err(error) = session.append_context_edit(&leaf, None) {
+            app.transcript
+                .push_error(format!("Cannot prune the session branch: {error}"));
+        }
         app.history = session.projection();
     }
 
@@ -4723,8 +4865,12 @@ fn persist_tool_result(app: &mut App, result: &ToolResultMessage) {
         app.footer.cost = app.footer.cost.saturating_add(usage.cost.total);
         let provider = app.model.provider.clone();
         let model = app.model.model.clone();
-        if let Some(session) = app.session.as_mut() {
-            let _ = session.append_usage("subagent", provider, model, usage);
+        if let Some(session) = app.session.as_mut()
+            && let Err(error) = session.append_usage("subagent", provider, model, usage)
+        {
+            app.transcript.push_error(format!(
+                "Cannot record subagent usage in the session: {error}"
+            ));
         }
     }
 }
@@ -6383,5 +6529,31 @@ mod tests {
 
         app.handle_key(key(KeyCode::Enter));
         assert!(matches!(app.overlay, Some(Overlay::Connect(_))));
+    }
+
+    #[test]
+    fn row_index_finds_entries_and_updates_counts() {
+        let empty = RowIndex::from_counts([]);
+        assert_eq!(empty.total(), 0);
+        assert_eq!(empty.find(0), None);
+
+        let mut index = RowIndex::from_counts([3, 0, 2, 4]);
+        assert_eq!(index.total(), 9);
+        assert_eq!(index.find(0), Some((0, 0)));
+        assert_eq!(index.find(2), Some((0, 2)));
+        assert_eq!(index.find(3), Some((2, 0)));
+        assert_eq!(index.find(4), Some((2, 1)));
+        assert_eq!(index.find(5), Some((3, 0)));
+        assert_eq!(index.find(8), Some((3, 3)));
+        assert_eq!(index.find(9), None);
+
+        index.set(1, 5, 0);
+        assert_eq!(index.total(), 14);
+        assert_eq!(index.find(3), Some((1, 0)));
+
+        index.set(0, 1, 3);
+        assert_eq!(index.total(), 12);
+        assert_eq!(index.find(0), Some((0, 0)));
+        assert_eq!(index.find(1), Some((1, 0)));
     }
 }

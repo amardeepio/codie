@@ -1,5 +1,7 @@
 //! Ratatui rendering for the transcript, editor, footer, and overlays.
 
+use std::collections::{BTreeSet, HashSet};
+
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -11,7 +13,7 @@ use codie_protocol::ext::ExtRenderKind;
 
 use crate::app::{
     App, CachedEntry, CachedEntryKey, CachedToolView, CachedTranscript, EntryLayout, Hit,
-    HitTarget, Overlay, Status, ToolViewKey,
+    HitTarget, Overlay, RowIndex, Status, ToolViewKey,
 };
 use crate::markdown;
 use crate::theme::Palette;
@@ -273,28 +275,29 @@ fn draw_transcript(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
                     .cloned(),
             );
         } else {
-            let mut offset = 0_usize;
-            for entry in &cache.entries {
-                let next = offset.saturating_add(entry.rows.len());
-                if next > start && offset < end {
-                    let from = start.saturating_sub(offset).min(entry.rows.len());
-                    let to = end.saturating_sub(offset).min(entry.rows.len());
-                    for (row, target) in entry.rows[from..to].iter().zip(&entry.targets[from..to]) {
-                        if let Some(target) = target {
-                            app.hits.push(Hit {
-                                row: area.y.saturating_add(
-                                    u16::try_from(visible.len()).unwrap_or(u16::MAX),
-                                ),
-                                target: *target,
-                            });
-                        }
-                        visible.push(row.clone());
+            let mut remaining = end.saturating_sub(start);
+            let (mut index, mut offset) = cache
+                .row_index
+                .find(start)
+                .unwrap_or((cache.entries.len(), 0));
+            while remaining > 0 && index < cache.entries.len() {
+                let entry = &cache.entries[index];
+                let from = offset.min(entry.rows.len());
+                let to = from.saturating_add(remaining).min(entry.rows.len());
+                for (row, target) in entry.rows[from..to].iter().zip(&entry.targets[from..to]) {
+                    if let Some(target) = target {
+                        app.hits.push(Hit {
+                            row: area
+                                .y
+                                .saturating_add(u16::try_from(visible.len()).unwrap_or(u16::MAX)),
+                            target: *target,
+                        });
                     }
+                    visible.push(row.clone());
                 }
-                offset = next;
-                if offset >= end {
-                    break;
-                }
+                remaining = remaining.saturating_sub(to - from);
+                index += 1;
+                offset = 0;
             }
         }
     }
@@ -309,23 +312,41 @@ fn draw_transcript(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
 
 /// Rebuilds only the transcript entries whose content, layout, or animation
 /// changed, and returns the total number of laid-out rows.
-fn ensure_transcript_cache(app: &App, width: u16) -> usize {
+fn ensure_transcript_cache(app: &mut App, width: u16) -> usize {
+    let dirty = app.transcript.take_dirty();
+    let layout_generation = app.transcript.layout_generation();
+    let tick = app.tick;
+
     let mut slot = app.transcript_cache.borrow_mut();
     let cache = slot.get_or_insert_with(|| CachedTranscript {
         width,
         theme_revision: app.theme_revision,
+        layout_generation,
+        tick,
         entries: Vec::new(),
+        row_index: RowIndex::default(),
+        animated: HashSet::new(),
         banner: Vec::new(),
     });
-    if cache.width != width || cache.theme_revision != app.theme_revision {
+    let reset = cache.width != width
+        || cache.theme_revision != app.theme_revision
+        || cache.layout_generation != layout_generation;
+    let tick_changed = cache.tick != tick;
+    if reset {
         cache.width = width;
         cache.theme_revision = app.theme_revision;
+        cache.layout_generation = layout_generation;
         cache.entries.clear();
+        cache.row_index = RowIndex::default();
+        cache.animated.clear();
         cache.banner.clear();
     }
+    cache.tick = tick;
 
     if app.transcript.is_empty() {
         cache.entries.clear();
+        cache.row_index = RowIndex::default();
+        cache.animated.clear();
         if cache.banner.is_empty() {
             cache.banner = wrap_lines(
                 empty_state_lines(&app.theme.palette, width.saturating_sub(1)),
@@ -335,66 +356,94 @@ fn ensure_transcript_cache(app: &App, width: u16) -> usize {
         return cache.banner.len();
     }
 
+    let app: &App = app;
     let transcript = &app.transcript;
     let len = transcript.entries().len();
-    cache.entries.truncate(len);
+    let full = reset || cache.entries.len() > len;
+    let appended = !full && cache.entries.len() < len;
+    let mut work = if full {
+        (0..len).collect::<BTreeSet<_>>()
+    } else {
+        dirty.into_iter().collect::<BTreeSet<_>>()
+    };
+    if appended {
+        work.extend(cache.entries.len()..len);
+    }
+    if !full && tick_changed {
+        work.extend(cache.animated.iter().copied());
+    }
+    if full {
+        cache.entries.clear();
+        cache.row_index = RowIndex::default();
+        cache.animated.clear();
+    }
 
     let layout_width = width.saturating_sub(1);
-    let mut skipping = false;
-    for index in 0..len {
-        let entry = &transcript.entries()[index];
-        let turn_start = transcript.is_turn_start(index);
-        if turn_start {
-            skipping = false;
+    let rebuild_index = full || appended;
+    for index in work {
+        if index >= len {
+            continue;
         }
-        let layout = if skipping && !turn_start {
-            EntryLayout::Skipped
-        } else if matches!(entry, Entry::User(_))
-            && turn_start
-            && transcript.is_turn_collapsed(index)
-        {
-            skipping = true;
-            EntryLayout::Collapsed
+        let entry = &transcript.entries()[index];
+        let layout = entry_layout(app, index);
+        let animation_tick = if layout == EntryLayout::Skipped {
+            0
         } else {
-            EntryLayout::Visible
-        };
-        let revision = match layout {
-            EntryLayout::Collapsed => turn_fingerprint(transcript, index),
-            EntryLayout::Visible | EntryLayout::Skipped => transcript.entry_revision(index),
+            entry_animation_tick(entry, app.tick)
         };
         let key = CachedEntryKey {
-            revision,
+            revision: transcript.entry_revision(index),
             layout,
-            animation_tick: entry_animation_tick(entry, app.tick),
+            animation_tick,
         };
-        if cache
+        let unchanged = !rebuild_index
+            && cache
+                .entries
+                .get(index)
+                .is_some_and(|cached| cached.key == key);
+        if unchanged {
+            continue;
+        }
+        let (lines, targets) = entry_lines(app, index, layout, layout_width);
+        let (rows, targets) = wrap_rows(lines, targets, usize::from(width));
+        let previous = cache
             .entries
             .get(index)
-            .is_none_or(|cached| cached.key != key)
-        {
-            let (lines, targets) = entry_lines(app, index, layout, layout_width);
-            let (rows, targets) = wrap_rows(lines, targets, usize::from(width));
-            let cached = CachedEntry { key, rows, targets };
-            if index < cache.entries.len() {
-                cache.entries[index] = cached;
-            } else {
-                cache.entries.push(cached);
-            }
+            .map_or(0, |cached| cached.rows.len());
+        let cached = CachedEntry { key, rows, targets };
+        if index < cache.entries.len() {
+            cache.entries[index] = cached;
+        } else {
+            cache.entries.push(cached);
+        }
+        if animation_tick == 0 {
+            cache.animated.remove(&index);
+        } else {
+            cache.animated.insert(index);
+        }
+        if !rebuild_index {
+            cache
+                .row_index
+                .set(index, cache.entries[index].rows.len(), previous);
         }
     }
-    cache.entries.iter().map(|entry| entry.rows.len()).sum()
+    cache.entries.truncate(len);
+    cache.animated.retain(|index| *index < len);
+    if rebuild_index || cache.row_index.len() != len {
+        cache.row_index = RowIndex::from_counts(cache.entries.iter().map(|entry| entry.rows.len()));
+    }
+    cache.row_index.total()
 }
 
-/// Returns a fingerprint that changes when any entry inside one turn changes.
-fn turn_fingerprint(transcript: &crate::transcript::Transcript, start: usize) -> u64 {
-    let mut fingerprint = transcript.entry_revision(start);
-    for index in start + 1..transcript.entries().len() {
-        if transcript.is_turn_start(index) {
-            break;
-        }
-        fingerprint = fingerprint.wrapping_add(transcript.entry_revision(index));
+/// Returns how one entry should be laid out in the current turn state.
+fn entry_layout(app: &App, index: usize) -> EntryLayout {
+    if app.transcript.is_skipped(index) {
+        EntryLayout::Skipped
+    } else if app.transcript.is_turn_start(index) && app.transcript.is_turn_collapsed(index) {
+        EntryLayout::Collapsed
+    } else {
+        EntryLayout::Visible
     }
-    fingerprint
 }
 
 /// Returns the animation tick an entry needs, or zero when it is static.
@@ -2922,6 +2971,44 @@ mod tests {
         let cache = cache.as_ref().expect("cache");
         assert_eq!(cache.entries[0].key, user_before);
         assert_ne!(cache.entries[1].key, assistant_before);
+    }
+
+    #[test]
+    fn scrolling_tracks_row_counts_after_an_old_entry_grows() {
+        let mut app = app();
+        for index in 0..20 {
+            app.transcript.push_info(format!("before {index}"));
+        }
+        app.transcript.tool_start(
+            "call_1".into(),
+            "bash".into(),
+            serde_json::json!({"command": "seq 100"}),
+        );
+        app.transcript.tool_end(
+            "call_1",
+            (0..100)
+                .map(|line| format!("output {line}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            false,
+            None,
+            None,
+        );
+        for index in 0..20 {
+            app.transcript.push_info(format!("after {index}"));
+        }
+
+        let _ = buffer(&mut app);
+        let bottom_before = app.transcript.scroll();
+        assert!(app.transcript.toggle_tool(20));
+        let expanded = buffer(&mut app);
+        let bottom_after = app.transcript.scroll();
+        assert!(bottom_after > bottom_before);
+        assert!(expanded.contains("after 19"), "{expanded}");
+
+        app.transcript.scroll_up(u16::MAX);
+        let top = buffer(&mut app);
+        assert!(top.contains("before 0"), "{top}");
     }
 
     #[test]

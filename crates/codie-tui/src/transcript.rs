@@ -126,8 +126,14 @@ pub struct Transcript {
     follow: bool,
     max_scroll: u16,
     revision: u64,
+    /// Entries whose cached layout is stale.
+    dirty_entries: HashSet<usize>,
+    /// Bumped when collapse state changes the layout of existing entries.
+    layout_generation: u64,
     collapsed_turns: HashSet<usize>,
     turn_starts: HashSet<usize>,
+    /// Turn start indices in increasing order, for turn lookup.
+    turn_order: Vec<usize>,
 }
 
 impl Transcript {
@@ -141,8 +147,11 @@ impl Transcript {
             follow: true,
             max_scroll: 0,
             revision: 0,
+            dirty_entries: HashSet::new(),
+            layout_generation: 0,
             collapsed_turns: HashSet::new(),
             turn_starts: HashSet::new(),
+            turn_order: Vec::new(),
         }
     }
 
@@ -193,6 +202,7 @@ impl Transcript {
         if let Some(revision) = self.entry_revisions.get_mut(index) {
             *revision = self.revision;
         }
+        self.mark_dirty(index);
     }
 
     /// Appends an entry with a fresh revision.
@@ -201,7 +211,40 @@ impl Transcript {
         self.entries.push(entry);
         self.entry_revisions.push(self.revision);
         self.follow = true;
-        self.entries.len() - 1
+        let index = self.entries.len() - 1;
+        self.mark_dirty(index);
+        index
+    }
+
+    /// Marks one entry, and its collapsed turn label, for re-layout.
+    fn mark_dirty(&mut self, index: usize) {
+        self.dirty_entries.insert(index);
+        if self.collapsed_turns.is_empty() {
+            return;
+        }
+        if let Some(start) = self.turn_start_of(index)
+            && start != index
+            && self.collapsed_turns.contains(&start)
+        {
+            if let Some(revision) = self.entry_revisions.get_mut(start) {
+                *revision = self.revision;
+            }
+            self.dirty_entries.insert(start);
+        }
+    }
+
+    /// Returns the start of the turn containing `index`.
+    fn turn_start_of(&self, index: usize) -> Option<usize> {
+        let position = self.turn_order.partition_point(|&start| start <= index);
+        position
+            .checked_sub(1)
+            .map(|position| self.turn_order[position])
+    }
+
+    /// Bumps the layout generation so every cached entry is rebuilt.
+    fn touch_layout(&mut self) {
+        self.layout_generation = self.layout_generation.wrapping_add(1);
+        self.touch();
     }
 
     /// Returns the revision of one entry, for layout caching.
@@ -210,13 +253,37 @@ impl Transcript {
         self.entry_revisions.get(index).copied().unwrap_or_default()
     }
 
+    /// Returns the layout generation, which changes when turns collapse.
+    #[must_use]
+    pub(crate) const fn layout_generation(&self) -> u64 {
+        self.layout_generation
+    }
+
+    /// Takes the entries whose cached layout is stale.
+    pub(crate) fn take_dirty(&mut self) -> Vec<usize> {
+        self.dirty_entries.drain().collect()
+    }
+
+    /// Returns true when `index` is hidden inside an earlier collapsed turn.
+    #[must_use]
+    pub(crate) fn is_skipped(&self, index: usize) -> bool {
+        self.turn_start_of(index)
+            .filter(|&start| start != index)
+            .is_some_and(|start| self.collapsed_turns.contains(&start))
+    }
+
     /// Adds a new user turn and folds every earlier turn.
     pub fn push_user(&mut self, text: impl Into<String>) {
+        let folded = !self.turn_starts.is_empty();
         self.collapsed_turns
             .extend(self.turn_starts.iter().copied());
         let index = self.entries.len();
         self.push_entry(Entry::User(text.into()));
         self.turn_starts.insert(index);
+        self.turn_order.push(index);
+        if folded {
+            self.touch_layout();
+        }
     }
 
     /// Adds a steering or follow-up message without starting a new turn.
@@ -485,7 +552,7 @@ impl Transcript {
         if !self.collapsed_turns.insert(index) {
             self.collapsed_turns.remove(&index);
         }
-        self.touch();
+        self.touch_layout();
         true
     }
 
@@ -505,7 +572,7 @@ impl Transcript {
                 self.collapsed_turns.insert(index);
             }
         }
-        self.touch();
+        self.touch_layout();
         true
     }
 
@@ -548,12 +615,14 @@ impl Transcript {
     pub fn clear(&mut self) {
         self.entries.clear();
         self.entry_revisions.clear();
+        self.dirty_entries.clear();
         self.scroll = 0;
         self.follow = true;
         self.max_scroll = 0;
         self.collapsed_turns.clear();
         self.turn_starts.clear();
-        self.touch();
+        self.turn_order.clear();
+        self.touch_layout();
     }
 
     /// Returns true when there is no content.
@@ -689,5 +758,29 @@ mod tests {
         assert!(!transcript.is_following());
         transcript.scroll_to_bottom();
         assert!(transcript.is_following());
+    }
+
+    #[test]
+    fn only_changed_entries_are_marked_dirty() {
+        let mut transcript = Transcript::new();
+        transcript.push_user("first");
+        transcript.start_assistant();
+        transcript.set_text("answer".into());
+        let initial = transcript.take_dirty();
+        assert!(initial.contains(&0));
+        assert!(initial.contains(&1));
+
+        transcript.set_text("updated".into());
+        assert_eq!(transcript.take_dirty(), vec![1]);
+
+        transcript.push_user("second");
+        assert!(transcript.is_skipped(1));
+        assert!(transcript.take_dirty().contains(&2));
+
+        // A change inside a folded turn must refresh its summary row too.
+        assert!(transcript.toggle_thinking(1));
+        let dirty = transcript.take_dirty();
+        assert!(dirty.contains(&0), "collapsed label must be rebuilt");
+        assert!(dirty.contains(&1));
     }
 }
