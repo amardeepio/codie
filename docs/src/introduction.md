@@ -7,7 +7,7 @@ with a Rust core, a stricter safety posture, and an explicit provider registry.
 
 ## Status
 
-**Current release (`0.9.3`).** The workspace, the error model, the test harness, and the
+**Current release (`0.9.4`).** The workspace, the error model, the test harness, and the
 documentation and specification baseline are in place, and the agent runs end to end. Phase 1 added the headless
 core (`codie -p "..."`, `--mode json`), Phase 2 the interactive terminal app, Phase 3 full-fidelity sessions,
 Phase 4 customization and trust, Phase 5 RPC mode, generated schemas, HTML export, update checks, and the
@@ -21,7 +21,9 @@ Google Gemini, the codie-vs-opencode benchmark suite, text selection and clipboa
 the refreshed permission overlay. `0.9.2` adds project memory (`CODIE.MD`, `/init`, and the `project_memory`
 tool), Ctrl+V clipboard image attachments, full-width Markdown tables, and live `/theme` previews. `0.9.3` adds
 a 25-provider registry, TUI `/connect` and key validation, live OpenAI-compatible model catalogs, keyless local
-providers, and persisted provider/model selection. See the
+providers, and persisted provider/model selection. `0.9.4` adds subagent delegation with personas and live child
+activity, RPC v2 interactive permissions, incremental TUI transcript layout, and a 7 KiB project-memory entry cap.
+See the
 [roadmap](roadmap.md), [RPC mode](rpc.md), [configuration](configuration.md), and
 [`ROADMAP.md`](../../ROADMAP.md).
 

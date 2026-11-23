@@ -424,7 +424,7 @@ checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 
 [[package]]
 name = "codie-ai"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "bytes",
  "codie-core",
@@ -447,7 +447,7 @@ dependencies = [
 
 [[package]]
 name = "codie-cli"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -482,7 +482,7 @@ dependencies = [
 
 [[package]]
 name = "codie-core"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "async-trait",
  "codie-testkit",
@@ -497,7 +497,7 @@ dependencies = [
 
 [[package]]
 name = "codie-ext"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "async-trait",
  "codie-core",
@@ -514,7 +514,7 @@ dependencies = [
 
 [[package]]
 name = "codie-prompt"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "base64 0.22.1",
  "codie-core",
@@ -525,7 +525,7 @@ dependencies = [
 
 [[package]]
 name = "codie-protocol"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "codie-testkit",
  "schemars",
@@ -537,7 +537,7 @@ dependencies = [
 
 [[package]]
 name = "codie-session"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "codie-core",
  "codie-testkit",
@@ -549,7 +549,7 @@ dependencies = [
 
 [[package]]
 name = "codie-spec-macro"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "quote",
  "syn 2.0.119",
@@ -557,7 +557,7 @@ dependencies = [
 
 [[package]]
 name = "codie-subagents"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "async-trait",
  "codie-core",
@@ -576,7 +576,7 @@ dependencies = [
 
 [[package]]
 name = "codie-testkit"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "codie-spec-macro",
  "insta",
@@ -585,7 +585,7 @@ dependencies = [
 
 [[package]]
 name = "codie-tools"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "async-trait",
  "codie-core",
@@ -606,7 +606,7 @@ dependencies = [
 
 [[package]]
 name = "codie-tui"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4211,7 +4211,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
 name = "xtask"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "anyhow",
  "codie-protocol",

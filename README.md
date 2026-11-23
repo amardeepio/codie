@@ -20,11 +20,12 @@ implementation language, the safety posture, and the provider scope.
 
 The command is `codie`.
 
-**Status: stable release (`0.9.3`).** The one-shot agent, interactive TUI, sessions, customization, automation, and
-out-of-process extensions work end to end. This release adds a 25-provider registry, TUI `/connect` with API-key
-validation, live OpenAI-compatible model catalogs, keyless local providers (Ollama, LM Studio, vLLM), and persisted
-provider/model selection. See [`docs/src/configuration.md`](docs/src/configuration.md),
-[`docs/src/rpc.md`](docs/src/rpc.md), and [`ROADMAP.md`](ROADMAP.md).
+**Status: stable release (`0.9.4`).** The one-shot agent, interactive TUI, sessions, customization, automation, and
+out-of-process extensions work end to end. This release adds subagent delegation with personas and live child
+activity, RPC protocol v2 with interactive permissions, and a per-entry TUI transcript cache that keeps long
+sessions responsive. Project-memory entries can now be up to 7 KiB. See
+[`docs/src/configuration.md`](docs/src/configuration.md), [`docs/src/rpc.md`](docs/src/rpc.md), and
+[`ROADMAP.md`](ROADMAP.md).
 
 <p align="center">
   <img src="assets/tui.png" alt="Codie TUI showing the startup banner and command palette" width="1000">
@@ -60,15 +61,16 @@ flowchart LR
     P["Provider adapter<br/>OpenAI-compatible<br/>25 cloud + local providers"] -->|"SSE deltas"| S["Assistant event stream"]
     S --> L["Agent loop<br/>turns · steering · cancellation"]
     L <-->|"append / projection"| DB["Session store<br/>append-only JSONL tree<br/>resume · fork · compact"]
-    L --> PM["Context assembly<br/>system prompt · skills · templates<br/>project instructions · @files"]
-    L --> T["Tool execution<br/>read · write · edit · bash / powershell<br/>grep · find · ls · web_fetch<br/>extension tools"]
+    L --> PM["Context assembly<br/>system prompt · skills · templates<br/>project memory · @files"]
+    L --> T["Tool execution<br/>read · write · edit · bash / powershell<br/>grep · find · ls · web_fetch<br/>project_memory · task · question<br/>extension tools"]
+    L <-->|"task / child runs"| SA["Subagent runtime<br/>personas · child sessions<br/>bounded parallelism · timeouts"]
     T <-->|"permission broker"| A["Approval UI"]
     L <-->|"hooks / tools / commands"| X["codie-ext<br/>JSON-RPC over stdio"]
     L --> M["Interfaces"]
     M --> I["Interactive TUI<br/>transcript · editor · overlays"]
     M --> PL["Plain / print"]
     M --> J["JSON events"]
-    M --> R["RPC"]
+    M --> R["RPC v2<br/>events · permissions · config"]
 ```
 
 Crate graph (all shipping; testkit is dev-only and spec-macro runs at build time):
@@ -79,9 +81,10 @@ flowchart TD
 
     CORE["codie-core<br/>messages · events · agent loop"]
     AI["codie-ai<br/>provider registry · SSE · catalogs · auth"]
-    TOOLS["codie-tools<br/>read · write · edit · bash / powershell<br/>grep · find · ls · web_fetch"]
+    TOOLS["codie-tools<br/>read · write · edit · bash / powershell<br/>grep · find · ls · web_fetch<br/>project_memory"]
     SESSION["codie-session<br/>JSONL tree · projection · export"]
-    PROMPT["codie-prompt<br/>system prompt · skills · templates · trust"]
+    PROMPT["codie-prompt<br/>system prompt · skills · templates<br/>project memory · trust"]
+    SUB["codie-subagents<br/>personas · child runs · delegation"]
     EXT["codie-ext<br/>JSON-RPC extensions"]
 
     TUI["codie-tui<br/>interactive app · transcript · themes"]
@@ -94,6 +97,7 @@ flowchart TD
     CLI --> TOOLS
     CLI --> SESSION
     CLI --> PROMPT
+    CLI --> SUB
     CLI --> EXT
     CLI --> PROTO
     CLI --> TUI
@@ -102,6 +106,9 @@ flowchart TD
     TOOLS --> CORE
     SESSION --> CORE
     PROMPT --> CORE
+    SUB --> CORE
+    SUB --> PROMPT
+    SUB --> SESSION
     EXT --> PROTO
 
     TUI --> CORE
@@ -109,6 +116,7 @@ flowchart TD
     TUI --> TOOLS
     TUI --> SESSION
     TUI --> PROMPT
+    TUI --> SUB
 
     SPEC["codie-spec-macro<br/>requirement test annotations"] -.-> CORE
     SPEC -.-> TUI
@@ -120,15 +128,24 @@ nothing about tools. Tools execute only after the assistant message is final, an
 contract (`name`, schema, execution mode, `execute`). The CLI is the only layer that reads environment
 variables, opens configuration, selects a provider, and decides the process exit code.
 
+Delegated work is in-process. The host `task` tool asks `codie-subagents` to start a child run with its own
+persona, model, tool subset, turn budget, timeout, and child session. Children inherit the parent's permission
+policy, cannot escalate, and report progress and usage through ordinary tool updates.
+
 The TUI is an event-driven consumer of `AgentEvent`, not part of the loop. It owns the alternate screen,
 transcript, editor, overlays, permission prompts, theme, and footer. Rendering is coalesced on a tick and cached
-by transcript revision, width, and theme, so scrolling a session with large diffs stays responsive. The same
-diff and numbered-code renderer powers edit results, write previews, and rich permission review. Escape and
-`/stop` cancel model requests and tool process groups; session compaction uses the same cancellation token.
+per entry by content revision, width, theme, and animation state, with a Fenwick row index, so streaming only
+re-lays out the changed tail and scrolling a session with large diffs stays responsive. The same diff and
+numbered-code renderer powers edit results, write previews, and rich permission review. Escape and `/stop`
+cancel model requests and tool process groups; session compaction uses the same cancellation token. The same
+events power plain/print, JSON, and RPC interfaces; RPC v2 adds interactive permissions, configuration access,
+and attachments for GUI clients.
 
 Sessions are append-only JSONL with a tree of entries. Resume, fork, clone, and compaction all operate on the
 file; the model-visible history is a deterministic projection. Context assembly and compaction share the same
-token estimator and reserve budget, which the footer exposes as a live context meter.
+token estimator and reserve budget, which the footer exposes as a live context meter. Project memory
+(`CODIE.MD`) is a section-scoped notebook loaded into the context and edited only through the `project_memory`
+tool, which deduplicates entries, redacts credentials, and enforces the 7 KiB entry and 32 KiB file caps.
 
 Details are in [`docs/src/architecture.md`](docs/src/architecture.md), [`docs/src/tui.md`](docs/src/tui.md),
 and [`specs/README.md`](specs/README.md).
@@ -157,14 +174,14 @@ Pin a version or pick another directory:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh \
-  | sh -s -- --version 0.9.3
+  | sh -s -- --version 0.9.4
 
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh \
   | sh -s -- --bin-dir "$HOME/bin"
 ```
 
 ```powershell
-$env:CODIE_VERSION = "0.9.3"
+$env:CODIE_VERSION = "0.9.4"
 irm https://raw.githubusercontent.com/amardeepio/codie/main/install.ps1 | iex
 ```
 

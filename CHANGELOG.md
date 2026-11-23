@@ -11,6 +11,28 @@ that major series, with migrations applied on read.
 
 ### Added
 
+- Nothing yet.
+
+### Changed
+
+- Nothing yet.
+
+### Fixed
+
+- Nothing yet.
+
+### Removed
+
+- Nothing yet.
+
+### Security
+
+- Nothing yet.
+
+## [0.9.4] - 2026-11-23
+
+### Added
+
 - Subagent personas. `.codie/agents/<name>.md` (and `<config_dir>/agents/`) define a type's description, prompt,
   tool subset, model, turn budget, and timeout; `[subagents.types.<name>]` accepts the same fields. A definition
   overrides the matching built-in type field-by-field, and the names appear in the `task` schema and description
@@ -36,6 +58,21 @@ that major series, with migrations applied on read.
   definitions (`PROTO-012`).
 - TypeScript bindings for the RPC and agent-event types are generated from Rust with `cargo xtask bindings`
   (`--check` for CI), behind `typescript` features on `codie-core` and `codie-protocol`.
+
+### Changed
+
+- `rpc_ready` reports protocol version 2 plus the supported feature list (`PROTO-011`). The published
+  `schemas/rpc-*.schema.json` files were regenerated.
+- TUI list overlays now fit their filtered content, cap long lists at 16 visible rows, highlight the full selected
+  row, and use normal foreground text for descriptions and keyboard hints. The footer drops secondary metadata at
+  medium widths and uses separate location/status rows on narrow terminals; the original startup banner remains.
+- Permission dialogs now hug their content horizontally, use rounded padded frames and a raised preview panel, and
+  present clearer color-coded Allow once, Always allow, and Deny actions.
+- The TUI lays out the transcript per entry and rebuilds only dirty or animated entries. A Fenwick row index
+  keeps scroll lookup logarithmic, so streaming a long session updates only the changed tail instead of
+  re-rendering all history.
+- `project_memory` accepts entries up to 7 KiB instead of 1 KiB. The 32 KiB `CODIE.MD` and 128 KiB `PLAN.MD`
+  file caps are unchanged (`MEM-013`).
 
 ### Fixed
 
@@ -81,20 +118,18 @@ that major series, with migrations applied on read.
 - Subagent summaries are labelled untrusted, and truncation keeps the beginning and the conclusion instead of
   only the head.
 
-### Changed
-
-- `rpc_ready` reports protocol version 2 plus the supported feature list (`PROTO-011`). The published
-  `schemas/rpc-*.schema.json` files were regenerated.
-- TUI list overlays now fit their filtered content, cap long lists at 16 visible rows, highlight the full selected
-  row, and use normal foreground text for descriptions and keyboard hints. The footer drops secondary metadata at
-  medium widths and uses separate location/status rows on narrow terminals; the original startup banner remains.
-- Permission dialogs now hug their content horizontally, use rounded padded frames and a raised preview panel, and
-  present clearer color-coded Allow once, Always allow, and Deny actions.
-
-### Fixed
-
 - Interactive runs now write tracing output to `<data>/logs/codie.log` instead of stderr. Background provider
   catalog warnings (for example, an offline Ollama or LM Studio server) no longer corrupt the alternate-screen TUI.
+- Ctrl+C and Ctrl+D are no longer swallowed by Help, Tree, Usage, picker, or permission overlays. Ctrl+C still
+  cancels a running turn and a second press quits; the connect overlay keeps its own handling.
+- The footer context meter, compaction trigger, and session estimates now share one `chars / 4` estimator,
+  including image costs and per-message rounding, so percentages and thresholds agree.
+- Session write failures (model and thinking changes, subagent directives and settings, project-memory edits,
+  branch pruning, and subagent usage) are surfaced in the transcript or returned in plain mode instead of being
+  discarded.
+- Collapsed turn summaries refresh when a hidden tool or reply changes.
+- Plain mode's `/model` and `/provider` update the context window from the model catalog and persist the
+  selection, matching the full TUI.
 
 ### Removed
 

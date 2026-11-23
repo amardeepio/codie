@@ -23,8 +23,10 @@ codie-vs-opencode benchmark suite, text selection and clipboard copy, additional
 permission overlay. `0.9.2` adds project memory (`CODIE.MD`, `/init`, and the `project_memory` tool), Ctrl+V
 clipboard image attachments, full-width Markdown tables, and live `/theme` previews. `0.9.3` adds the provider
 registry, TUI `/connect` and key validation, 22 additional providers, live OpenAI-compatible model catalogs,
-keyless local providers, and persisted provider/model selection. Signing, notarization, SBOM, fuzzing, and the
-full terminal matrix remain for the `1.0.0` gate.
+keyless local providers, and persisted provider/model selection. `0.9.4` adds subagent delegation with personas
+and live child activity, RPC v2 interactive permissions, a per-entry TUI transcript cache, shared context
+estimates, and a 7 KiB project-memory entry cap. Signing, notarization, SBOM, fuzzing, and the full terminal
+matrix remain for the `1.0.0` gate.
 
 ## Phase 0 exit criteria (met 2026-11-11)
 
