@@ -1,9 +1,12 @@
 //! Configuration, paths, and precedence for the CLI.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use codie_core::ThinkingLevel;
+use codie_subagents::{AgentTypeConfig, SubagentConfig, ToolSelection};
 use serde::{Deserialize, Serialize};
 
 /// The per-user configuration file.
@@ -16,6 +19,38 @@ struct FileConfig {
     base_url: Option<String>,
     permissions: Option<FilePermissions>,
     extensions: Option<FileExtensions>,
+    subagents: Option<FileSubagents>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct FileSubagents {
+    enabled: Option<bool>,
+    max_parallel: Option<usize>,
+    max_depth: Option<usize>,
+    max_turns: Option<usize>,
+    timeout_secs: Option<u64>,
+    persist_sessions: Option<bool>,
+    result_max_bytes: Option<usize>,
+    max_total_tokens: Option<u64>,
+    max_total_cost_usd: Option<f64>,
+    types: Option<BTreeMap<String, FileAgentType>>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct FileAgentType {
+    model: Option<String>,
+    tools: Option<FileToolSelection>,
+    description: Option<String>,
+    prompt: Option<String>,
+    max_turns: Option<usize>,
+    timeout_secs: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum FileToolSelection {
+    Word(String),
+    List(Vec<String>),
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -57,6 +92,8 @@ pub(crate) struct Config {
     pub(crate) allow: Vec<String>,
     /// Extension names disabled by configuration.
     pub(crate) extensions_disabled: Vec<String>,
+    /// Subagent delegation configuration.
+    pub(crate) subagents: SubagentConfig,
 }
 
 /// The provider and model last selected in the TUI.
@@ -141,6 +178,7 @@ impl Config {
             .extensions
             .and_then(|extensions| extensions.disabled)
             .unwrap_or_default();
+        let subagents = resolve_subagents(file.subagents)?;
         let mut allow = file
             .permissions
             .and_then(|permissions| permissions.allow)
@@ -181,6 +219,7 @@ impl Config {
             base_url: env_string("CODIE_BASE_URL").or(file.base_url),
             allow,
             extensions_disabled,
+            subagents,
         })
     }
 
@@ -213,6 +252,74 @@ pub(crate) fn normalize_cwd(cwd: &Path) -> PathBuf {
     } else {
         canonical
     }
+}
+
+fn resolve_subagents(file: Option<FileSubagents>) -> Result<SubagentConfig> {
+    let defaults = SubagentConfig::default();
+    let Some(file) = file else {
+        return Ok(defaults);
+    };
+    let mut config = defaults;
+    if let Some(value) = file.enabled {
+        config.enabled = value;
+    }
+    if let Some(value) = file.max_parallel {
+        config.max_parallel = value;
+    }
+    if let Some(value) = file.max_depth {
+        config.max_depth = value;
+    }
+    if let Some(value) = file.max_turns {
+        config.max_turns = value;
+    }
+    if let Some(value) = file.timeout_secs {
+        config.timeout = Duration::from_secs(value);
+    }
+    if let Some(value) = file.persist_sessions {
+        config.persist_sessions = value;
+    }
+    if let Some(value) = file.result_max_bytes {
+        config.result_max_bytes = value;
+    }
+    if let Some(value) = file.max_total_tokens {
+        config.max_total_tokens = Some(value);
+    }
+    if let Some(value) = file.max_total_cost_usd {
+        config.max_total_cost_usd = Some(value);
+    }
+    if let Some(types) = file.types {
+        for (name, declared) in types {
+            let base = config.types.get(&name).cloned().unwrap_or_default();
+            let tools = match declared.tools {
+                Some(FileToolSelection::Word(word)) if word.eq_ignore_ascii_case("inherit") => {
+                    ToolSelection::Inherit
+                }
+                Some(FileToolSelection::Word(word)) => {
+                    bail!(
+                        "subagents.types.{name}.tools must be \"inherit\" or a list of tool names, not `{word}`"
+                    );
+                }
+                Some(FileToolSelection::List(list)) => ToolSelection::Only(list),
+                None => base.tools,
+            };
+            config.types.insert(
+                name,
+                AgentTypeConfig {
+                    model: declared.model.or(base.model),
+                    tools,
+                    description: declared.description.or(base.description),
+                    prompt: declared.prompt.or(base.prompt),
+                    max_turns: declared.max_turns.or(base.max_turns),
+                    timeout: declared
+                        .timeout_secs
+                        .map(Duration::from_secs)
+                        .or(base.timeout),
+                },
+            );
+        }
+    }
+    config.validate().map_err(anyhow::Error::msg)?;
+    Ok(config)
 }
 
 fn load_file(path: &Path) -> Result<FileConfig> {
@@ -263,7 +370,52 @@ mod tests {
             base_url: None,
             allow: Vec::new(),
             extensions_disabled: Vec::new(),
+            subagents: SubagentConfig::default(),
         }
+    }
+
+    #[test]
+    #[codie_testkit::spec("CLI-012")]
+    fn spec_cli_012_subagent_config_validation() {
+        let file: FileSubagents = toml::from_str(
+            r#"
+enabled = true
+max_parallel = 3
+max_depth = 1
+max_turns = 12
+timeout_secs = 90
+persist_sessions = false
+result_max_bytes = 4096
+max_total_tokens = 5000
+max_total_cost_usd = 1.25
+
+[types.explore]
+model = "deepseek-chat"
+tools = ["read", "grep"]
+
+[types.general]
+tools = "inherit"
+"#,
+        )
+        .unwrap();
+        let config = resolve_subagents(Some(file)).unwrap();
+        assert!(config.enabled);
+        assert_eq!(config.max_parallel, 3);
+        assert_eq!(config.max_depth, 1);
+        assert_eq!(config.max_turns, 12);
+        assert_eq!(config.timeout, Duration::from_secs(90));
+        assert!(!config.persist_sessions);
+        assert_eq!(config.result_max_bytes, 4096);
+        assert_eq!(config.max_total_tokens, Some(5000));
+        assert_eq!(config.max_total_cost_usd, Some(1.25));
+        assert_eq!(
+            config.types["explore"].tools,
+            ToolSelection::Only(vec!["read".to_owned(), "grep".to_owned()])
+        );
+
+        let invalid: FileSubagents = toml::from_str("max_parallel = 0").unwrap();
+        let error = resolve_subagents(Some(invalid)).unwrap_err().to_string();
+        assert!(error.contains("max_parallel"), "{error}");
     }
 
     #[test]

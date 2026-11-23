@@ -46,3 +46,6 @@ __pycache__/
 
 # Local security notes
 prompt-injection-mitigation.md
+
+# Desktop app (work in progress, not tracked yet)
+desktop-app/

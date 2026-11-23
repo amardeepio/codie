@@ -4,7 +4,7 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, Clear, Padding, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
 use codie_protocol::ext::ExtRenderKind;
@@ -29,6 +29,11 @@ const BANNER: [&str; 5] = [
     " ╚═════╝  ╚═════╝ ╚═════╝    ███████╗   ",
 ];
 
+const MAX_LIST_ITEMS: usize = 16;
+const MAX_LIST_WIDTH: u16 = 88;
+const NARROW_FOOTER_WIDTH: u16 = 80;
+const DETAILED_FOOTER_WIDTH: u16 = 120;
+
 /// Draws one frame.
 pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
     let area = frame.area();
@@ -41,10 +46,15 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
         .unwrap_or(1)
         .saturating_add(2)
         .clamp(3, 10);
+    let footer_height = if area.width < NARROW_FOOTER_WIDTH {
+        2
+    } else {
+        1
+    };
     let chunks = Layout::vertical([
         Constraint::Min(3),
         Constraint::Length(editor_height),
-        Constraint::Length(1),
+        Constraint::Length(footer_height),
     ])
     .split(area);
 
@@ -133,9 +143,12 @@ fn selection_text(buffer: &ratatui::buffer::Buffer, selection: crate::app::Selec
 
 fn draw_list_overlay(frame: &mut Frame<'_>, area: Rect, list: &crate::app::ChoiceList, app: &App) {
     let palette = app.theme.palette;
-    let width = area.width.saturating_mul(4) / 5;
-    let height = area.height.saturating_mul(3) / 5;
-    let rect = centered(area, width.max(30), height.max(8));
+    let width = area.width.saturating_sub(4).clamp(30, MAX_LIST_WIDTH);
+    let item_rows = list.visible.len().clamp(1, MAX_LIST_ITEMS);
+    let height = u16::try_from(item_rows.saturating_add(6))
+        .unwrap_or(u16::MAX)
+        .max(8);
+    let rect = centered(area, width, height);
     frame.render_widget(Clear, rect);
 
     let block = Block::bordered()
@@ -152,15 +165,20 @@ fn draw_list_overlay(frame: &mut Frame<'_>, area: Rect, list: &crate::app::Choic
     };
 
     let query = if list.query.is_empty() {
-        "—".to_owned()
+        "—"
     } else {
-        list.query.clone()
+        list.query.as_str()
+    };
+    let query_style = if list.query.is_empty() {
+        palette.muted
+    } else {
+        palette.foreground
     };
     let mut lines = vec![
-        Line::from(Span::styled(
-            format!("filter: {query}"),
-            Style::default().fg(palette.muted),
-        )),
+        Line::from(vec![
+            Span::styled("filter: ", Style::default().fg(palette.muted)),
+            Span::styled(query, Style::default().fg(query_style)),
+        ]),
         Line::default(),
     ];
     if list.visible.is_empty() {
@@ -192,7 +210,7 @@ fn draw_list_overlay(frame: &mut Frame<'_>, area: Rect, list: &crate::app::Choic
         } else {
             (
                 Style::default().fg(palette.foreground),
-                Style::default().fg(palette.muted),
+                Style::default().fg(palette.foreground),
             )
         };
         let mut spans = vec![Span::styled(format!("{marker}{}", item.label), style)];
@@ -204,16 +222,33 @@ fn draw_list_overlay(frame: &mut Frame<'_>, area: Rect, list: &crate::app::Choic
     lines.push(Line::default());
     lines.push(Line::from(Span::styled(
         list.hint.clone(),
-        Style::default().fg(palette.muted),
+        Style::default().fg(palette.foreground),
     )));
     frame.render_widget(
-        Paragraph::new(lines).wrap(Wrap { trim: false }).style(
+        Paragraph::new(lines).style(
             Style::default()
                 .fg(palette.foreground)
                 .bg(palette.background),
         ),
         inner,
     );
+
+    if list.selected >= offset
+        && let Some(selected_row) = list.selected.checked_sub(offset)
+        && selected_row < visible_height
+        && selected_row < list.visible.len()
+    {
+        let row = Rect {
+            x: inner.x,
+            y: inner.y + 2 + u16::try_from(selected_row).unwrap_or(u16::MAX),
+            width: inner.width,
+            height: 1,
+        };
+        frame.buffer_mut().set_style(
+            row,
+            Style::default().fg(palette.background).bg(palette.primary),
+        );
+    }
 }
 
 fn draw_transcript(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
@@ -318,8 +353,31 @@ fn transcript_lines(app: &App, width: u16) -> (Vec<Line<'static>>, Vec<Option<Hi
         body.push(Line::default());
         body.push(Line::from(Span::styled(
             "Type a prompt, or press / for the command palette.",
-            Style::default().fg(palette.muted),
+            Style::default().fg(palette.foreground),
         )));
+        body.push(Line::from(vec![
+            Span::styled(
+                "Enter",
+                Style::default()
+                    .fg(palette.primary)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" submit  ·  ", Style::default().fg(palette.muted)),
+            Span::styled(
+                "Shift+Enter",
+                Style::default()
+                    .fg(palette.primary)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" newline  ·  ", Style::default().fg(palette.muted)),
+            Span::styled(
+                "@",
+                Style::default()
+                    .fg(palette.primary)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" attach files", Style::default().fg(palette.muted)),
+        ]));
         body.push(Line::default());
     }
 
@@ -337,6 +395,10 @@ fn transcript_lines(app: &App, width: u16) -> (Vec<Line<'static>>, Vec<Option<Hi
             && app.transcript.is_turn_collapsed(index)
         {
             body.push(Line::default());
+            let label = match text.split_once('\n') {
+                Some((first, _)) => format!("{first} …"),
+                None => text.clone(),
+            };
             body.push_target(
                 Line::from(vec![
                     Span::styled(
@@ -345,10 +407,7 @@ fn transcript_lines(app: &App, width: u16) -> (Vec<Line<'static>>, Vec<Option<Hi
                             .fg(palette.primary)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(
-                        text.clone(),
-                        Style::default().fg(palette.user).bg(palette.surface),
-                    ),
+                    Span::styled(label, Style::default().fg(palette.user).bg(palette.surface)),
                     Span::styled(
                         format!("  {}", turn_summary(&app.transcript, index)),
                         Style::default().fg(palette.muted),
@@ -362,22 +421,26 @@ fn transcript_lines(app: &App, width: u16) -> (Vec<Line<'static>>, Vec<Option<Hi
         match entry {
             Entry::User(text) => {
                 body.push(Line::default());
-                let line = Line::from(vec![
+                let mut lines = markdown::render_user(text, &palette, usize::from(width));
+                if lines.is_empty() {
+                    lines.push(Line::default());
+                }
+                lines[0].spans.insert(
+                    0,
                     Span::styled(
                         "▾ ",
                         Style::default()
                             .fg(palette.primary)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(
-                        text.clone(),
-                        Style::default().fg(palette.user).bg(palette.surface),
-                    ),
-                ]);
-                if app.transcript.is_turn_start(index) {
-                    body.push_target(line, HitTarget::Turn(index));
-                } else {
-                    body.push(line);
+                );
+                let turn_start = app.transcript.is_turn_start(index);
+                for (offset, line) in lines.into_iter().enumerate() {
+                    if turn_start && offset == 0 {
+                        body.push_target(line, HitTarget::Turn(index));
+                    } else {
+                        body.push(line);
+                    }
                 }
             }
             Entry::Assistant(assistant) => {
@@ -634,6 +697,9 @@ fn tool_header(
     tick: u64,
     palette: &Palette,
 ) -> Vec<Span<'static>> {
+    if block.name == "task" {
+        return task_header(block, tick, palette);
+    }
     let path = tool_path(block);
     let rich = matches!(block.name.as_str(), "edit" | "write");
     let (marker, color) = match block.status {
@@ -678,6 +744,105 @@ fn tool_header(
             Style::default().fg(palette.muted),
         ));
     }
+    spans
+}
+
+/// Renders a delegated run as a first-class row: agent, label, live activity,
+/// and the terminal status, turns, cost, and child session.
+fn task_header(
+    block: &crate::transcript::ToolBlock,
+    tick: u64,
+    palette: &Palette,
+) -> Vec<Span<'static>> {
+    let agent = block
+        .arguments
+        .get("agent")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("general");
+    let description = block
+        .arguments
+        .get("description")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("delegated task");
+    let (marker, color) = match block.status {
+        ToolStatus::Running => (SPINNER[tick as usize % SPINNER.len()], palette.primary),
+        ToolStatus::Success => ("✓", palette.success),
+        ToolStatus::Error => ("✗", palette.error),
+    };
+    let mut spans = vec![
+        Span::styled(
+            format!("{marker} "),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!("Task · {agent}"), Style::default().fg(palette.tool)),
+        Span::styled(
+            format!(" · {}", truncate(description, 48)),
+            Style::default().fg(palette.foreground),
+        ),
+    ];
+
+    if block.status == ToolStatus::Running {
+        if let Some(progress) = block.progress.as_deref() {
+            spans.push(Span::styled(
+                format!("  {progress}"),
+                Style::default().fg(palette.muted),
+            ));
+        }
+        if let Some(elapsed) = block.elapsed_label() {
+            spans.push(Span::styled(
+                format!("  {elapsed}"),
+                Style::default().fg(palette.muted),
+            ));
+        }
+        return spans;
+    }
+
+    let details = block.details.as_ref();
+    let status = details
+        .and_then(|details| details.get("status"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(if block.status == ToolStatus::Error {
+            "error"
+        } else {
+            "completed"
+        });
+    let turns = details
+        .and_then(|details| details.get("turns"))
+        .and_then(serde_json::Value::as_u64);
+    let cost = details
+        .and_then(|details| details.get("usage"))
+        .and_then(|usage| usage.get("cost_usd"))
+        .and_then(serde_json::Value::as_f64);
+    let session = details
+        .and_then(|details| details.get("session_id"))
+        .and_then(serde_json::Value::as_str);
+
+    let mut suffix = status.to_owned();
+    if let Some(turns) = turns {
+        suffix.push_str(&format!(
+            " · {turns} turn{}",
+            if turns == 1 { "" } else { "s" }
+        ));
+    }
+    if let Some(cost) = cost
+        && cost > 0.0
+    {
+        suffix.push_str(&format!(" · ${cost:.4}"));
+    }
+    if let Some(session) = session {
+        suffix.push_str(&format!(" · {}", &session[..session.len().min(12)]));
+    }
+    if let Some(error) = details
+        .and_then(|details| details.get("error"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|error| !error.is_empty())
+    {
+        suffix.push_str(&format!(" · {}", truncate(error, 60)));
+    }
+    spans.push(Span::styled(
+        format!("  {suffix}"),
+        Style::default().fg(palette.muted),
+    ));
     spans
 }
 
@@ -835,43 +1000,122 @@ fn editor_title(title: String, app: &App) -> Line<'static> {
 
 fn draw_footer(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
     let palette = app.theme.palette;
-    let columns =
-        Layout::horizontal([Constraint::Percentage(38), Constraint::Percentage(62)]).split(area);
+    let location = footer_location(app);
 
-    let mut left = app.footer.cwd.clone();
-    if let Some(branch) = &app.footer.git_branch {
-        left.push_str(&format!(" ({branch})"));
+    if area.height > 1 {
+        let rows = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).split(area);
+        let location = truncate(&location, usize::from(rows[0].width));
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                location,
+                Style::default().fg(palette.muted),
+            ))),
+            rows[0],
+        );
+        let spans = footer_spans(
+            footer_parts(app, area.width),
+            usize::from(rows[1].width),
+            &palette,
+        );
+        frame.render_widget(Paragraph::new(Line::from(spans)), rows[1]);
+        for row in rows.iter() {
+            app.hits.push(Hit {
+                row: row.y,
+                target: crate::app::HitTarget::Usage,
+            });
+        }
+        return;
     }
-    let left = truncate(&left, usize::from(columns[0].width));
+
+    let max_location_width = area.width.saturating_mul(2) / 5;
+    let location_width = u16::try_from(
+        UnicodeWidthStr::width(location.as_str())
+            .saturating_add(1)
+            .min(usize::from(max_location_width)),
+    )
+    .unwrap_or(max_location_width);
+    let columns =
+        Layout::horizontal([Constraint::Length(location_width), Constraint::Min(0)]).split(area);
+    let location = truncate(&location, usize::from(columns[0].width));
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            left,
+            location,
             Style::default().fg(palette.muted),
         ))),
         columns[0],
     );
 
-    let mut parts: Vec<(String, Style)> = Vec::new();
+    let spans = footer_spans(
+        footer_parts(app, area.width),
+        usize::from(columns[1].width),
+        &palette,
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)).alignment(Alignment::Right),
+        columns[1],
+    );
+    app.hits.push(Hit {
+        row: area.y,
+        target: crate::app::HitTarget::Usage,
+    });
+}
+
+fn footer_location(app: &App) -> String {
+    let mut location = app.footer.cwd.clone();
+    if let Some(branch) = &app.footer.git_branch {
+        location.push_str(&format!(" ({branch})"));
+    }
+    location
+}
+
+fn footer_parts(app: &App, width: u16) -> Vec<(String, Style)> {
+    let palette = app.theme.palette;
+    let detailed = width >= DETAILED_FOOTER_WIDTH;
+    let model = if width < NARROW_FOOTER_WIDTH || app.footer.provider.is_empty() {
+        app.footer.model.clone()
+    } else {
+        format!("{}/{}", app.footer.provider, app.footer.model)
+    };
+    let mut parts = vec![(model, Style::default().fg(palette.secondary))];
+    if app.auto_approve {
+        parts.push((
+            "FULL ACCESS".to_owned(),
+            Style::default().fg(palette.warning),
+        ));
+    }
+    let running = app.subagent_runtime.as_ref().map_or(0, |runtime| {
+        runtime
+            .runs()
+            .iter()
+            .filter(|run| {
+                matches!(
+                    run.state,
+                    codie_subagents::RunState::Running | codie_subagents::RunState::Queued
+                )
+            })
+            .count()
+    });
+    if app.subagent_mode != codie_subagents::DelegationMode::Off || running > 0 {
+        let badge = match app.subagent_mode {
+            codie_subagents::DelegationMode::Off => "sub:off",
+            codie_subagents::DelegationMode::Auto => "sub:auto",
+            codie_subagents::DelegationMode::Force => "sub:force",
+        };
+        parts.push((badge.to_owned(), Style::default().fg(palette.muted)));
+        if running > 0 {
+            parts.push((format!("▶ {running}"), Style::default().fg(palette.primary)));
+        }
+    }
     if let Some(percent) = app.footer.context_percent {
         parts.push((
             format!("ctx {} {percent}%", context_meter(percent)),
             Style::default().fg(context_color(percent, app.context_window, &palette)),
         ));
     }
-    let model = if app.footer.provider.is_empty() {
-        app.footer.model.clone()
-    } else {
-        format!("{}/{}", app.footer.provider, app.footer.model)
-    };
-    parts.push((model, Style::default().fg(palette.secondary)));
-    parts.push((
-        app.footer.thinking.clone(),
-        Style::default().fg(palette.muted),
-    ));
-    if app.auto_approve {
+    if detailed {
         parts.push((
-            "FULL ACCESS".to_owned(),
-            Style::default().fg(palette.warning),
+            app.footer.thinking.clone(),
+            Style::default().fg(palette.muted),
         ));
     }
     if app.footer.tokens > 0 {
@@ -884,21 +1128,37 @@ fn draw_footer(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
             Style::default().fg(palette.secondary),
         ));
     }
-    if let Some(rate) = app.footer.tokens_per_sec {
-        parts.push((format!("{rate:.0} t/s"), Style::default().fg(palette.muted)));
+    if detailed {
+        if let Some(rate) = app.footer.tokens_per_sec {
+            parts.push((format!("{rate:.0} t/s"), Style::default().fg(palette.muted)));
+        }
+        if let Some(session) = &app.footer.session {
+            parts.push((
+                session[..session.len().min(8)].to_owned(),
+                Style::default().fg(palette.muted),
+            ));
+        }
     }
-    if let Some(session) = &app.footer.session {
-        parts.push((
-            session[..session.len().min(8)].to_owned(),
-            Style::default().fg(palette.muted),
-        ));
-    }
+    parts
+}
 
-    let available = usize::from(columns[1].width);
+fn footer_spans(
+    parts: Vec<(String, Style)>,
+    available: usize,
+    palette: &Palette,
+) -> Vec<Span<'static>> {
+    if available == 0 {
+        return Vec::new();
+    }
     let mut spans = Vec::new();
     let mut used = 0_usize;
     for (text, style) in parts {
         let separator = usize::from(!spans.is_empty()) * 3;
+        let text = if spans.is_empty() {
+            truncate(&text, available)
+        } else {
+            text
+        };
         let width = UnicodeWidthStr::width(text.as_str());
         if used + separator + width > available {
             continue;
@@ -910,25 +1170,7 @@ fn draw_footer(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         spans.push(Span::styled(text, style));
         used += width;
     }
-    if spans.is_empty() {
-        let model = if app.footer.provider.is_empty() {
-            app.footer.model.clone()
-        } else {
-            format!("{}/{}", app.footer.provider, app.footer.model)
-        };
-        spans.push(Span::styled(
-            truncate(&model, available),
-            Style::default().fg(palette.secondary),
-        ));
-    }
-    frame.render_widget(
-        Paragraph::new(Line::from(spans)).alignment(Alignment::Right),
-        columns[1],
-    );
-    app.hits.push(Hit {
-        row: area.y,
-        target: crate::app::HitTarget::Usage,
-    });
+    spans
 }
 
 fn context_meter(percent: u8) -> String {
@@ -1228,9 +1470,11 @@ const PERMISSION_DIFF_ROWS: usize = 48;
 /// Rows a permission preview shows once expanded.
 const PERMISSION_EXPANDED_ROWS: usize = 400;
 /// Widest permission dialog.
-const PERMISSION_MAX_WIDTH: u16 = 96;
-/// Narrowest permission dialog that keeps the footer readable.
-const PERMISSION_MIN_WIDTH: u16 = 44;
+const PERMISSION_MAX_WIDTH: u16 = 88;
+/// Narrowest permission dialog that keeps the actions and footer readable.
+const PERMISSION_MIN_WIDTH: u16 = 56;
+/// Space used by the border and horizontal padding.
+const PERMISSION_FRAME_WIDTH: usize = 4;
 
 /// One built permission dialog body.
 struct PermissionBody {
@@ -1242,6 +1486,50 @@ struct PermissionBody {
     truncated: bool,
 }
 
+fn permission_dialog_width(area: Rect, prompt: &crate::app::PermissionPrompt, app: &App) -> u16 {
+    let maximum = area.width.min(PERMISSION_MAX_WIDTH);
+    let minimum = PERMISSION_MIN_WIDTH.min(maximum);
+    let max_content = usize::from(PERMISSION_MAX_WIDTH).saturating_sub(PERMISSION_FRAME_WIDTH);
+    let mut content = 52_usize;
+    content = content.max(UnicodeWidthStr::width(app.footer.cwd.as_str()));
+    if let Some(branch) = &app.footer.git_branch {
+        content = content.max(
+            UnicodeWidthStr::width(app.footer.cwd.as_str())
+                .saturating_add(UnicodeWidthStr::width(branch.as_str()))
+                .saturating_add(4),
+        );
+    }
+    if let Some(preview) = &prompt.preview {
+        if let Some(title) = &preview.title {
+            content = content.max(UnicodeWidthStr::width(title.as_str()));
+        }
+        let longest_line = preview
+            .text
+            .lines()
+            .map(UnicodeWidthStr::width)
+            .max()
+            .unwrap_or(0);
+        content = match preview.kind {
+            ExtRenderKind::Diff => max_content,
+            ExtRenderKind::Code => content.max(longest_line.saturating_add(
+                if matches!(prompt.tool.as_str(), "bash" | "powershell") {
+                    2
+                } else {
+                    6
+                },
+            )),
+            _ => content.max(longest_line),
+        };
+    }
+    let desired = u16::try_from(
+        content
+            .min(max_content)
+            .saturating_add(PERMISSION_FRAME_WIDTH),
+    )
+    .unwrap_or(maximum);
+    desired.clamp(minimum, maximum)
+}
+
 fn draw_permission_overlay(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -1249,14 +1537,10 @@ fn draw_permission_overlay(
     app: &App,
 ) {
     let palette = app.theme.palette;
-    let width = area
-        .width
-        .saturating_sub(4)
-        .min(PERMISSION_MAX_WIDTH)
-        .max(PERMISSION_MIN_WIDTH.min(area.width))
-        .min(area.width);
-    let inner_width = usize::from(width.saturating_sub(2));
+    let width = permission_dialog_width(area, prompt, app);
+    let inner_width = usize::from(width).saturating_sub(PERMISSION_FRAME_WIDTH);
     let danger = destructive_command(prompt);
+    let origin = delegated_origin(app, prompt.session_id.as_deref());
     let PermissionBody {
         header,
         preview,
@@ -1268,6 +1552,7 @@ fn draw_permission_overlay(
         danger,
         &app.footer.cwd,
         app.footer.git_branch.as_deref(),
+        origin.as_deref(),
     );
 
     // Borders, header, two gaps, and a pinned footer. The dialog hugs its
@@ -1287,6 +1572,8 @@ fn draw_permission_overlay(
         palette.warning
     };
     let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .padding(Padding::horizontal(1))
         .title(Line::from(vec![
             Span::styled(
                 " permission ",
@@ -1327,16 +1614,26 @@ fn draw_permission_overlay(
     let max_scroll = preview.len().saturating_sub(preview_rows);
     let scroll = usize::from(prompt.scroll).min(max_scroll);
     frame.render_widget(
-        Paragraph::new(preview).scroll((u16::try_from(scroll).unwrap_or(0), 0)),
+        Block::default().style(Style::default().bg(palette.surface)),
+        rows[2],
+    );
+    frame.render_widget(
+        Paragraph::new(preview)
+            .style(Style::default().bg(palette.surface))
+            .scroll((u16::try_from(scroll).unwrap_or(0), 0)),
         rows[2],
     );
 
     let footer = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).split(rows[4]);
     frame.render_widget(
-        Paragraph::new(Line::from(permission_actions(inner_width, &palette))),
+        Paragraph::new(Line::from(permission_actions(
+            inner_width,
+            &palette,
+            prompt.agent.is_some(),
+        ))),
         footer[0],
     );
-    let mut hints = String::from("Enter allow · Esc deny");
+    let mut hints = String::from("Enter allow once · Esc deny");
     if max_scroll > 0 {
         hints.push_str(" · ↑↓ scroll");
     }
@@ -1349,13 +1646,28 @@ fn draw_permission_overlay(
     if UnicodeWidthStr::width(hints.as_str()) + UnicodeWidthStr::width(shift_tab) <= inner_width {
         hints.push_str(shift_tab);
     }
+    if UnicodeWidthStr::width(hints.as_str()) > inner_width {
+        hints = hints.replacen("Enter allow once", "Enter allow", 1);
+    }
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             truncate(&hints, inner_width),
-            Style::default().fg(palette.muted),
+            Style::default().fg(palette.foreground),
         ))),
         footer[1],
     );
+}
+
+/// Returns the run label for a delegated session, when it is still known.
+fn delegated_origin(app: &App, session_id: Option<&str>) -> Option<String> {
+    let session_id = session_id?;
+    app.subagent_runtime.as_ref().and_then(|runtime| {
+        runtime
+            .runs()
+            .into_iter()
+            .find(|run| run.session_id.as_deref() == Some(session_id))
+            .map(|run| run.description)
+    })
 }
 
 /// Dims every cell outside the modal so the transcript recedes.
@@ -1382,6 +1694,7 @@ fn permission_body(
     danger: bool,
     cwd: &str,
     branch: Option<&str>,
+    origin: Option<&str>,
 ) -> PermissionBody {
     let intent = match prompt.tool.as_str() {
         "bash" => "Run this shell command?",
@@ -1396,9 +1709,25 @@ fn permission_body(
             .fg(palette.foreground)
             .add_modifier(Modifier::BOLD),
     ))];
+    if let Some(agent) = prompt.agent.as_deref() {
+        let label = origin
+            .filter(|label| !label.trim().is_empty())
+            .map(|label| format!(" · {label}"))
+            .unwrap_or_default();
+        header.push(Line::from(Span::styled(
+            truncate(
+                &format!(
+                    "Requested by subagent `{agent}`{label} · depth {}",
+                    prompt.depth
+                ),
+                width,
+            ),
+            Style::default().fg(palette.warning),
+        )));
+    }
 
     let mut context: Vec<(String, Style)> =
-        vec![(cwd.to_owned(), Style::default().fg(palette.muted))];
+        vec![(cwd.to_owned(), Style::default().fg(palette.foreground))];
     if let Some(branch) = branch {
         context.push((format!("  ⑂ {branch}"), Style::default().fg(palette.info)));
     }
@@ -1498,33 +1827,31 @@ fn permission_body(
 }
 
 /// Returns the three decision chips, each in its own color, with the
-/// `Enter` target marked.
-fn permission_actions(width: usize, palette: &Palette) -> Vec<Span<'static>> {
+/// `Enter` target emphasized.
+fn permission_actions(width: usize, palette: &Palette, delegated: bool) -> Vec<Span<'static>> {
     let compact = width < 48;
+    let always = if compact {
+        "Always"
+    } else if delegated {
+        "Always for agent"
+    } else {
+        "Always allow"
+    };
     let actions: [(&str, &str, ratatui::style::Color, bool); 3] = [
         (
             "y",
-            if compact { "allow" } else { "allow once" },
+            if compact { "Allow" } else { "Allow once" },
             palette.success,
             true,
         ),
-        (
-            "A",
-            if compact { "always" } else { "always allow" },
-            palette.warning,
-            false,
-        ),
-        ("n", "deny", palette.error, false),
+        ("A", always, palette.warning, false),
+        ("n", "Deny", palette.error, false),
     ];
     let mut spans = Vec::new();
     for (index, (key, label, color, selected)) in actions.into_iter().enumerate() {
         if index > 0 {
             spans.push(Span::raw(if compact { "  " } else { "   " }));
         }
-        spans.push(Span::styled(
-            if selected { "▸ " } else { "  " },
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        ));
         spans.push(Span::styled(
             format!("[{key}]"),
             Style::default()
@@ -1617,7 +1944,17 @@ fn draw_overlay(frame: &mut Frame<'_>, area: Rect, overlay: &Overlay, app: &App)
     let rect = centered(area, width.max(20), height.max(6));
     frame.render_widget(Clear, rect);
 
+    let mut scroll = 0_u16;
     let (title, body) = match overlay {
+        Overlay::Child {
+            title,
+            lines,
+            scroll: offset,
+            ..
+        } => {
+            scroll = *offset;
+            (title.as_str(), lines.join("\n"))
+        }
         Overlay::Help => (
             " commands ",
             [
@@ -1643,6 +1980,7 @@ fn draw_overlay(frame: &mut Frame<'_>, area: Rect, overlay: &Overlay, app: &App)
                 "/thinking [level]  change reasoning effort",
                 "/compact [note]    compact the context",
                 "/usage             tokens, cost, and context",
+                "/subagents [cmd]   configure subagent delegation",
                 "/stop              stop the active run",
                 "/skill:<name>      invoke a skill",
                 "/template:<name>   expand a prompt template",
@@ -1656,11 +1994,26 @@ fn draw_overlay(frame: &mut Frame<'_>, area: Rect, overlay: &Overlay, app: &App)
         Overlay::Permission(prompt) => (
             " permission ",
             format!(
-                "Allow `{}`?\n\n{}\n\n[y] yes   [n] no   [A] always allow   [Shift+Tab] full access (no prompts)",
+                "Allow `{}`?\n\n{}\n\n[y] yes   [n] no   [A] Always allow   [Shift+Tab] full access (no prompts)",
                 prompt.tool,
                 serde_json::to_string_pretty(&prompt.arguments).unwrap_or_default()
             ),
         ),
+        Overlay::Question(prompt) => {
+            let origin = delegated_origin(app, prompt.session_id.as_deref());
+            let who = match (&prompt.agent, origin) {
+                (Some(agent), Some(label)) => format!("from subagent `{agent}` · {label}\n\n"),
+                (Some(agent), None) => format!("from subagent `{agent}`\n\n"),
+                (None, _) => String::new(),
+            };
+            (
+                " question ",
+                format!(
+                    "{who}{}\n\n> {}\u{258c}\n\nEnter send · Esc dismiss (the model continues without an answer)",
+                    prompt.question, prompt.input
+                ),
+            )
+        }
         Overlay::Tree(entries) => (
             " session tree ",
             entries
@@ -1755,6 +2108,7 @@ fn draw_overlay(frame: &mut Frame<'_>, area: Rect, overlay: &Overlay, app: &App)
     frame.render_widget(
         Paragraph::new(body)
             .block(block)
+            .scroll((scroll, 0))
             .wrap(Wrap { trim: false })
             .style(
                 Style::default()
@@ -1846,6 +2200,8 @@ mod tests {
         let text = buffer(&mut app);
         assert!(text.contains("██████╗"), "banner missing: {text}");
         assert!(text.contains("Type a prompt"));
+        assert!(text.contains("Shift+Enter"));
+        assert!(text.contains("attach files"));
         assert!(text.contains("deepseek-flash"));
         assert!(text.contains("/tmp/project"));
     }
@@ -1887,6 +2243,26 @@ mod tests {
     }
 
     #[test]
+    #[spec("TUI-004")]
+    fn spec_tui_004_user_messages_preserve_line_breaks() {
+        let mut app = app();
+        app.transcript
+            .push_user("line one\nline two\n\n```rust\nfn main() {}\n```");
+        let palette = app.theme.palette;
+        let buffer = buffer_at(&mut app, 80, 24);
+        let row = |y: u16| (0..80).map(|x| buffer[(x, y)].symbol()).collect::<String>();
+
+        assert!(row(1).contains("line one"), "{:?}", row(1));
+        assert!(row(2).contains("line two"), "{:?}", row(2));
+        assert!(!row(1).contains("line two"), "{:?}", row(1));
+        assert_eq!(buffer[(0, 2)].bg, palette.surface);
+
+        let text = (0..24).map(row).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("fn main"), "{text}");
+        assert!(!text.contains("```"), "code fences are not printed: {text}");
+    }
+
+    #[test]
     fn narrow_empty_state_falls_back_to_text_banner() {
         let mut app = app();
         let backend = TestBackend::new(30, 12);
@@ -1900,6 +2276,62 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<String>();
         assert!(text.contains("Codie!"), "{text}");
+    }
+
+    #[test]
+    #[spec("TUI-014")]
+    fn spec_tui_014_list_overlay_hugs_results_and_highlights_the_full_row() {
+        let mut app = app();
+        app.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        let palette = app.theme.palette;
+        let buffer = buffer_at(&mut app, 100, 40);
+        let row = |y: u16| {
+            (0..100)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        };
+        let top = (0..40)
+            .find(|y| row(*y).contains(" commands "))
+            .expect("palette title row");
+        let bottom = (top..40)
+            .find(|y| row(*y).contains('└'))
+            .expect("palette bottom border");
+        assert_eq!(bottom - top + 1, 22, "palette should cap at 16 items");
+
+        let description_row = (0..40)
+            .find(|y| row(*y).contains("Choose a provider"))
+            .expect("command description row");
+        let description_column = row(description_row)
+            .find("Choose a provider")
+            .expect("description column") as u16;
+        assert_eq!(
+            buffer[(description_column, description_row)].fg,
+            palette.foreground,
+            "command descriptions should not use muted text"
+        );
+
+        let Some(Overlay::List(list)) = app.overlay.as_mut() else {
+            panic!("expected the command palette");
+        };
+        list.query = "usage".to_owned();
+        list.refresh();
+        let buffer = buffer_at(&mut app, 80, 24);
+        let row = |y: u16| (0..80).map(|x| buffer[(x, y)].symbol()).collect::<String>();
+        let top = (0..24)
+            .find(|y| row(*y).contains(" commands "))
+            .expect("filtered palette title row");
+        let bottom = (top..24)
+            .find(|y| row(*y).contains('└'))
+            .expect("filtered palette bottom border");
+        assert_eq!(bottom - top + 1, 8, "palette should fit one result");
+
+        let selected = (0..24)
+            .find(|y| row(*y).contains("/usage"))
+            .expect("selected command row");
+        assert!(
+            (3..77).all(|x| buffer[(x, selected)].bg == palette.primary),
+            "the entire inner row should have the selected background"
+        );
     }
 
     #[test]
@@ -1938,6 +2370,9 @@ mod tests {
 
         assert!(text.contains("70.2k tok"), "footer tokens: {text}");
         assert!(text.contains("$0.0080"), "footer cost: {text}");
+        assert!(text.contains("136 t/s"), "footer throughput: {text}");
+        assert!(text.contains("0190f3a1"), "footer session: {text}");
+        assert!(text.contains("medium"), "footer thinking level: {text}");
     }
 
     #[test]
@@ -1951,6 +2386,57 @@ mod tests {
         let row = |y: u16| (0..80).map(|x| buffer[(x, y)].symbol()).collect::<String>();
         assert!(row(16).contains("prompt"), "editor dock missing");
         assert!(row(19).contains("deepseek-flash"), "footer missing");
+    }
+
+    #[test]
+    #[spec("TUI-001")]
+    fn spec_tui_001_narrow_footer_uses_two_rows() {
+        let mut app = app();
+        app.footer.context_percent = Some(42);
+        app.footer.tokens = 1_200;
+        app.footer.cost = 8_000_000;
+        app.footer.tokens_per_sec = Some(136.0);
+        app.footer.session = Some("0190f3a1".into());
+        let buffer = buffer_at(&mut app, 60, 20);
+        let row = |y: u16| (0..60).map(|x| buffer[(x, y)].symbol()).collect::<String>();
+        assert!(
+            row(18).contains("/tmp/project"),
+            "location row: {}",
+            row(18)
+        );
+        assert!(
+            row(19).contains("deepseek-flash"),
+            "status row: {}",
+            row(19)
+        );
+        assert!(row(19).contains("42%"), "context meter: {}", row(19));
+        assert!(!row(19).contains("deepseek/deepseek-flash"));
+        assert!(!row(19).contains("136 t/s"));
+        assert!(!row(19).contains("0190f3a1"));
+        assert!(!row(19).contains("medium"));
+    }
+
+    #[test]
+    #[spec("TUI-006")]
+    fn spec_tui_006_medium_footer_drops_metadata_before_essentials() {
+        let mut app = app();
+        app.footer.provider = "deepseek".into();
+        app.footer.context_percent = Some(42);
+        app.footer.tokens = 1_200;
+        app.footer.cost = 8_000_000;
+        app.footer.tokens_per_sec = Some(136.0);
+        app.footer.session = Some("0190f3a1".into());
+        let buffer = buffer_at(&mut app, 100, 20);
+        let row = (0..100)
+            .map(|x| buffer[(x, 19)].symbol())
+            .collect::<String>();
+        assert!(row.contains("deepseek/deepseek-flash"), "{row}");
+        assert!(row.contains("42%"), "{row}");
+        assert!(row.contains("1.2k tok"), "{row}");
+        assert!(row.contains("$0.0080"), "{row}");
+        assert!(!row.contains("136 t/s"), "{row}");
+        assert!(!row.contains("0190f3a1"), "{row}");
+        assert!(!row.contains("medium"), "{row}");
     }
 
     #[test]
@@ -2018,6 +2504,7 @@ mod tests {
                 text: "--- src/lib.rs\n+++ src/lib.rs\n@@ -1,3 +1,3 @@\n fn main() {\n-    let old = 1;\n+    let new = 2;\n }\n"
                     .into(),
             }),
+            None,
         );
         let text = buffer(&mut app);
         assert!(text.contains("→ Edit src/lib.rs"), "{text}");
@@ -2042,6 +2529,7 @@ mod tests {
             "call_1",
             "Successfully wrote to src/lib.rs".into(),
             false,
+            None,
             None,
         );
         let text = buffer(&mut app);
@@ -2170,12 +2658,66 @@ mod tests {
                 "path": "file.txt",
                 "edits": [{"oldText": "beta", "newText": "BETA"}]
             }),
+            agent: None,
+            depth: 0,
+            session_id: None,
             reply,
         });
         let text = buffer(&mut app);
         assert!(text.contains("Edit file.txt"), "{text}");
         assert!(text.contains("beta"), "{text}");
         assert!(text.contains("BETA"), "{text}");
+    }
+
+    #[test]
+    #[spec("TUI-043")]
+    fn footer_shows_the_delegation_mode() {
+        let mut app = app();
+        app.subagent_mode = codie_subagents::DelegationMode::Auto;
+        let text = buffer(&mut app);
+        assert!(text.contains("sub:auto"), "{text}");
+
+        app.subagent_mode = codie_subagents::DelegationMode::Off;
+        let text = buffer(&mut app);
+        assert!(!text.contains("sub:auto"), "{text}");
+    }
+
+    #[test]
+    #[spec("TUI-040")]
+    fn task_rows_show_live_activity_and_result_details() {
+        let mut app = app();
+        app.transcript.tool_start(
+            "call_1".into(),
+            "task".into(),
+            serde_json::json!({
+                "description": "News feeds",
+                "agent": "general",
+                "prompt": "research"
+            }),
+        );
+        app.transcript
+            .tool_progress("call_1", "turn 2 · grep markets".into(), None);
+        let text = buffer(&mut app);
+        assert!(text.contains("Task · general · News feeds"), "{text}");
+        assert!(text.contains("turn 2 · grep markets"), "{text}");
+
+        app.transcript.tool_end(
+            "call_1",
+            "done".into(),
+            false,
+            None,
+            Some(serde_json::json!({
+                "status": "completed",
+                "turns": 3,
+                "usage": {"cost_usd": 0.0123},
+                "session_id": "ses_child"
+            })),
+        );
+        let text = buffer(&mut app);
+        assert!(
+            text.contains("completed · 3 turns · $0.0123 · ses_child"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -2187,7 +2729,8 @@ mod tests {
             "bash".into(),
             serde_json::json!({"command": "cargo test"}),
         );
-        app.transcript.tool_end("call_1", "ok".into(), false, None);
+        app.transcript
+            .tool_end("call_1", "ok".into(), false, None, None);
         let _ = buffer(&mut app);
         let row = app
             .hits
@@ -2323,12 +2866,16 @@ mod tests {
     }
 
     #[test]
-    fn permission_overlay_hugs_its_content_and_names_the_keys() {
+    #[spec("TUI-025")]
+    fn spec_tui_025_permission_overlay_hugs_content_and_pads_the_preview() {
         let mut app = permission_app();
         let (reply, _answer) = tokio::sync::oneshot::channel();
         app.push_permission(crate::permissions::PermissionRequest {
             tool: "bash".to_owned(),
             arguments: serde_json::json!({"command": "cargo test"}),
+            agent: None,
+            depth: 0,
+            session_id: None,
             reply,
         });
         let text = buffer(&mut app);
@@ -2336,24 +2883,59 @@ mod tests {
         assert!(text.contains("/tmp/project"), "{text}");
         assert!(text.contains("⑂ main"), "{text}");
         assert!(text.contains("$ cargo test"), "{text}");
-        assert!(text.contains("[y] allow once"), "{text}");
-        assert!(text.contains("[A] always allow"), "{text}");
-        assert!(text.contains("[n] deny"), "{text}");
+        assert!(text.contains("[y] Allow once"), "{text}");
+        assert!(text.contains("[A] Always allow"), "{text}");
+        assert!(text.contains("[n] Deny"), "{text}");
+        assert!(text.contains("Enter allow once"), "{text}");
         assert!(text.contains("full access"), "{text}");
 
+        let palette = app.theme.palette;
         let buffer = buffer_at(&mut app, 80, 30);
         let row_text = |y: u16| (0..80).map(|x| buffer[(x, y)].symbol()).collect::<String>();
         let top = (0..30)
             .find(|y| row_text(*y).contains("permission · bash"))
             .expect("dialog title row");
         let bottom = (top..30)
-            .find(|y| (0..80).any(|x| buffer[(x, *y)].symbol() == "└"))
+            .find(|y| (0..80).any(|x| buffer[(x, *y)].symbol() == "╰"))
             .expect("dialog bottom border");
         let height = bottom - top + 1;
         assert!(
             height <= 12,
             "dialog is {height} rows tall, not hugging content"
         );
+
+        let title = row_text(top);
+        let left = title
+            .chars()
+            .position(|character| character == '╭')
+            .expect("rounded left border") as u16;
+        let right = title
+            .chars()
+            .position(|character| character == '╮')
+            .expect("rounded right border") as u16;
+        assert_eq!(
+            right - left + 1,
+            56,
+            "short commands should not use a wide dialog"
+        );
+        let question = (top..bottom)
+            .find(|y| row_text(*y).contains("Run this shell command?"))
+            .expect("question row");
+        let question_text = row_text(question);
+        let question_column = question_text
+            .find("Run this shell command?")
+            .map(|index| question_text[..index].chars().count())
+            .expect("question column") as u16;
+        assert_eq!(
+            question_column,
+            left + 2,
+            "content should have horizontal padding"
+        );
+        let command = (top..bottom)
+            .find(|y| row_text(*y).contains("$ cargo test"))
+            .expect("command row");
+        assert_eq!(buffer[(left + 2, command)].bg, palette.surface);
+        assert_eq!(buffer[(left + 53, command)].bg, palette.surface);
     }
 
     #[test]
@@ -2363,6 +2945,9 @@ mod tests {
         app.push_permission(crate::permissions::PermissionRequest {
             tool: "bash".to_owned(),
             arguments: serde_json::json!({"command": "cargo test"}),
+            agent: None,
+            depth: 0,
+            session_id: None,
             reply,
         });
         let palette = crate::theme::Theme::load(Some("dark")).unwrap().palette;
@@ -2394,6 +2979,9 @@ mod tests {
         app.push_permission(crate::permissions::PermissionRequest {
             tool: "bash".to_owned(),
             arguments: serde_json::json!({"command": "rm -rf target && cargo build"}),
+            agent: None,
+            depth: 0,
+            session_id: None,
             reply,
         });
         let text = buffer(&mut app);
@@ -2412,6 +3000,9 @@ mod tests {
         app.push_permission(crate::permissions::PermissionRequest {
             tool: "bash".to_owned(),
             arguments: serde_json::json!({"command": command}),
+            agent: None,
+            depth: 0,
+            session_id: None,
             reply,
         });
         let text = buffer(&mut app);
@@ -2435,12 +3026,15 @@ mod tests {
         app.push_permission(crate::permissions::PermissionRequest {
             tool: "bash".to_owned(),
             arguments: serde_json::json!({"command": "cargo test"}),
+            agent: None,
+            depth: 0,
+            session_id: None,
             reply,
         });
         let text = buffer(&mut app);
         assert!(text.contains("permission"));
-        assert!(text.contains("[y] allow once"));
-        assert!(text.contains("[n] deny"));
+        assert!(text.contains("[y] Allow once"));
+        assert!(text.contains("[n] Deny"));
         assert!(text.contains("full access"));
         assert!(text.contains("cargo test"));
     }

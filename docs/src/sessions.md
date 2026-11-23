@@ -39,7 +39,9 @@ codie sessions export <id>         # JSONL to stdout
 codie sessions export <id> -o out.jsonl
 ```
 
-These commands are read-only.
+These commands are read-only. `sessions list --json` includes `first_user` and `last_user`
+preview strings so pickers can show a title when the session has no explicit name; long prompts are
+truncated by the client, not by the CLI.
 
 ## Pickers and slash commands
 

@@ -1,5 +1,6 @@
 //! Multiline editor with grapheme-correct movement (`TUI-003`).
 
+use std::borrow::Cow;
 use std::sync::OnceLock;
 
 use regex::Regex;
@@ -121,12 +122,22 @@ impl Editor {
     }
 
     /// Inserts a string, splitting on newlines.
+    ///
+    /// Clipboard text arrives with platform-dependent line endings: macOS
+    /// `pbpaste` emits bare `\r`, Windows emits `\r\n`, and bracketed pastes
+    /// use `\n`. Every form becomes one editor line so a pasted block never
+    /// collapses into a single line.
     pub fn insert_str(&mut self, text: &str) {
         if text.is_empty() {
             return;
         }
+        let normalized = if text.contains('\r') {
+            Cow::Owned(text.replace("\r\n", "\n").replace('\r', "\n"))
+        } else {
+            Cow::Borrowed(text)
+        };
         self.checkpoint();
-        for (index, segment) in text.split('\n').enumerate() {
+        for (index, segment) in normalized.split('\n').enumerate() {
             if index > 0 {
                 self.newline_inner();
             }
@@ -502,6 +513,19 @@ mod tests {
         editor.paste(&paste);
         assert!(editor.raw_text().contains("[paste #1:"));
         assert_eq!(editor.submit(), paste);
+    }
+
+    #[test]
+    #[spec("TUI-003")]
+    fn pasted_line_endings_become_separate_lines() {
+        let mut editor = Editor::new();
+        editor.paste("fn main() {\r\n    let x = 1;\r}\r\n");
+        assert_eq!(
+            editor.text(),
+            "fn main() {\n    let x = 1;\n}\n",
+            "CRLF and bare CR must both become line breaks"
+        );
+        assert_eq!(editor.submit(), "fn main() {\n    let x = 1;\n}\n");
     }
 
     #[test]

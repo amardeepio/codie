@@ -2,9 +2,9 @@
 id: SPEC-CLI-001
 title: CLI surface, configuration, and exit codes
 status: implemented
-version: 1.1.0
+version: 1.2.0
 owners: ["@codie-maintainers"]
-requirements: ["CLI-001", "CLI-002", "CLI-003", "CLI-004", "CLI-005", "CLI-006", "CLI-007", "CLI-008"]
+requirements: ["CLI-001", "CLI-002", "CLI-003", "CLI-004", "CLI-005", "CLI-006", "CLI-007", "CLI-008", "CLI-012", "CLI-013"]
 ---
 
 # Context
@@ -38,6 +38,12 @@ Verification: `crates/codie-cli/tests/cli.rs::spec_cli_007_startup_makes_no_netw
 
 **CLI-008 (MUST)** Unknown long flags are deferred until extensions load. A flag claimed by an extension is passed in the initialize handshake; an unclaimed long flag, an unknown short flag, or a value-shape mismatch exits 1. Management subcommands never defer flags.
 Verification: `crates/codie-cli/tests/extensions.rs::spec_ext_015_extension_flags_are_validated`
+
+**CLI-012 (MUST)** The `[subagents]` table accepts `enabled`, `max_parallel`, `max_depth`, `max_turns`, `timeout_secs`, `persist_sessions`, `result_max_bytes`, `max_total_tokens`, `max_total_cost_usd`, and per-type `model` and `tools`; invalid values fail configuration loading with a message naming the key.
+Verification: `crates/codie-cli/src/config.rs::spec_cli_012_subagent_config_validation`
+
+**CLI-013 (MUST)** Headless mode accepts `--subagents off|auto|force` and `--subagents-parallel N`, applies prompt intent detection to `-p` prompts, and rejects values outside the documented ranges before the run starts.
+Verification: `crates/codie-cli/src/run.rs::spec_cli_013_subagent_flags`
 
 # Exit-code table
 

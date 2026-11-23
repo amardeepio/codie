@@ -19,6 +19,36 @@ type Row = Vec<Cell>;
 /// Renders Markdown into styled terminal lines that fit within `width` columns.
 #[must_use]
 pub fn render(markdown: &str, palette: &Palette, width: usize) -> Vec<Line<'static>> {
+    render_with_base(
+        markdown,
+        palette,
+        width,
+        Style::default().fg(palette.assistant),
+    )
+}
+
+/// Renders a user message: plain text uses `palette.user` and every line keeps
+/// the raised surface background. Line breaks are preserved, so a pasted block
+/// stays multi-line.
+#[must_use]
+pub fn render_user(markdown: &str, palette: &Palette, width: usize) -> Vec<Line<'static>> {
+    let base = Style::default().fg(palette.user);
+    let mut lines = render_with_base(markdown, palette, width, base);
+    for line in &mut lines {
+        line.style = line.style.bg(palette.surface);
+        for span in &mut line.spans {
+            span.style = span.style.bg(palette.surface);
+        }
+    }
+    lines
+}
+
+fn render_with_base(
+    markdown: &str,
+    palette: &Palette,
+    width: usize,
+    base: Style,
+) -> Vec<Line<'static>> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
     options.insert(Options::ENABLE_STRIKETHROUGH);
@@ -26,6 +56,7 @@ pub fn render(markdown: &str, palette: &Palette, width: usize) -> Vec<Line<'stat
     let mut renderer = Renderer {
         palette: *palette,
         width: width.max(1),
+        base,
         lines: Vec::new(),
         current: Vec::new(),
         code: None,
@@ -48,6 +79,8 @@ pub fn render(markdown: &str, palette: &Palette, width: usize) -> Vec<Line<'stat
 struct Renderer {
     palette: Palette,
     width: usize,
+    /// Style for plain body text; semantic styles override its foreground.
+    base: Style,
     lines: Vec<Line<'static>>,
     current: Vec<Span<'static>>,
     code: Option<(String, String)>,
@@ -150,10 +183,6 @@ impl Renderer {
                     CodeBlockKind::Fenced(language) => language.to_string(),
                     CodeBlockKind::Indented => String::new(),
                 };
-                self.lines.push(Line::from(Span::styled(
-                    format!("```{language}"),
-                    Style::default().fg(self.palette.muted),
-                )));
                 self.code = Some((language, String::new()));
             }
             Tag::List(start) => {
@@ -237,10 +266,6 @@ impl Renderer {
                         self.lines
                             .push(highlight_code(line, &language, &self.palette));
                     }
-                    self.lines.push(Line::from(Span::styled(
-                        "```",
-                        Style::default().fg(self.palette.muted),
-                    )));
                     self.blank();
                 }
             }
@@ -304,7 +329,7 @@ impl Renderer {
     }
 
     fn push_text(&mut self, text: &str) {
-        let mut style = Style::default().fg(self.palette.assistant);
+        let mut style = self.base;
         if self.blockquote {
             style = style.fg(self.palette.quote);
         }
@@ -837,7 +862,46 @@ mod tests {
         assert!(!text.iter().any(|line| line.contains("# Title")));
         assert!(text.iter().any(|line| line.contains("• item")));
         assert!(text.iter().any(|line| line.contains("fn main")));
-        assert!(text.iter().any(|line| line.contains("```rust")));
+        assert!(
+            !text.iter().any(|line| line.contains("```")),
+            "code fences are not printed: {text:?}"
+        );
+    }
+
+    #[test]
+    #[spec("TUI-004")]
+    fn spec_tui_004_user_messages_keep_lines_and_surface() {
+        let palette = Palette::dark();
+        let lines = render_user(
+            "explain this\n\n```rust\nfn main() {}\nuse std::fs;\n```",
+            &palette,
+            80,
+        );
+        let text = plain(&lines);
+
+        assert!(text.iter().any(|line| line == "explain this"), "{text:?}");
+        assert!(text.iter().any(|line| line.contains("fn main")), "{text:?}");
+        assert!(
+            text.iter().any(|line| line.contains("use std::fs")),
+            "{text:?}"
+        );
+        assert!(
+            !text.iter().any(|line| line.contains("```")),
+            "code fences are not printed: {text:?}"
+        );
+        for span in lines.iter().flat_map(|line| &line.spans) {
+            assert_eq!(
+                span.style.bg,
+                Some(palette.surface),
+                "every user span keeps the raised surface"
+            );
+        }
+        let body = lines
+            .iter()
+            .flat_map(|line| &line.spans)
+            .find(|span| span.content.as_ref() == "explain this")
+            .expect("body span");
+        assert_eq!(body.style.fg, Some(palette.user));
     }
 
     #[test]

@@ -15,6 +15,35 @@ pub const MAX_SKILLS: usize = 100;
 /// Maximum number of templates loaded from both locations.
 pub const MAX_TEMPLATES: usize = 100;
 
+/// Maximum number of subagent definitions loaded from both locations.
+pub const MAX_AGENTS: usize = 50;
+
+/// A named subagent definition invoked through the `task` tool.
+///
+/// Files live at `<config_dir>/agents/<name>.md` and
+/// `<project>/.codie/agents/<name>.md`. The frontmatter carries the routing
+/// metadata and the body becomes the child's extra system instruction, so a
+/// project can describe a persona without rebuilding the binary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentDefinition {
+    /// Agent type name used by the `task` tool.
+    pub name: String,
+    /// Short description of when to use the agent.
+    pub description: String,
+    /// Extra system instructions for the child.
+    pub prompt: String,
+    /// Preferred model id, or `None` to inherit.
+    pub model: Option<String>,
+    /// Explicit tool names, or `None` to inherit the type's selection.
+    pub tools: Option<Vec<String>>,
+    /// Per-run turn budget, or `None` for the configured default.
+    pub max_turns: Option<usize>,
+    /// Per-run wall-clock limit in seconds, or `None` for the configured default.
+    pub timeout_secs: Option<u64>,
+    /// File the definition was loaded from.
+    pub path: PathBuf,
+}
+
 /// A reusable instruction block invoked with `/skill:<name>`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Skill {
@@ -104,6 +133,7 @@ impl Template {
 pub struct Customizations {
     skills: Vec<Skill>,
     templates: Vec<Template>,
+    agents: Vec<AgentDefinition>,
     warnings: Vec<String>,
     user_dir: PathBuf,
     project_root: Option<PathBuf>,
@@ -128,6 +158,7 @@ impl Customizations {
     pub fn refresh(&mut self) {
         let mut skills = BTreeMap::new();
         let mut templates = BTreeMap::new();
+        let mut agents = BTreeMap::new();
         let mut warnings = Vec::new();
 
         load_skills(&self.user_dir.join("skills"), &mut skills, &mut warnings);
@@ -136,14 +167,17 @@ impl Customizations {
             &mut templates,
             &mut warnings,
         );
+        load_agents(&self.user_dir.join("agents"), &mut agents, &mut warnings);
         if let Some(root) = self.project_root.clone() {
             let codie = root.join(".codie");
             load_skills(&codie.join("skills"), &mut skills, &mut warnings);
             load_templates(&codie.join("templates"), &mut templates, &mut warnings);
+            load_agents(&codie.join("agents"), &mut agents, &mut warnings);
         }
 
         self.skills = skills.into_values().take(MAX_SKILLS).collect();
         self.templates = templates.into_values().take(MAX_TEMPLATES).collect();
+        self.agents = agents.into_values().take(MAX_AGENTS).collect();
         self.warnings = warnings;
     }
 
@@ -157,6 +191,12 @@ impl Customizations {
     #[must_use]
     pub fn templates(&self) -> &[Template] {
         &self.templates
+    }
+
+    /// Returns every loaded subagent definition, sorted by name.
+    #[must_use]
+    pub fn agents(&self) -> &[AgentDefinition] {
+        &self.agents
     }
 
     /// Returns non-fatal problems encountered while loading.
@@ -175,6 +215,12 @@ impl Customizations {
     #[must_use]
     pub fn template(&self, name: &str) -> Option<&Template> {
         self.templates.iter().find(|template| template.name == name)
+    }
+
+    /// Looks up a subagent definition by name.
+    #[must_use]
+    pub fn agent(&self, name: &str) -> Option<&AgentDefinition> {
+        self.agents.iter().find(|agent| agent.name == name)
     }
 
     /// Expands `/skill:<name>` or `/template:<name>` into a prompt.
@@ -333,6 +379,126 @@ fn load_templates(
                 path: entry,
             },
         );
+    }
+}
+
+fn load_agents(
+    dir: &Path,
+    agents: &mut BTreeMap<String, AgentDefinition>,
+    warnings: &mut Vec<String>,
+) {
+    let entries = match sorted_entries(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => {
+            warnings.push(format!("cannot read {}: {error}", dir.display()));
+            return;
+        }
+    };
+
+    for entry in entries {
+        if entry.extension().and_then(|extension| extension.to_str()) != Some("md") {
+            continue;
+        }
+        let Some(stem) = entry
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+        else {
+            continue;
+        };
+        let Some(content) = read_resource(&entry, warnings) else {
+            continue;
+        };
+        let parsed = match frontmatter::parse(&content) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                warnings.push(format!("skipping {}: {error}", entry.display()));
+                continue;
+            }
+        };
+        let name = parsed
+            .fields
+            .get("name")
+            .filter(|name| !name.is_empty())
+            .cloned()
+            .unwrap_or(stem);
+        if name.is_empty() || name.contains(char::is_whitespace) {
+            warnings.push(format!("skipping {}: invalid agent name", entry.display()));
+            continue;
+        }
+        let prompt = parsed.body.trim().to_owned();
+        if prompt.is_empty() {
+            warnings.push(format!("skipping {}: empty agent prompt", entry.display()));
+            continue;
+        }
+        let tools = match parsed.fields.get("tools").map(|value| value.trim()) {
+            None => None,
+            Some(value)
+                if value.eq_ignore_ascii_case("inherit") || value.eq_ignore_ascii_case("all") =>
+            {
+                None
+            }
+            Some(value) => {
+                let names = value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>();
+                if names.is_empty() { None } else { Some(names) }
+            }
+        };
+        agents.insert(
+            name.clone(),
+            AgentDefinition {
+                name,
+                description: parsed
+                    .fields
+                    .get("description")
+                    .cloned()
+                    .unwrap_or_default(),
+                prompt,
+                model: parsed
+                    .fields
+                    .get("model")
+                    .map(|model| model.trim().to_owned())
+                    .filter(|model| !model.is_empty()),
+                tools,
+                max_turns: parse_positive(
+                    parsed.fields.get("max-turns"),
+                    "max-turns",
+                    &entry,
+                    warnings,
+                )
+                .and_then(|value| usize::try_from(value).ok()),
+                timeout_secs: parse_positive(
+                    parsed.fields.get("timeout-secs"),
+                    "timeout-secs",
+                    &entry,
+                    warnings,
+                ),
+                path: entry,
+            },
+        );
+    }
+}
+
+fn parse_positive(
+    value: Option<&String>,
+    field: &str,
+    path: &Path,
+    warnings: &mut Vec<String>,
+) -> Option<u64> {
+    let value = value?.trim();
+    match value.parse::<u64>() {
+        Ok(parsed) if parsed > 0 => Some(parsed),
+        _ => {
+            warnings.push(format!(
+                "ignoring {field} in {}: expected a positive integer, got `{value}`",
+                path.display()
+            ));
+            None
+        }
     }
 }
 

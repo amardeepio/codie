@@ -21,6 +21,7 @@ flowchart TD
     TUI["codie-tui<br/>interactive"]
     PROTO["codie-protocol<br/>schemas · RPC · extension wire types"]
     EXT["codie-ext<br/>discovery · supervision · hooks"]
+    SUB["codie-subagents<br/>task tool · child runs"]
     CONTEXT["codie-context<br/>Phase 3"]
 
     CLI --> CORE
@@ -30,6 +31,8 @@ flowchart TD
     CLI --> PROMPT
     CLI --> EXT
     CLI --> PROTO
+    CLI --> SUB
+    TUI --> SUB
 
     AI --> CORE
     TOOLS --> CORE
@@ -40,6 +43,9 @@ flowchart TD
 
     TUI --> CORE
     TUI --> EXT
+    SUB --> CORE
+    SUB --> SESSION
+    SUB --> PROMPT
     CONTEXT -.-> CORE
 
     TESTKIT["codie-testkit<br/>dev only"] -.-> CORE
@@ -49,8 +55,8 @@ The graph is deliberately wider than the current workspace. `context` is split o
 appears. Premature crates are as harmful as monolithic modules.
 
 Current repository crates are `codie-core`, `codie-ai`, `codie-tools`, `codie-session`, `codie-prompt`,
-`codie-ext`, `codie-protocol`, `codie-tui`, `codie-cli`, `codie-testkit`, and the `codie-spec-macro`
-helper used by the test attribute. `xtask` is repository automation, not a shipped library.
+`codie-ext`, `codie-subagents`, `codie-protocol`, `codie-tui`, `codie-cli`, `codie-testkit`, and the
+`codie-spec-macro` helper used by the test attribute. `xtask` is repository automation, not a shipped library.
 
 ## Boundaries
 
@@ -64,6 +70,9 @@ helper used by the test attribute. `xtask` is repository automation, not a shipp
 - `codie-prompt` discovers project instructions and builds deterministic system prompts.
 - `codie-ext` discovers and supervises extension processes, translates hooks into the core hook trait,
   registers extension tools and commands, and enforces timeout, environment, and protocol limits.
+- `codie-subagents` implements the host-registered `task` tool, the child toolbox intersection, the concurrency
+  semaphore, and the aggregate budget. It depends on core, session, and prompt, never on `codie-ai` or
+  `codie-tools`; the host injects the chat client and the already-wrapped parent toolbox.
 - `codie-protocol` owns generated wire schemas, the RPC types, and the extension JSON-RPC types.
 - `codie-cli` is the only crate that reads environment variables or maps outcomes to process exit codes.
 - Public APIs are `pub(crate)` by default; crates expose narrow, documented surfaces.
@@ -102,6 +111,11 @@ helper used by the test attribute. `xtask` is repository automation, not a shipp
 
 The registry always has exactly one shell in the `bash`/`powershell` slot, so the declaration count stays nine
 (`SPEC-TOOL-001`). Both shells share the same timeout, output, and truncation implementation.
+
+When `[subagents] enabled = true`, the host adds a tenth, host-registered tool named `task`. It is not part of
+the built-in registry, so the frozen built-in order is unchanged. The parent toolbox is wrapped as
+`PermissionToolbox(SubagentToolbox(Registry))`; children receive the inner permission wrapper and can only use a
+subset of the parent's tools (`SPEC-AGENT-003`, `SEC-009`).
 
 `grep` and `find` share an `ignore`-based walker, so `.gitignore`, git excludes, and hidden entries behave the
 same way in both. Tool output is bounded by `max_results` and the shared truncation caps (`SPEC-TOOL-002`).

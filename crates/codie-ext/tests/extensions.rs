@@ -45,6 +45,8 @@ fn context(cwd: &Path) -> ToolContext {
         cwd: cwd.to_path_buf(),
         cancel: tokio_util::sync::CancellationToken::new(),
         session_id: Some("test-session".to_owned()),
+        delegation_depth: 0,
+        agent: None,
     }
 }
 

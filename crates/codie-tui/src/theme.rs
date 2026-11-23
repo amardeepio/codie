@@ -73,6 +73,52 @@ pub struct Palette {
 }
 
 impl Palette {
+    /// Returns every semantic color as a lowercase `#rrggbb` string.
+    ///
+    /// Non-RGB terminals colors fall back to `#000000`; every built-in palette
+    /// is RGB, so this only affects hand-written theme files.
+    #[must_use]
+    pub fn to_hex(self) -> std::collections::BTreeMap<&'static str, String> {
+        let hex = |color: Color| match color {
+            Color::Rgb(red, green, blue) => format!("#{red:02x}{green:02x}{blue:02x}"),
+            _ => "#000000".to_owned(),
+        };
+        [
+            ("background", self.background),
+            ("surface", self.surface),
+            ("surface_alt", self.surface_alt),
+            ("foreground", self.foreground),
+            ("muted", self.muted),
+            ("primary", self.primary),
+            ("secondary", self.secondary),
+            ("accent", self.accent),
+            ("user", self.user),
+            ("assistant", self.assistant),
+            ("tool", self.tool),
+            ("error", self.error),
+            ("success", self.success),
+            ("warning", self.warning),
+            ("info", self.info),
+            ("diff_add", self.diff_add),
+            ("diff_del", self.diff_del),
+            ("border", self.border),
+            ("border_active", self.border_active),
+            ("border_subtle", self.border_subtle),
+            ("heading", self.heading),
+            ("link", self.link),
+            ("code", self.code),
+            ("strong", self.strong),
+            ("emphasis", self.emphasis),
+            ("quote", self.quote),
+            ("list", self.list),
+            ("list_enum", self.list_enum),
+            ("rule", self.rule),
+        ]
+        .into_iter()
+        .map(|(name, color)| (name, hex(color)))
+        .collect()
+    }
+
     /// The default dark palette.
     #[must_use]
     pub const fn dark() -> Self {

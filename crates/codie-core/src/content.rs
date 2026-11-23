@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Reasoning effort requested for a model that supports thinking.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ThinkingLevel {
@@ -62,6 +64,8 @@ impl ThinkingLevel {
 }
 
 /// A tool declaration as advertised to the model.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolDecl {
     /// Tool name.
@@ -73,6 +77,8 @@ pub struct ToolDecl {
 }
 
 /// A tool call emitted by the model.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolCall {
     /// Provider-assigned opaque identifier.
@@ -84,6 +90,8 @@ pub struct ToolCall {
 }
 
 /// One content block in a message.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Content {
@@ -182,6 +190,8 @@ impl Content {
 }
 
 /// Why an assistant turn stopped.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StopReason {
@@ -210,22 +220,30 @@ impl StopReason {
 }
 
 /// Token usage for one request, normalized across providers.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Usage {
     /// Uncached input tokens.
+    #[serde(default)]
     pub input: u64,
     /// Output tokens, including reasoning tokens.
+    #[serde(default)]
     pub output: u64,
     /// Tokens served from a provider cache.
+    #[serde(default)]
     pub cache_read: u64,
     /// Tokens written to a provider cache.
+    #[serde(default)]
     pub cache_write: u64,
     /// Reasoning tokens, a subset of `output`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<u64>,
     /// Sum of input, output, cache read, and cache write.
+    #[serde(default)]
     pub total_tokens: u64,
     /// Cost in integer nano-USD.
+    #[serde(default)]
     pub cost: Cost,
 }
 
@@ -248,7 +266,11 @@ impl Usage {
 
     /// Recomputes `total_tokens` from its components.
     pub fn recompute_total(&mut self) {
-        self.total_tokens = self.input + self.output + self.cache_read + self.cache_write;
+        self.total_tokens = self
+            .input
+            .saturating_add(self.output)
+            .saturating_add(self.cache_read)
+            .saturating_add(self.cache_write);
     }
 
     /// Returns true when every counter is zero.
@@ -259,17 +281,24 @@ impl Usage {
 }
 
 /// Monetary cost in integer nano-USD (`1 USD = 1_000_000_000`).
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export))]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cost {
     /// Cost of uncached input tokens.
+    #[serde(default)]
     pub input: u64,
     /// Cost of output tokens.
+    #[serde(default)]
     pub output: u64,
     /// Cost of cache reads.
+    #[serde(default)]
     pub cache_read: u64,
     /// Cost of cache writes.
+    #[serde(default)]
     pub cache_write: u64,
     /// Total cost.
+    #[serde(default)]
     pub total: u64,
     /// True when the provider reported the total instead of codie estimating it.
     #[serde(default)]
@@ -294,7 +323,11 @@ impl Cost {
 
     /// Recomputes `total` from its components.
     pub fn recompute_total(&mut self) {
-        self.total = self.input + self.output + self.cache_read + self.cache_write;
+        self.total = self
+            .input
+            .saturating_add(self.output)
+            .saturating_add(self.cache_read)
+            .saturating_add(self.cache_write);
     }
 
     /// Converts a provider-reported USD amount to nano-USD.
@@ -316,6 +349,7 @@ impl Cost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codie_testkit::spec;
 
     #[test]
     fn thinking_levels_round_trip() {
@@ -343,6 +377,28 @@ mod tests {
     fn cost_is_integral_nano_usd() {
         assert_eq!(Cost::nanos_from_usd(0.00042), 420_000);
         assert_eq!(Cost::new(1, 2, 3, 4).total, 10);
+    }
+
+    #[test]
+    #[spec("AGENT-046")]
+    fn counters_saturate_instead_of_overflowing() {
+        assert_eq!(Usage::new(u64::MAX, 1, 0, 0).total_tokens, u64::MAX);
+        assert_eq!(Cost::new(u64::MAX, 1, 0, 0).total, u64::MAX);
+    }
+
+    #[test]
+    #[spec("AGENT-046")]
+    fn additive_fields_default_when_absent() {
+        let usage: Usage = serde_json::from_str(
+            r#"{"input":1,"output":2,"cache_read":3,"cache_write":4,"total_tokens":10}"#,
+        )
+        .expect("older usage without cost");
+        assert_eq!(usage.cost, Cost::default());
+
+        let partial: Cost = serde_json::from_str(r#"{"output":7}"#).expect("partial cost");
+        assert_eq!(partial.output, 7);
+        assert_eq!(partial.total, 0);
+        assert!(!partial.total_from_provider);
     }
 
     #[test]

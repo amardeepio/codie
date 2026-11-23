@@ -22,6 +22,8 @@ pub enum ExecutionMode {
 }
 
 /// Progress emitted while a tool is running.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolProgress {
     /// Partial model-visible content.
@@ -32,6 +34,8 @@ pub struct ToolProgress {
 }
 
 /// The final result of a tool call.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolResult {
     /// Model-visible content.
@@ -82,6 +86,13 @@ impl ToolResult {
         self
     }
 
+    /// Requests that the run stop after the batch when every call agrees.
+    #[must_use]
+    pub const fn with_terminate(mut self, terminate: bool) -> Self {
+        self.terminate = terminate;
+        self
+    }
+
     /// Attaches a duration.
     #[must_use]
     pub const fn with_duration(mut self, duration_ms: u64) -> Self {
@@ -91,7 +102,7 @@ impl ToolResult {
 }
 
 /// Context available to every tool execution.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ToolContext {
     /// Working directory for relative paths and shell commands.
     pub cwd: PathBuf,
@@ -99,6 +110,16 @@ pub struct ToolContext {
     pub cancel: CancellationToken,
     /// Session identifier, when the session is persisted.
     pub session_id: Option<String>,
+    /// Delegation depth of the run that owns this call.
+    ///
+    /// The root run has depth 0; a child run started by the `task` tool has
+    /// depth 1, and so on (`SPEC-AGENT-003`).
+    pub delegation_depth: usize,
+    /// Agent type name that owns this call, when delegated.
+    ///
+    /// Notably for permission prompts, so a child's request can name the
+    /// persona that asked for it instead of looking like parent output.
+    pub agent: Option<String>,
 }
 
 /// A built-in or extension tool.

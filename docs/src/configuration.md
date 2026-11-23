@@ -40,12 +40,48 @@ value with `codie config set provider openrouter`, print the file path with `cod
 `$VISUAL`/`$EDITOR` with `codie config edit`.
 `--base-url` overrides `CODIE_BASE_URL` for a single run.
 
+## Subagents
+
+`enabled` sets the initial delegation mode for a new session. The interactive app always declares the `task`
+tool, so `/subagents on` and `/subagents off` work at runtime without a restart. Tune the concurrency and
+budgets, and optionally override the model or tool set per agent type:
+
+```toml
+[subagents]
+enabled = true
+max_parallel = 4
+max_depth = 0
+max_turns = 50
+timeout_secs = 600
+persist_sessions = true
+
+[subagents.types.explore]
+model = "deepseek-chat"
+tools = ["read", "grep", "find", "ls", "web_fetch"]
+description = "Read-only search"
+max_turns = 20
+timeout_secs = 120
+
+[subagents.types.general]
+tools = "inherit"
+```
+
+Each type also accepts `description` (shown to the model when it chooses a type), `prompt` (appended to the
+child's system prompt), `max_turns`, and `timeout_secs`. A markdown file under `.codie/agents/<name>.md` or
+`<config_dir>/agents/<name>.md` defines the same fields; project files override user files and the matching
+configured type.
+
+`max_parallel` must be between 1 and 8, and `max_depth` at most 4. In headless mode `task` also requires
+`--allow task` and is only declared when `enabled = true` or `--subagents` is passed. See
+[Subagents](subagents.md) for the commands and behavior.
+
 ## Customization
 
 | Resource | Location | Purpose |
 |---|---|---|
 | Skills | `.codie/skills/<name>/SKILL.md`, `~/.config/codie/skills/` | Reusable instruction blocks invoked with `/skill:<name>` |
 | Templates | `.codie/templates/<name>.md`, `~/.config/codie/templates/` | Prompts with `$ARGUMENTS` and `$1`..`$9`, invoked with `/template:<name>` |
+| Agents | `.codie/agents/<name>.md`, `~/.config/codie/agents/` | Subagent personas for `task` (description, prompt, tools, budgets) |
 | System prompt | `SYSTEM.md`, `APPEND_SYSTEM.md` from the working directory upward | Replace or extend the preamble |
 | Project memory | `CODIE.MD` at the project root | Read into every prompt as `<project_memory>`; updated with `/init` and the `project_memory` tool |
 | Project plan | `PLAN.MD` at the project root | Created by `/init`; the plan the model keeps current |

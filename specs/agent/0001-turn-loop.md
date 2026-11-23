@@ -4,7 +4,7 @@ title: Agent turn loop
 status: accepted
 version: 1.0.0
 owners: ["@codie-maintainers"]
-requirements: ["AGENT-001", "AGENT-002", "AGENT-003", "AGENT-004", "AGENT-005", "AGENT-006", "AGENT-007", "AGENT-008", "AGENT-009", "AGENT-010", "AGENT-011", "AGENT-012"]
+requirements: ["AGENT-001", "AGENT-002", "AGENT-003", "AGENT-004", "AGENT-005", "AGENT-006", "AGENT-007", "AGENT-008", "AGENT-009", "AGENT-010", "AGENT-011", "AGENT-012", "AGENT-040", "AGENT-041", "AGENT-042", "AGENT-043", "AGENT-044", "AGENT-045", "AGENT-046", "AGENT-047"]
 ---
 
 # Context
@@ -44,7 +44,7 @@ Verification: `crates/codie-core/tests/agent_loop.rs::spec_agent_007_steering_an
 **AGENT-008 (MUST)** Abort is cooperative. The cancellation token propagates to the provider stream, hooks, and tools. If cancellation occurs while the assistant stream is open, the partial is discarded and the run ends with an assistant message whose stop reason is `aborted`. If it occurs after the assistant message is finalized, that message is retained and unfinished tool calls become aborted error results; no second assistant message is synthesized. Either way the run ends with `AgentEnd`, and abort MUST NOT be reported as a generic provider error.
 Verification: `crates/codie-core/tests/agent_loop.rs::spec_agent_008_abort_is_cooperative`
 
-**AGENT-009 (MUST)** `max_turns` (default 200) bounds the number of assistant requests in one run. Before starting a request that would exceed the budget, the loop ends the run with `status = turn_limit`, emits a diagnostic, and queues nothing. The limit applies to every run regardless of mode.
+**AGENT-009 (MUST)** `max_turns` (default 200) bounds the number of normal assistant requests in one run. Before starting a request that would exceed the budget, the loop stops requesting tools and may make one final tools-disabled wrap-up request (`AGENT-047`), then ends the run with `status = turn_limit`. The limit applies to every run regardless of mode.
 Verification: `crates/codie-core/tests/agent_loop.rs::spec_agent_009_max_turns_enforced`
 
 **AGENT-010 (MUST)** Hooks (`prepare_request`, `prepare_next_turn`, `finish_turn`, `before_tool`, `after_tool`, `transform_context`, `convert_to_llm`) are fallible and may replace the context or model. A hook error fails the run with a synthesized assistant error message and `AgentEnd`; a hook MUST NOT panic the loop. `before_tool` may block a call, and a block becomes an error tool result rather than a run failure.
@@ -55,6 +55,30 @@ Verification: `crates/codie-core/tests/agent_loop.rs::spec_agent_011_persistence
 
 **AGENT-012 (MUST)** A panic in a tool is caught with `catch_unwind` and converted to an error tool result. A panic in the loop itself is fatal: the process writes a crash log, restores the terminal if attached, and exits non-zero. The loop MUST NOT catch and continue after its own invariant failure.
 Verification: `crates/codie-core/tests/agent_loop.rs::spec_agent_012_tool_panic_is_caught`
+
+**AGENT-040 (MUST)** Dropping the event stream cancels the run and every running tool, without cancelling a token the caller may reuse for a retry. The run keeps its own child token; shutdown, completion, and consumer loss are distinguishable.
+Verification: `crates/codie-core/tests/agent_loop.rs::dropping_the_consumer_cancels_running_tools`
+
+**AGENT-041 (MUST)** Parallel tool calls from one assistant message execute at most `max_parallel_tools` (default 8) at a time, in bounded groups, while every call still produces exactly one result in source order.
+Verification: `crates/codie-core/tests/agent_loop.rs::parallel_tool_execution_is_bounded`
+
+**AGENT-042 (MUST)** A provider thought signature attached to a tool call survives delta application and is present in both the streaming update and the finalized assistant message, so Gemini-style replay keeps working.
+Verification: `crates/codie-core/tests/agent_loop.rs::thought_signature_survives_the_agent_loop`
+
+**AGENT-043 (MUST)** A tool result reported by the loop carries a measured wall-clock `duration_ms` in both the sequential and parallel paths, including tools that take time before returning.
+Verification: `crates/codie-core/tests/agent_loop.rs::sequential_tools_report_measured_duration`
+
+**AGENT-044 (MUST)** A run with `max_turns = 0` makes no provider request and ends with `TurnLimit`, but its terminal messages preserve the caller history and the submitted prompt.
+Verification: `crates/codie-core/tests/agent_loop.rs::zero_turn_budget_keeps_the_caller_transcript`
+
+**AGENT-045 (MUST)** When every tool result in a batch sets `terminate = true`, the run stops after that batch and ends `Completed`; the results remain in the transcript. A partial vote does not stop the run.
+Verification: `crates/codie-core/tests/agent_loop.rs::a_unanimous_terminate_stops_after_the_batch`
+
+**AGENT-046 (MUST)** Token and cost totals computed from provider input saturate at `u64::MAX` rather than overflowing, and additive usage or cost fields deserialize as zero when an older record omits them.
+Verification: `crates/codie-core/src/content.rs::counters_saturate_instead_of_overflowing`, `crates/codie-core/src/content.rs::additive_fields_default_when_absent`
+
+**AGENT-047 (MUST)** When the turn budget is exhausted, the loop makes exactly one final request with tool declarations removed and a wrap-up instruction, and the resulting text is part of the terminal transcript. The run still ends `TurnLimit`.
+Verification: `crates/codie-core/tests/agent_loop.rs::turn_limit_wrap_up_requests_a_summary_without_tools`
 
 # Loop
 
@@ -178,7 +202,7 @@ never converted into a tool result unless the hook is `before_tool`, where block
   already been announced, then ends the run.
 - A follow-up delivered at the exit boundary starts a new turn and resets the no-progress guard, but not the
   turn budget.
-- Zero `max_turns` is invalid configuration; the loop rejects it before `AgentStart`.
+- Zero `max_turns` makes no provider request and ends `TurnLimit` with the caller transcript and prompt intact.
 
 # Non-goals
 

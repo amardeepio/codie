@@ -12,6 +12,10 @@ authors.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = []
+typescript = ["dep:ts-rs"]
+
 [dependencies]
 async-trait.workspace = true
 futures-util.workspace = true
@@ -20,6 +24,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true }
 tokio-util.workspace = true
+ts-rs = { version = "12", optional = true, features = ["serde-json-impl"] }
 
 [dev-dependencies]
 async-trait.workspace = true

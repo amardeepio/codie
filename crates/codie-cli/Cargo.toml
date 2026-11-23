@@ -19,6 +19,7 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
+async-trait.workspace = true
 clap.workspace = true
 codie-ai.workspace = true
 codie-core.workspace = true
@@ -26,6 +27,7 @@ codie-ext.workspace = true
 codie-prompt.workspace = true
 codie-protocol.workspace = true
 codie-session.workspace = true
+codie-subagents.workspace = true
 codie-tools.workspace = true
 codie-tui.workspace = true
 dotenvy.workspace = true

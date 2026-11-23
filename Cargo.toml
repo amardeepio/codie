@@ -26,6 +26,7 @@ codie-session = { path = "crates/codie-session", version = "0.9.3" }
 codie-prompt = { path = "crates/codie-prompt", version = "0.9.3" }
 codie-protocol = { path = "crates/codie-protocol", version = "0.9.3" }
 codie-ext = { path = "crates/codie-ext", version = "0.9.3" }
+codie-subagents = { path = "crates/codie-subagents", version = "0.9.3" }
 codie-testkit = { path = "crates/codie-testkit", version = "0.9.3" }
 codie-spec-macro = { path = "crates/codie-spec-macro", version = "0.9.3" }
 

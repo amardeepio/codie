@@ -14,6 +14,10 @@ Phase 2 adds the primary human experience. Running `codie` with a terminal attac
 
 `-p/--print` and `--mode json` keep the Phase 1 headless behavior.
 
+The empty transcript keeps the original block-art Codie banner, with a text fallback on narrow terminals. Startup
+hints show the prompt and command-palette actions plus `Enter` to submit, `Shift+Enter` for a newline, and `@` to
+attach files.
+
 ## Tool output
 
 `edit` calls show a side-by-side diff with line numbers on both sides, three lines of context, and tinted
@@ -121,7 +125,9 @@ every tool, and `Ctrl+T` opens a keyboard-selectable list of tool calls.
 ## Slash commands
 
 Pressing `/` in an empty editor opens the command palette. Type to filter, use `Up`/`Down` or `PageUp`/`PageDown`
-to scroll, and `Enter` to select. `Esc` closes it.
+to scroll, and `Enter` to select. `Esc` closes it. The overlay is at most 88 columns wide and 16 items tall, shrinks
+to fit the filtered results, and highlights the full selected row. Command descriptions and keyboard hints use the
+normal foreground color for readability.
 
 `/help`, `/hotkeys`, `/new`, `/session`, `/tree`, `/fork [entry]`, `/clone`, `/name [text]`, `/export [path]`,
 `/export html [path]`, `/copy`, `/debug`, `/update`, `/theme [name]`, `/provider [id]`, `/model [id]`,
@@ -179,14 +185,14 @@ and removed counts, new files show numbered code, and shell commands show the co
 │  Command                                                          │
 │  $ cargo test --workspace                                         │
 │                                                                   │
-│  ▸ [y] allow once     [A] always allow     [n] deny               │
-│  Enter allow · Esc deny · Shift+Tab full access                   │
+│  [y] Allow once     [A] Always allow     [n] Deny                 │
+│  Enter allow once · Esc deny · Shift+Tab full access              │
 ╰───────────────────────────────────────────────────────────────────╯
 ```
 
-The dialog is sized to its content, the transcript behind it is dimmed, and the three decisions are color-coded:
-green allow once, amber always allow, red deny. `↑`/`↓`, `PgUp`/`PgDn`, `Home`/`End` scroll a long preview and
-`Ctrl+O` shows every row. Commands that usually destroy work (`rm -rf`, `sudo`, `git reset --hard`, and similar)
+The dialog is sized to its content in both dimensions, with rounded borders, horizontal padding, and a raised
+preview panel. The transcript behind it is dimmed, and the three decisions are color-coded: green allow once,
+amber always allow, red deny. `↑`/`↓`, `PgUp`/`PgDn`, `Home`/`End` scroll a long preview and `Ctrl+O` shows every row. Commands that usually destroy work (`rm -rf`, `sudo`, `git reset --hard`, and similar)
 turn the frame red and add a warning line.
 
 `y`/`Y` allows once, `n`/`N` or `Esc` denies, `A` allows the tool for the rest of the run, and `Enter` allows.
@@ -199,11 +205,13 @@ the model can recover.
 
 ## Footer
 
-The footer shows the working directory and git branch, a context meter, model, thinking level, full-access
-state, session token total, cost, live throughput, and session id. Lower-priority fields drop out as the
-terminal narrows. Token totals abbreviate thousands and millions: `999`, `1k`, `1.2k`, `70.2k`, `1.2M`.
+The footer shows the working directory and git branch, a context meter, model, full-access state, session token
+total, and cost. At 120 columns and wider it also shows thinking level, live throughput, and session id; those
+secondary fields drop out below 120 columns. Below 80 columns, the location and status use separate rows and the
+model name omits its provider prefix. Token totals abbreviate thousands and millions: `999`, `1k`, `1.2k`, `70.2k`,
+`1.2M`.
 
-Click the footer or run `/usage` for the full token and cost breakdown.
+Click either footer row or run `/usage` for the full token, cost, throughput, and session breakdown.
 
 ## Themes
 

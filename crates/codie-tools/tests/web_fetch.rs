@@ -15,6 +15,8 @@ fn context(cwd: &Path) -> ToolContext {
         cwd: cwd.to_path_buf(),
         cancel: CancellationToken::new(),
         session_id: None,
+        delegation_depth: 0,
+        agent: None,
     }
 }
 

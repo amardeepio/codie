@@ -53,6 +53,8 @@ fn context(dir: &std::path::Path) -> ToolContext {
         cwd: dir.to_path_buf(),
         cancel: tokio_util::sync::CancellationToken::new(),
         session_id: None,
+        delegation_depth: 0,
+        agent: None,
     }
 }
 

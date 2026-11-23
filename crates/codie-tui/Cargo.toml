@@ -21,6 +21,7 @@ codie-ext.workspace = true
 codie-prompt.workspace = true
 codie-protocol.workspace = true
 codie-session.workspace = true
+codie-subagents.workspace = true
 codie-tools.workspace = true
 ignore.workspace = true
 pulldown-cmark.workspace = true

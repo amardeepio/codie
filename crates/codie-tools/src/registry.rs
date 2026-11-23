@@ -181,7 +181,9 @@ impl Policy {
 /// Returns true for tools that do not mutate files or run commands.
 #[must_use]
 pub fn is_read_only(name: &str) -> bool {
-    matches!(name, "read" | "grep" | "find" | "ls")
+    // `question` is a host tool: answering it changes nothing on disk, and
+    // prompting for permission to ask a question would be circular.
+    matches!(name, "read" | "grep" | "find" | "ls" | "question")
 }
 
 /// Wraps a toolbox and applies a [`Policy`] before tool execution.
@@ -268,6 +270,15 @@ mod tests {
         );
         assert!(registry.get("read").is_some());
         assert!(registry.get("missing").is_none());
+    }
+
+    #[spec("SEC-009")]
+    #[test]
+    fn spec_sec_009_task_requires_allow() {
+        let policy = Policy::headless(Vec::<String>::new());
+        assert!(policy.denial("task").is_some());
+        let policy = Policy::headless(["task"]);
+        assert!(policy.denial("task").is_none());
     }
 
     #[spec("SEC-001")]

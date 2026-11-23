@@ -61,6 +61,13 @@ over stored credentials; an empty environment variable can shadow a valid stored
 codie honors `retry-after` and backs off. A server-requested delay above the configured cap fails fast instead
 of waiting indefinitely. Reduce concurrent runs or switch models.
 
+### Subagents fail immediately with a provider error
+
+The `task` row and `/subagents status` now show the child's provider message. A common cause is a free or
+rate-limited model: run `/subagents parallel 1` and retry. Children inherit the current `/model` and `/provider`,
+so switching models mid-session no longer leaves them on the startup model. A `404` naming an old model id in a
+long-running session means the session predates that fix; restart or re-select the model.
+
 ### TLS or proxy failures on Windows
 
 The Windows preview uses bundled WebPKI roots. Corporate TLS interception may require a proxy configuration or
@@ -77,6 +84,13 @@ is still broken:
 ```bash
 reset
 ```
+
+### Logs while the TUI is open
+
+The interactive terminal owns stderr, so codie writes diagnostics to `<data>/logs/codie.log`
+(`~/.local/share/codie/logs/codie.log` by default) instead of printing them over the interface. This includes
+expected background failures such as an Ollama or LM Studio server that is not running. One-shot, JSON, RPC, and
+management commands still log to stderr.
 
 ### Option-as-Meta does not work
 

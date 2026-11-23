@@ -11,15 +11,90 @@ that major series, with migrations applied on read.
 
 ### Added
 
-- Nothing yet.
-
-### Changed
-
-- Nothing yet.
+- Subagent personas. `.codie/agents/<name>.md` (and `<config_dir>/agents/`) define a type's description, prompt,
+  tool subset, model, turn budget, and timeout; `[subagents.types.<name>]` accepts the same fields. A definition
+  overrides the matching built-in type field-by-field, and the names appear in the `task` schema and description
+  (`AGENT-031`, `AGENT-032`).
+- Live subagent activity. `task` rows show the agent, label, current turn and tool target, and elapsed time, then
+  the status, turns, cost, and child session id on completion. `/subagents status` numbers runs, `open N` shows a
+  read-only child transcript, and `stop N` cancels one child (`TUI-040`, `TUI-041`, `TUI-044`).
+- A `question` tool for the parent and delegated children, with a one-line prompt in the TUI. Permission prompts
+  now name the asking subagent and scope "Always allow" to that agent type (`AGENT-034`, `AGENT-035`, `TUI-045`).
+- Subagent delegation (`SPEC-AGENT-003`). A host-registered `task` tool starts an in-process child run with its
+  own transcript, model, turn budget, cancellation token, and tool subset. Children inherit the parent's
+  permission policy, cannot escalate, and report progress through the existing tool-update events. Enable it with
+  `[subagents] enabled = true`, `--subagents`, or `/subagents` in the TUI; prompt phrases such as "use subagents"
+  are detected deterministically. See [`docs/src/subagents.md`](docs/src/subagents.md).
+- RPC protocol v2. Clients can opt into interactive tool permissions (`permission_request` /
+  `permission_response`), manage API keys over the private pipe, read the model catalog and effective
+  configuration, write configuration values, and send path or inline-image prompt attachments. Version 1 clients
+  keep the headless tool policy unchanged. See [`docs/src/rpc.md`](docs/src/rpc.md) and
+  [`specs/protocol/0003-rpc-v2.md`](specs/protocol/0003-rpc-v2.md).
+- `codie config set` and the RPC `set_config` command now share one writer, so both validate and normalize values
+  identically.
+- RPC `get_themes` returns the built-in TUI palettes as semantic hex colors so GUI clients reuse the same theme
+  definitions (`PROTO-012`).
+- TypeScript bindings for the RPC and agent-event types are generated from Rust with `cargo xtask bindings`
+  (`--check` for CI), behind `typescript` features on `codie-core` and `codie-protocol`.
 
 ### Fixed
 
-- Nothing yet.
+- Subagents follow `/model` and `/provider`. The runtime kept the startup model, so switching providers (for
+  example to OpenRouter) made every child fail with the previous model id at zero cost. The parent model and known
+  model ids are now swappable and synced on every selection change (`AGENT-036`).
+- Child failures are no longer swallowed. Provider and terminal errors are carried into the `task` result text
+  and structured details instead of "completed without a final message" (`AGENT-039`).
+- Children waiting for a concurrency slot are listed as `queued`, and `/subagents stop N` cancels them before
+  they start (`AGENT-037`).
+- A nested `task` (with `max_depth > 0`) now goes through the same permission gate as the root call instead of
+  spawning silently (`AGENT-038`).
+- `/reload` applies added or removed agent definitions without restarting, and `/subagents parallel N` applies
+  live when no child is running or queued (`TUI-046`, `TUI-048`).
+- An open child transcript refreshes once a second while it runs, and permission and question prompts name the
+  asking run (`TUI-047`).
+- Dropping the event stream now cancels the run and its tools, so exiting the UI cannot leave side effects
+  running; each run uses a child token so a retry is unaffected (`AGENT-040`).
+- Parallel tool calls from one assistant message are bounded by `max_parallel_tools` (default 8) instead of
+  spawning every call at once (`AGENT-041`).
+- A provider thought signature on a tool call survives streaming deltas, keeping Gemini-style multi-turn tool
+  calling intact (`AGENT-042`).
+- A tool that clones the progress sender into a detached task can no longer hang the run; late updates are
+  dropped after a short drain.
+- Sequential tool calls now report a measured `duration_ms` instead of zero, matching the parallel path
+  (`AGENT-043`).
+- Token and cost counters saturate instead of overflowing on hostile provider values, and additive fields
+  accept older JSON that predates them (`AGENT-046`).
+- A zero turn budget returns the caller transcript and prompt with `TurnLimit` instead of an empty history
+  (`AGENT-044`).
+- A unanimous `terminate` from a tool batch stops the run after those results, as the tool contract says
+  (`AGENT-045`).
+- `AgentEventStream::channel(0)` and `AssistantEventStream::channel(0)` fail with a named panic instead of the
+  tokio assertion.
+- A run that exhausts `max_turns` now makes one final tools-disabled request for a handoff summary before ending
+  `TurnLimit` (`AGENT-047`).
+- A child that exceeds its wall-clock limit returns its partial summary and usage promptly with an `error`
+  naming the timeout, instead of waiting for the provider or discarding the transcript (`AGENT-048`).
+- A forced delegation run that never calls `task` gets exactly one follow-up nudge, in the TUI, plain mode, and
+  `codie -p` (`AGENT-030`).
+- Child token and cost usage now reaches the parent footer, `/usage`, and a `subagent` session usage entry
+  (`TUI-049`).
+- Subagent summaries are labelled untrusted, and truncation keeps the beginning and the conclusion instead of
+  only the head.
+
+### Changed
+
+- `rpc_ready` reports protocol version 2 plus the supported feature list (`PROTO-011`). The published
+  `schemas/rpc-*.schema.json` files were regenerated.
+- TUI list overlays now fit their filtered content, cap long lists at 16 visible rows, highlight the full selected
+  row, and use normal foreground text for descriptions and keyboard hints. The footer drops secondary metadata at
+  medium widths and uses separate location/status rows on narrow terminals; the original startup banner remains.
+- Permission dialogs now hug their content horizontally, use rounded padded frames and a raised preview panel, and
+  present clearer color-coded Allow once, Always allow, and Deny actions.
+
+### Fixed
+
+- Interactive runs now write tracing output to `<data>/logs/codie.log` instead of stderr. Background provider
+  catalog warnings (for example, an offline Ollama or LM Studio server) no longer corrupt the alternate-screen TUI.
 
 ### Removed
 

@@ -34,6 +34,12 @@ pub struct PermissionRequest {
     pub tool: String,
     /// Parsed arguments.
     pub arguments: Value,
+    /// Agent type that asked for the call, when delegated.
+    pub agent: Option<String>,
+    /// Delegation depth of the caller (`0` is the root run).
+    pub depth: usize,
+    /// Session id of the asking run, when persisted.
+    pub session_id: Option<String>,
     /// Reply channel; dropping it denies the call.
     pub reply: oneshot::Sender<Decision>,
 }
@@ -72,26 +78,36 @@ impl PermissionBroker {
     }
 
     /// Returns true when a call may run without prompting.
+    ///
+    /// "Always" approvals are scoped to the agent that asked, so trusting a
+    /// child type never silently trusts the root run.
     #[must_use]
-    pub fn is_allowed(&self, tool: &str) -> bool {
+    pub fn is_allowed(&self, tool: &str, agent: Option<&str>) -> bool {
         self.auto_approve()
             || is_read_only(tool)
             || self
                 .allowed
                 .lock()
-                .is_ok_and(|allowed| allowed.contains(tool))
+                .is_ok_and(|allowed| allowed.contains(&scope_key(agent, tool)))
     }
 
-    /// Remembers a tool for the rest of the run.
-    pub fn allow_always(&self, tool: &str) {
+    /// Remembers a tool for the rest of the run, for one agent type.
+    pub fn allow_always(&self, tool: &str, agent: Option<&str>) {
         if let Ok(mut allowed) = self.allowed.lock() {
-            allowed.insert(tool.to_owned());
+            allowed.insert(scope_key(agent, tool));
         }
     }
 
     /// Asks the UI for a decision. A closed UI denies the call.
-    pub async fn request(&self, tool: &str, arguments: &Value) -> Decision {
-        if self.is_allowed(tool) {
+    pub async fn request(
+        &self,
+        tool: &str,
+        arguments: &Value,
+        agent: Option<&str>,
+        depth: usize,
+        session_id: Option<&str>,
+    ) -> Decision {
+        if self.is_allowed(tool, agent) {
             return Decision::Allow;
         }
         let (reply, answer) = oneshot::channel();
@@ -100,6 +116,9 @@ impl PermissionBroker {
             .send(PermissionRequest {
                 tool: tool.to_owned(),
                 arguments: arguments.clone(),
+                agent: agent.map(str::to_owned),
+                depth,
+                session_id: session_id.map(str::to_owned),
                 reply,
             })
             .is_err()
@@ -108,13 +127,18 @@ impl PermissionBroker {
         }
         match answer.await {
             Ok(Decision::Always) => {
-                self.allow_always(tool);
+                self.allow_always(tool, agent);
                 Decision::Always
             }
             Ok(decision) => decision,
             Err(_) => Decision::Deny,
         }
     }
+}
+
+/// Keys an "always" approval by agent type so scopes stay independent.
+fn scope_key(agent: Option<&str>, tool: &str) -> String {
+    agent.map_or_else(|| tool.to_owned(), |agent| format!("{agent}\u{1f}{tool}"))
 }
 
 /// A toolbox that asks for permission before mutating calls.
@@ -134,6 +158,16 @@ impl PermissionToolbox {
     #[must_use]
     pub fn inner(&self) -> &Arc<dyn Toolbox> {
         &self.inner
+    }
+
+    /// Wraps one tool outside a toolbox, for host tools that are re-created
+    /// per call (such as a nested `task`).
+    #[must_use]
+    pub fn guard(&self, tool: Arc<dyn Tool>) -> Arc<dyn Tool> {
+        Arc::new(PermissionTool {
+            inner: tool,
+            broker: self.broker.clone(),
+        })
     }
 }
 
@@ -189,7 +223,16 @@ impl Tool for PermissionTool {
         context: &ToolContext,
         updates: Option<mpsc::UnboundedSender<ToolProgress>>,
     ) -> ToolResult {
-        let decision = self.broker.request(&call.name, &call.arguments).await;
+        let decision = self
+            .broker
+            .request(
+                &call.name,
+                &call.arguments,
+                context.agent.as_deref(),
+                context.delegation_depth,
+                context.session_id.as_deref(),
+            )
+            .await;
         if matches!(decision, Decision::Deny) {
             return ToolResult::error(format!(
                 "Permission denied for tool `{}` by the user.",
@@ -254,6 +297,8 @@ mod tests {
             cwd: std::path::PathBuf::from("."),
             cancel: tokio_util::sync::CancellationToken::new(),
             session_id: None,
+            delegation_depth: 0,
+            agent: None,
         }
     }
 
@@ -299,6 +344,41 @@ mod tests {
     }
 
     #[tokio::test]
+    #[spec("AGENT-034")]
+    async fn always_is_scoped_to_the_asking_agent() {
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        let broker = PermissionBroker::new(sender, Vec::new());
+
+        let asking = broker.clone();
+        let pending = tokio::spawn(async move {
+            asking
+                .request(
+                    "write",
+                    &serde_json::json!({}),
+                    Some("explore"),
+                    1,
+                    Some("ses_child"),
+                )
+                .await
+        });
+        let request = receiver.recv().await.expect("permission request");
+        assert_eq!(request.agent.as_deref(), Some("explore"));
+        assert_eq!(request.depth, 1);
+        request.reply.send(Decision::Always).unwrap();
+        assert_eq!(pending.await.unwrap(), Decision::Always);
+
+        assert!(broker.is_allowed("write", Some("explore")));
+        assert!(
+            !broker.is_allowed("write", Some("general")),
+            "an approval for one persona must not leak to another"
+        );
+        assert!(
+            !broker.is_allowed("write", None),
+            "an approval for a child must not grant the root run"
+        );
+    }
+
+    #[tokio::test]
     async fn always_skips_later_prompts() {
         let calls = Arc::new(AtomicUsize::new(0));
         let inner = Arc::new(OneTool {
@@ -331,8 +411,8 @@ mod tests {
     async fn read_only_tools_never_prompt() {
         let (sender, mut receiver) = mpsc::unbounded_channel();
         let broker = PermissionBroker::new(sender, Vec::new());
-        assert!(broker.is_allowed("read"));
-        assert!(!broker.is_allowed("write"));
+        assert!(broker.is_allowed("read", None));
+        assert!(!broker.is_allowed("write", None));
         assert!(receiver.try_recv().is_err());
     }
 

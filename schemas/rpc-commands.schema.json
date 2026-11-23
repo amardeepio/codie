@@ -1,10 +1,112 @@
 {
+  "$defs": {
+    "PermissionDecision": {
+      "description": "A client answer to a [`RpcPermissionRequest`].",
+      "oneOf": [
+        {
+          "const": "allow_once",
+          "description": "Allow this call only.",
+          "type": "string"
+        },
+        {
+          "const": "allow_always",
+          "description": "Allow this tool for the rest of the session.",
+          "type": "string"
+        },
+        {
+          "const": "deny",
+          "description": "Deny the call.",
+          "type": "string"
+        }
+      ]
+    },
+    "PermissionMode": {
+      "description": "How the server treats mutating tool calls.",
+      "oneOf": [
+        {
+          "const": "headless",
+          "description": "Version 1 behavior: mutating tools are denied unless listed in `--allow`.",
+          "type": "string"
+        },
+        {
+          "const": "ask",
+          "description": "Ask the client before each mutating call that is not pre-approved.",
+          "type": "string"
+        },
+        {
+          "const": "allow",
+          "description": "Allow every mutating call without asking.",
+          "type": "string"
+        }
+      ]
+    },
+    "RpcAttachment": {
+      "description": "One explicit attachment in a `prompt` command.",
+      "oneOf": [
+        {
+          "description": "A path relative to the session working directory.",
+          "properties": {
+            "path": {
+              "description": "File path to read and attach.",
+              "type": "string"
+            },
+            "type": {
+              "const": "path",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A base64-encoded image supplied by the client.",
+          "properties": {
+            "data": {
+              "description": "Base64-encoded image bytes.",
+              "type": "string"
+            },
+            "mime_type": {
+              "description": "MIME type such as `image/png`.",
+              "type": "string"
+            },
+            "name": {
+              "description": "Optional display name for prompts and logs.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "image",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data",
+            "mime_type"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "One command read from stdin.",
   "oneOf": [
     {
       "description": "Start a run with a user message.",
       "properties": {
+        "attachments": {
+          "description": "Explicit attachments appended to the message.",
+          "items": {
+            "$ref": "#/$defs/RpcAttachment"
+          },
+          "type": "array"
+        },
         "command": {
           "const": "prompt",
           "type": "string"
@@ -70,6 +172,47 @@
       "type": "object"
     },
     {
+      "description": "Change how mutating tools are authorized.",
+      "properties": {
+        "command": {
+          "const": "set_permission_mode",
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/PermissionMode",
+          "description": "One of `headless`, `ask`, or `allow`."
+        }
+      },
+      "required": [
+        "command",
+        "mode"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Answer a pending `permission_request`.",
+      "properties": {
+        "command": {
+          "const": "permission_response",
+          "type": "string"
+        },
+        "decision": {
+          "$ref": "#/$defs/PermissionDecision",
+          "description": "Client decision."
+        },
+        "request_id": {
+          "description": "Identifier from the `permission_request` record.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command",
+        "request_id",
+        "decision"
+      ],
+      "type": "object"
+    },
+    {
       "description": "Report the current model, thinking level, and session state.",
       "properties": {
         "command": {
@@ -79,6 +222,126 @@
       },
       "required": [
         "command"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "List selectable models and provider details.",
+      "properties": {
+        "command": {
+          "const": "get_catalog",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "List the built-in theme palettes as semantic hex colors.",
+      "properties": {
+        "command": {
+          "const": "get_themes",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Report effective configuration without secrets.",
+      "properties": {
+        "command": {
+          "const": "get_config",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Write one value to `config.toml`.",
+      "properties": {
+        "command": {
+          "const": "set_config",
+          "type": "string"
+        },
+        "key": {
+          "description": "Key such as `provider`, `model`, `thinking`, `max-turns`, `allow`,\nor `base-url`.",
+          "type": "string"
+        },
+        "value": {
+          "description": "New value; `allow` accepts a comma-separated list.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command",
+        "key",
+        "value"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Report credential state for every provider.",
+      "properties": {
+        "command": {
+          "const": "auth_status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Store an API key for one provider.",
+      "properties": {
+        "command": {
+          "const": "auth_set_key",
+          "type": "string"
+        },
+        "key": {
+          "description": "API key. Never echoed in responses or logs.",
+          "type": "string"
+        },
+        "provider": {
+          "description": "Provider identifier such as `deepseek`, `openrouter`, or `gemini`.",
+          "type": "string"
+        },
+        "verify": {
+          "description": "Contact the provider to verify the key before storing it.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "command",
+        "provider",
+        "key"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Remove a stored API key.",
+      "properties": {
+        "command": {
+          "const": "auth_logout",
+          "type": "string"
+        },
+        "provider": {
+          "description": "Provider identifier.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command",
+        "provider"
       ],
       "type": "object"
     },

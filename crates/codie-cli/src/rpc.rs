@@ -3,36 +3,45 @@
 //! Implements `PROTO-003` and `PROTO-006`. Responses echo the client `id`, agent
 //! events are forwarded unchanged, and every run ends with `agent_settled`.
 
+use std::collections::HashMap;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
 
 use anyhow::{Context, Result};
-use codie_ai::{Model, fallback_model, find_model};
+use codie_ai::{AuthStore, Model, auth_status, fallback_model, find_model, provider};
 use codie_core::{
     Agent, AgentConfig, AgentEvent, AgentEventStream, ChatClient, Message, ModelRef, RunStatus,
     ThinkingLevel, Toolbox,
 };
 use codie_ext::ExtensionSet;
 use codie_prompt::{
-    Customizations, PromptInput, build_system_message, expand_attachments, load_project_context,
-    load_project_memory,
+    Customizations, MAX_ATTACHMENTS, PromptInput, build_system_message, expand_attachments,
+    inline_image, load_project_context, load_project_memory, quote_attachment_path,
 };
 use codie_protocol::ext::ExtSessionInfo;
 use codie_protocol::{
-    RpcCommand, RpcReady, RpcRequest, RpcResponse, RpcSessionHeader, RpcSettled, SessionType,
+    PermissionDecision, PermissionMode, RpcAttachment, RpcCommand, RpcPermissionRequest, RpcReady,
+    RpcRequest, RpcResponse, RpcSessionHeader, RpcSettled, SessionType,
 };
 use codie_session::Session;
 use serde::Serialize;
 use serde_json::{Value, json};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
+
+use crate::permissions::{PermissionGate, PermissionPrompt, RpcToolbox};
 
 /// Everything the RPC server needs from the run setup.
 pub(crate) struct RpcOptions {
     pub(crate) client: Arc<dyn ChatClient>,
+    /// Raw tool registry; the interactive policy is layered on top per mode.
     pub(crate) toolbox: Arc<dyn Toolbox>,
+    /// Mutating tools pre-approved with `--allow` or configuration.
+    pub(crate) allowed: Vec<String>,
+    /// Effective configuration, used by `get_config`/`set_config`.
+    pub(crate) config: crate::config::Config,
     pub(crate) cwd: PathBuf,
     pub(crate) session_dir: PathBuf,
     pub(crate) session: Option<Session>,
@@ -65,17 +74,23 @@ struct State {
     active: Option<ActiveRun>,
     shutdown_requested: bool,
     exit_code: Option<u8>,
+    gate: PermissionGate,
+    pending_permissions: HashMap<String, oneshot::Sender<PermissionDecision>>,
+    permission_sequence: u64,
 }
 
 /// Runs the RPC server until stdin closes, `shutdown`, or a signal.
 pub(crate) async fn run(options: RpcOptions) -> Result<u8> {
+    let (permission_tx, mut permission_rx) = mpsc::unbounded_channel();
+    let gate = PermissionGate::new(permission_tx, options.allowed.clone());
+    let toolbox: Arc<dyn Toolbox> = Arc::new(RpcToolbox::new(
+        Arc::clone(&options.toolbox),
+        options.allowed.clone(),
+        gate.clone(),
+    ));
     let agent = Arc::new(match options.extensions.hooks() {
-        Some(hooks) => Agent::with_hooks(
-            Arc::clone(&options.client),
-            Arc::clone(&options.toolbox),
-            hooks,
-        ),
-        None => Agent::new(Arc::clone(&options.client), Arc::clone(&options.toolbox)),
+        Some(hooks) => Agent::with_hooks(Arc::clone(&options.client), Arc::clone(&toolbox), hooks),
+        None => Agent::new(Arc::clone(&options.client), Arc::clone(&toolbox)),
     });
     let mut state = State {
         options,
@@ -92,6 +107,9 @@ pub(crate) async fn run(options: RpcOptions) -> Result<u8> {
         active: None,
         shutdown_requested: false,
         exit_code: None,
+        gate,
+        pending_permissions: HashMap::new(),
+        permission_sequence: 0,
     };
     state.take_options();
     let session_id = state
@@ -135,6 +153,7 @@ pub(crate) async fn run(options: RpcOptions) -> Result<u8> {
             line = line_rx.recv() => {
                 let Some(line) = line else {
                     state.shutdown_requested = true;
+                    state.deny_pending_permissions();
                     if let Some(active) = state.active.as_ref() {
                         active.cancel.cancel();
                     }
@@ -144,6 +163,9 @@ pub(crate) async fn run(options: RpcOptions) -> Result<u8> {
                     continue;
                 }
                 state.handle_line(&line).await?;
+            }
+            Some(prompt) = permission_rx.recv() => {
+                state.permission_requested(prompt)?;
             }
             event = next_event(&mut state.active) => {
                 if let Some(event) = event {
@@ -155,6 +177,7 @@ pub(crate) async fn run(options: RpcOptions) -> Result<u8> {
             Some(code) = signal_rx.recv() => {
                 state.exit_code = Some(code);
                 state.shutdown_requested = true;
+                state.deny_pending_permissions();
                 if let Some(active) = state.active.as_ref() {
                     active.cancel.cancel();
                 } else {
@@ -248,12 +271,16 @@ impl State {
         let command = request.command_name();
         let id = request.id.clone();
         match request.command {
-            RpcCommand::Prompt { message } => self.prompt(id, command, &message).await,
+            RpcCommand::Prompt {
+                message,
+                attachments,
+            } => self.prompt(id, command, &message, &attachments).await,
             RpcCommand::Steer { message } => self.queue(id, command, &message, true),
             RpcCommand::FollowUp { message } => self.queue(id, command, &message, false),
             RpcCommand::Abort => {
                 if let Some(active) = self.active.as_ref() {
                     active.cancel.cancel();
+                    self.deny_pending_permissions();
                     self.respond(RpcResponse::success(id, command, json!({"aborted": true})))
                 } else {
                     self.respond(RpcResponse::failure(
@@ -264,7 +291,26 @@ impl State {
                     ))
                 }
             }
+            RpcCommand::SetPermissionMode { mode } => self.set_permission_mode(id, command, mode),
+            RpcCommand::PermissionResponse {
+                request_id,
+                decision,
+            } => self.permission_response(id, command, &request_id, decision),
             RpcCommand::GetState => self.get_state(id, command),
+            RpcCommand::GetCatalog => self.get_catalog(id, command),
+            RpcCommand::GetThemes => self.get_themes(id, command),
+            RpcCommand::GetConfig => self.get_config(id, command),
+            RpcCommand::SetConfig { key, value } => self.set_config(id, command, &key, &value),
+            RpcCommand::AuthStatus => self.auth_status(id, command),
+            RpcCommand::AuthSetKey {
+                provider,
+                key,
+                verify,
+            } => {
+                self.auth_set_key(id, command, &provider, &key, verify)
+                    .await
+            }
+            RpcCommand::AuthLogout { provider } => self.auth_logout(id, command, &provider),
             RpcCommand::GetMessages => self.get_messages(id, command),
             RpcCommand::GetEntries => self.get_entries(id, command),
             RpcCommand::GetSessionStats => self.get_session_stats(id, command),
@@ -279,6 +325,7 @@ impl State {
             RpcCommand::ExportHtml { path } => self.export_html(id, command, path.as_deref()),
             RpcCommand::Shutdown => {
                 self.shutdown_requested = true;
+                self.deny_pending_permissions();
                 if let Some(active) = self.active.as_ref() {
                     active.cancel.cancel();
                 }
@@ -287,7 +334,13 @@ impl State {
         }
     }
 
-    async fn prompt(&mut self, id: Option<String>, command: &str, message: &str) -> Result<()> {
+    async fn prompt(
+        &mut self,
+        id: Option<String>,
+        command: &str,
+        message: &str,
+        attachments: &[RpcAttachment],
+    ) -> Result<()> {
         let session_info = ExtSessionInfo {
             id: self.session.as_ref().map(|session| session.id().to_owned()),
             cwd: self.options.cwd.display().to_string(),
@@ -345,9 +398,46 @@ impl State {
         if let Some(prompt) = submitted.prompt {
             message = prompt;
         }
-        let expansion = expand_attachments(&message, &self.options.cwd);
-        let prompt = Message::user_with_content(expansion.content);
-        let warnings = expansion.errors;
+
+        // Path attachments reuse the `@path` expansion so text files and
+        // images behave exactly like an inline reference.
+        let mut text = message;
+        for attachment in attachments {
+            if let RpcAttachment::Path { path } = attachment {
+                text.push(' ');
+                text.push_str(&quote_attachment_path(Path::new(path)));
+            }
+        }
+
+        let expansion = expand_attachments(&text, &self.options.cwd);
+        let mut content = expansion.content;
+        let mut warnings = expansion.errors;
+        let mut attached = expansion.attached.len();
+        for attachment in attachments {
+            let RpcAttachment::Image {
+                data,
+                mime_type,
+                name,
+            } = attachment
+            else {
+                continue;
+            };
+            attached += 1;
+            if attached > MAX_ATTACHMENTS {
+                warnings.push(format!(
+                    "Attachment limit reached: at most {MAX_ATTACHMENTS} files per message."
+                ));
+                continue;
+            }
+            match inline_image(data, mime_type) {
+                Ok(block) => content.push(block),
+                Err(error) => warnings.push(format!(
+                    "Cannot attach `{}`: {error}",
+                    name.as_deref().unwrap_or("image")
+                )),
+            }
+        }
+        let prompt = Message::user_with_content(content);
 
         if self.active.is_some() {
             self.agent.follow_up(prompt);
@@ -368,6 +458,7 @@ impl State {
             json!({
                 "started": true,
                 "session": self.session.as_ref().map(Session::id),
+
                 "warnings": warnings,
             }),
         ))
@@ -397,7 +488,376 @@ impl State {
         self.respond(RpcResponse::success(id, command, json!({"queued": true})))
     }
 
+    fn set_permission_mode(
+        &self,
+        id: Option<String>,
+        command: &str,
+        mode: PermissionMode,
+    ) -> Result<()> {
+        self.gate.set_mode(mode);
+        self.respond(RpcResponse::success(
+            id,
+            command,
+            json!({"mode": mode.as_str()}),
+        ))
+    }
+
+    /// Emits a permission request and parks the reply channel until the client
+    /// answers, aborts, or disconnects.
+    fn permission_requested(&mut self, prompt: PermissionPrompt) -> Result<()> {
+        self.permission_sequence += 1;
+        let request = RpcPermissionRequest::new(
+            format!("perm-{}", self.permission_sequence),
+            prompt.tool_call_id,
+            prompt.tool,
+            prompt.arguments,
+        );
+        self.emit(&request)?;
+        self.pending_permissions.insert(request.id, prompt.reply);
+        Ok(())
+    }
+
+    fn permission_response(
+        &mut self,
+        id: Option<String>,
+        command: &str,
+        request_id: &str,
+        decision: PermissionDecision,
+    ) -> Result<()> {
+        let Some(reply) = self.pending_permissions.remove(request_id) else {
+            return self.respond(RpcResponse::failure(
+                id,
+                command,
+                "unknown_permission",
+                format!("no pending permission request `{request_id}`"),
+            ));
+        };
+        let applied = reply.send(decision).is_ok();
+        self.respond(RpcResponse::success(
+            id,
+            command,
+            json!({
+                "request": request_id,
+                "decision": decision.as_str(),
+                "applied": applied,
+            }),
+        ))
+    }
+
+    /// Drops every pending request, which resolves it as a denial.
+    fn deny_pending_permissions(&mut self) {
+        for (_, reply) in self.pending_permissions.drain() {
+            let _ = reply.send(PermissionDecision::Deny);
+        }
+    }
+
+    fn get_catalog(&self, id: Option<String>, command: &str) -> Result<()> {
+        let models = self
+            .options
+            .models
+            .iter()
+            .map(|model| {
+                json!({
+                    "id": model.id,
+                    "name": model.name,
+                    "provider": model.provider,
+                    "api": model.api,
+                    "context_window": model.context_window,
+                    "max_output_tokens": model.max_output_tokens,
+                    "reasoning": model.reasoning,
+                    "cost": {
+                        "input": model.cost.input,
+                        "output": model.cost.output,
+                        "cache_read": model.cost.cache_read,
+                        "cache_write": model.cost.cache_write,
+                    },
+                })
+            })
+            .collect::<Vec<_>>();
+        let providers = provider::all()
+            .iter()
+            .map(|spec| {
+                json!({
+                    "id": spec.id,
+                    "name": spec.name,
+                    "requires_key": spec.requires_key,
+                    "env_var": spec.env_var,
+                    "default_model": spec.default_model,
+                })
+            })
+            .collect::<Vec<_>>();
+        self.respond(RpcResponse::success(
+            id,
+            command,
+            json!({
+                "current": &self.model,
+                "context_window": self.context_window,
+                "models": models,
+                "providers": providers,
+            }),
+        ))
+    }
+
+    fn get_themes(&self, id: Option<String>, command: &str) -> Result<()> {
+        let themes = codie_tui::theme::BUILTIN_THEMES
+            .iter()
+            .filter(|name| **name != "system")
+            .filter_map(|name| {
+                let theme = codie_tui::theme::Theme::load(Some(name)).ok()?;
+                Some(json!({
+                    "name": theme.name,
+                    "colors": theme.palette.to_hex(),
+                }))
+            })
+            .collect::<Vec<_>>();
+        self.respond(RpcResponse::success(
+            id,
+            command,
+            json!({ "themes": themes }),
+        ))
+    }
+
+    fn get_config(&self, id: Option<String>, command: &str) -> Result<()> {
+        let config = &self.options.config;
+        self.respond(RpcResponse::success(
+            id,
+            command,
+            json!({
+                "provider": &self.model.provider,
+                "model": &self.model.model,
+                "thinking": self.thinking.as_str(),
+                "max_turns": self.options.max_turns,
+                "allow": &self.options.allowed,
+                "base_url": &config.base_url,
+                "extensions_disabled": &config.extensions_disabled,
+                "session_dir": config.session_dir.display().to_string(),
+                "config_path": config.config_dir.join("config.toml").display().to_string(),
+                "auth_path": config.auth_path().display().to_string(),
+            }),
+        ))
+    }
+
+    fn set_config(
+        &mut self,
+        id: Option<String>,
+        command: &str,
+        key: &str,
+        value: &str,
+    ) -> Result<()> {
+        let thinking = if key == "thinking" {
+            match ThinkingLevel::parse(value) {
+                Some(level) => Some(level),
+                None => {
+                    return self.respond(RpcResponse::failure(
+                        id,
+                        command,
+                        "invalid_argument",
+                        format!("unknown thinking level `{value}`"),
+                    ));
+                }
+            }
+        } else {
+            None
+        };
+
+        let path = self.options.config.config_dir.join("config.toml");
+        if let Err(error) = crate::config_cmd::apply_value(&path, key, value) {
+            return self.respond(RpcResponse::failure(
+                id,
+                command,
+                "invalid_argument",
+                error.to_string(),
+            ));
+        }
+
+        let mut restart_required = false;
+        match key {
+            "thinking" => {
+                if let Some(level) = thinking {
+                    self.thinking = level;
+                    self.options.thinking = level;
+                    if let Some(session) = self.session.as_mut() {
+                        session.append_thinking_level_change(level)?;
+                    }
+                }
+            }
+            "max-turns" => match value.parse::<usize>() {
+                Ok(turns) if turns > 0 => self.options.max_turns = turns,
+                _ => {
+                    return self.respond(RpcResponse::failure(
+                        id,
+                        command,
+                        "invalid_argument",
+                        format!("max-turns must be a positive integer, got `{value}`"),
+                    ));
+                }
+            },
+            "allow" => {
+                let allowed = value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|entry| !entry.is_empty())
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>();
+                self.gate.set_configured(allowed.clone());
+                self.options.allowed = allowed;
+            }
+            "provider" | "model" | "base-url" | "extensions-disabled" => {
+                restart_required = true;
+            }
+            _ => {}
+        }
+
+        self.respond(RpcResponse::success(
+            id,
+            command,
+            json!({
+                "key": key,
+                "value": value,
+                "restart_required": restart_required,
+            }),
+        ))
+    }
+
+    fn auth_status(&self, id: Option<String>, command: &str) -> Result<()> {
+        let store = AuthStore::new(self.options.config.auth_path());
+        let providers = provider::all()
+            .iter()
+            .map(|spec| {
+                let status = auth_status(Some(&store), spec.id);
+                json!({
+                    "provider": spec.id,
+                    "name": spec.name,
+                    "configured": status.configured,
+                    "usable": status.usable(),
+                    "source": status.source.map(|source| source.as_str()),
+                    "env_var": status.env_var,
+                    "error": status.error,
+                })
+            })
+            .collect::<Vec<_>>();
+        self.respond(RpcResponse::success(
+            id,
+            command,
+            json!({
+                "providers": providers,
+                "auth_path": store.path().display().to_string(),
+            }),
+        ))
+    }
+
+    async fn auth_set_key(
+        &mut self,
+        id: Option<String>,
+        command: &str,
+        provider: &str,
+        key: &str,
+        verify: bool,
+    ) -> Result<()> {
+        let Some(spec) = provider::find(provider) else {
+            return self.respond(RpcResponse::failure(
+                id,
+                command,
+                "unknown_provider",
+                format!(
+                    "unsupported provider `{provider}`; expected {}",
+                    provider::ids().join(", ")
+                ),
+            ));
+        };
+        if !spec.requires_key {
+            return self.respond(RpcResponse::failure(
+                id,
+                command,
+                "no_key_required",
+                format!("provider `{}` does not use an API key", spec.id),
+            ));
+        }
+        let key = key.trim();
+        if key.is_empty() {
+            return self.respond(RpcResponse::failure(
+                id,
+                command,
+                "invalid_argument",
+                "API key must not be empty",
+            ));
+        }
+
+        if verify {
+            let outcome =
+                codie_ai::probe_key(spec.id, key, self.options.config.base_url.as_deref()).await;
+            if !outcome.accepted() {
+                return self.respond(RpcResponse::failure(
+                    id,
+                    command,
+                    "invalid_key",
+                    outcome.summary(),
+                ));
+            }
+        }
+
+        let store = AuthStore::new(self.options.config.auth_path());
+        if let Err(error) = store.set(spec.id, key) {
+            return self.respond(RpcResponse::failure(
+                id,
+                command,
+                "auth_failed",
+                error.to_string(),
+            ));
+        }
+        self.respond(RpcResponse::success(
+            id,
+            command,
+            json!({
+                "provider": spec.id,
+                "configured": true,
+                "verified": verify,
+                "restart_required": spec.id == self.model.provider,
+            }),
+        ))
+    }
+
+    fn auth_logout(&mut self, id: Option<String>, command: &str, provider: &str) -> Result<()> {
+        let Some(spec) = provider::find(provider) else {
+            return self.respond(RpcResponse::failure(
+                id,
+                command,
+                "unknown_provider",
+                format!(
+                    "unsupported provider `{provider}`; expected {}",
+                    provider::ids().join(", ")
+                ),
+            ));
+        };
+        let store = AuthStore::new(self.options.config.auth_path());
+        match store.remove(spec.id) {
+            Ok(removed) => self.respond(RpcResponse::success(
+                id,
+                command,
+                json!({
+                    "provider": spec.id,
+                    "removed": removed,
+                    "restart_required": spec.id == self.model.provider,
+                }),
+            )),
+            Err(error) => self.respond(RpcResponse::failure(
+                id,
+                command,
+                "auth_failed",
+                error.to_string(),
+            )),
+        }
+    }
+
     fn get_state(&self, id: Option<String>, command: &str) -> Result<()> {
+        let mut total_tokens = 0_u64;
+        let mut cost = 0_u64;
+        for message in &self.history {
+            if let Message::Assistant(assistant) = message {
+                total_tokens = total_tokens.saturating_add(assistant.usage.total_tokens);
+                cost = cost.saturating_add(assistant.usage.cost.total);
+            }
+        }
         self.respond(RpcResponse::success(
             id,
             command,
@@ -411,6 +871,8 @@ impl State {
                 "messages": self.history.len(),
                 "estimated_tokens": self.estimated_tokens(),
                 "context_percent": self.context_percent(),
+                "total_tokens": total_tokens,
+                "cost": cost,
             }),
         ))
     }
@@ -473,6 +935,7 @@ impl State {
             .extensions
             .session_shutdown("new session")
             .await;
+        self.deny_pending_permissions();
         let mut session = Session::create(&self.options.cwd, &self.options.session_dir)?;
         let system = self.system_message();
         session.append_message(&system)?;
@@ -663,6 +1126,7 @@ impl State {
                 let aborted = *status == RunStatus::Aborted;
                 self.emit(&event)?;
                 self.active = None;
+                self.deny_pending_permissions();
                 self.emit(&RpcSettled::new(aborted))?;
             }
             _ => self.emit(&event)?,
@@ -672,6 +1136,7 @@ impl State {
 
     fn finish_run(&mut self, status: RunStatus) -> Result<()> {
         if self.active.take().is_some() {
+            self.deny_pending_permissions();
             self.emit(&RpcSettled::new(status == RunStatus::Aborted))?;
         }
         Ok(())

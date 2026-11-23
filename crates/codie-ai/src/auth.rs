@@ -79,6 +79,17 @@ impl CredentialSource {
             Self::Keyless => "no key required",
         }
     }
+
+    /// Returns the stable wire spelling used by RPC clients.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Explicit => "explicit",
+            Self::Stored => "stored",
+            Self::Environment => "environment",
+            Self::Keyless => "keyless",
+        }
+    }
 }
 
 /// The credential state of one provider.

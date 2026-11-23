@@ -31,6 +31,10 @@ pub struct ToolBlock {
     pub output: String,
     /// Optional structured render hint from an extension.
     pub render: Option<codie_protocol::ext::ExtRenderHint>,
+    /// Host-only structured details from the final result or the latest update.
+    pub details: Option<Value>,
+    /// Latest one-line progress label while the call runs.
+    pub progress: Option<String>,
     /// Whether the full output is visible.
     pub expanded: bool,
     /// When the call started, for the live elapsed indicator.
@@ -316,6 +320,8 @@ impl Transcript {
             status: ToolStatus::Running,
             output: String::new(),
             render: None,
+            details: None,
+            progress: None,
             expanded: false,
             started: Some(Instant::now()),
         }));
@@ -339,6 +345,7 @@ impl Transcript {
         output: String,
         is_error: bool,
         render: Option<codie_protocol::ext::ExtRenderHint>,
+        details: Option<Value>,
     ) {
         if let Some(block) = self.entries.iter_mut().rev().find_map(|entry| match entry {
             Entry::Tool(block) if block.id == id => Some(block),
@@ -351,6 +358,23 @@ impl Transcript {
             };
             block.output = output;
             block.render = render;
+            block.details = details;
+            block.progress = None;
+            self.follow = true;
+            self.touch();
+        }
+    }
+
+    /// Records a one-line progress update for a running tool.
+    pub fn tool_progress(&mut self, id: &str, label: String, details: Option<Value>) {
+        if let Some(block) = self.entries.iter_mut().rev().find_map(|entry| match entry {
+            Entry::Tool(block) if block.id == id => Some(block),
+            _ => None,
+        }) {
+            block.progress = Some(label);
+            if details.is_some() {
+                block.details = details;
+            }
             self.follow = true;
             self.touch();
         }
@@ -542,7 +566,7 @@ mod tests {
         assert_eq!(running.name, "bash");
         assert!(running.elapsed_label().is_some());
 
-        transcript.tool_end("call_1", "ok".into(), false, None);
+        transcript.tool_end("call_1", "ok".into(), false, None, None);
         assert!(transcript.running_tool().is_none());
     }
 
@@ -555,7 +579,7 @@ mod tests {
             "edit".into(),
             json!({"path": "src/lib.rs"}),
         );
-        transcript.tool_end("call_1", "ok".into(), false, None);
+        transcript.tool_end("call_1", "ok".into(), false, None, None);
         assert!(matches!(
             &transcript.entries()[0],
             Entry::Tool(block)
