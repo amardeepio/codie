@@ -1,6 +1,6 @@
 # Release checklist
 
-This is the release-captain checklist for a tagged codie release. It is written for the `0.9.3` release
+This is the release-captain checklist for a tagged codie release. It is written for the `0.9.4` release
 and the later `1.0.0` gate.
 
 ## Before tagging
@@ -34,8 +34,8 @@ and the later `1.0.0` gate.
 
 1. Tag:
    ```bash
-   git tag -a v0.9.3 -m "codie 0.9.3"
-   git push origin v0.9.3
+   git tag -a v0.9.4 -m "codie 0.9.4"
+   git push origin v0.9.4
    ```
 2. The release workflow builds macOS arm64, Linux arm64/x64, and Windows x64 archives, verifies the tag,
    and publishes checksums.
@@ -56,7 +56,7 @@ and the later `1.0.0` gate.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh \
-  | sh -s -- --version 0.9.3
+  | sh -s -- --version 0.9.4
 codie --version
 codie -p --provider deepseek --model deepseek-flash "Reply with exactly: codie-ok"
 ```
@@ -64,7 +64,7 @@ codie -p --provider deepseek --model deepseek-flash "Reply with exactly: codie-o
 ### Windows
 
 ```powershell
-$env:CODIE_VERSION = "0.9.3"
+$env:CODIE_VERSION = "0.9.4"
 irm https://raw.githubusercontent.com/amardeepio/codie/main/install.ps1 | iex
 codie --version
 codie -p --provider deepseek --model deepseek-flash "Reply with exactly: codie-ok"

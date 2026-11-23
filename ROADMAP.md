@@ -4,7 +4,7 @@ codie is built in gated phases. Each phase ends with a demoable, installable art
 No phase starts before the previous phase's exit criteria are met. Durations are planning bounds for one
 full-time engineer, not commitments; the exit criteria are the real gate.
 
-**Current status: `0.9.3` released; Phase 7 in progress toward `1.0.0`.** `0.1.0` shipped the
+**Current status: `0.9.4` released; Phase 7 in progress toward `1.0.0`.** `0.1.0` shipped the
 headless core, `0.2.0` the interactive app, `0.3.0` full-fidelity sessions, `0.4.0` customization and trust,
 `0.5.0` RPC and export, `0.6.0` the TUI refresh, and `0.7.0` the out-of-process extension protocol, hooks,
 manifests, custom tools and commands, and Python and TypeScript examples. `0.7.1` refined `/update`, and
@@ -17,7 +17,9 @@ additional themes, and the refreshed permission overlay.
 `0.9.2` adds project memory (`CODIE.MD`, `/init`, and the `project_memory` tool), Ctrl+V clipboard image
 attachments, full-width Markdown tables, and live `/theme` previews. `0.9.3` adds the provider registry, TUI
 `/connect` and key validation, 22 additional providers, live OpenAI-compatible model catalogs, keyless local
-providers, and persisted provider/model selection.
+providers, and persisted provider/model selection. `0.9.4` adds subagent delegation with personas and live child
+activity, RPC v2 interactive permissions, a per-entry TUI transcript cache, shared context estimates, and a 7 KiB
+project-memory entry cap.
 
 ## Phase summary
 
