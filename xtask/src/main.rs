@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+mod bindings;
 mod ci;
 mod coverage;
 mod perf;
@@ -25,6 +26,7 @@ commands:
   ci                     run the local CI gate sequence (fail fast)
   coverage               enforce 80% line coverage in core, ai, and tools
   schemas [--check]      generate or verify published JSON schemas
+  bindings [--check]     generate or verify desktop TypeScript bindings
   perf [--no-build]      check binary size, startup, and idle memory budgets
   dist                   build the release codie binary (Phase 0 stub)
 ";
@@ -66,6 +68,7 @@ fn run() -> Result<bool> {
             Ok(true)
         }
         "schemas" => schema::run(&root, &rest),
+        "bindings" => bindings::run(&root, &rest),
         "perf" => perf::run(&root, &rest),
         "dist" => {
             reject_flags(&rest, "dist")?;

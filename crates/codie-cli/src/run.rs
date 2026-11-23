@@ -25,6 +25,10 @@ use codie_prompt::{
 };
 use codie_protocol::ext::ExtSessionInfo;
 use codie_session::Session;
+use codie_subagents::{
+    DelegationMode, FORCED_DIRECTIVE, FORCED_NUDGE, SubagentRuntime, SubagentToolbox,
+    detect_intent, effective_mode,
+};
 use codie_tools::{
     BashTool, EditTool, FindTool, GrepTool, LsTool, Policy, PolicyToolbox, PowerShellTool,
     ProjectMemoryTool, ReadTool, Registry, ToolName, WebFetchTool, WriteTool,
@@ -147,6 +151,14 @@ pub(crate) struct RunArgs {
     #[arg(long)]
     pub(crate) max_turns: Option<usize>,
 
+    /// Subagent delegation mode: off, auto, or force.
+    #[arg(long, value_name = "MODE")]
+    pub(crate) subagents: Option<String>,
+
+    /// Maximum concurrent subagent runs (1-8).
+    #[arg(long, value_name = "N")]
+    pub(crate) subagents_parallel: Option<usize>,
+
     /// Working directory for tools and project context.
     #[arg(long)]
     pub(crate) cwd: Option<PathBuf>,
@@ -186,13 +198,26 @@ pub(crate) struct RunArgs {
     pub(crate) message: Vec<String>,
 }
 
+impl RunArgs {
+    /// Returns true when this run enters the interactive terminal.
+    ///
+    /// Mirrors the conditions used by [`run`], so logging can be configured
+    /// correctly before the terminal is set up.
+    pub(crate) fn interactive(&self) -> bool {
+        !self.print
+            && !matches!(self.mode, OutputMode::Json | OutputMode::Rpc)
+            && std::io::stdin().is_terminal()
+            && (std::io::stdout().is_terminal() || matches!(self.tui_mode, TuiModeArg::Plain))
+    }
+}
+
 /// Runs the agent once and returns the process exit code.
 pub(crate) async fn run(args: RunArgs, deferred_flags: BTreeMap<String, String>) -> Result<u8> {
     if args.api_key.is_some() && args.model.is_none() {
         bail!("--api-key requires an explicit --model so the key cannot be paired with a default");
     }
 
-    let config = Config::load()?;
+    let mut config = Config::load()?;
     let cwd = match args.cwd.clone() {
         Some(cwd) => cwd,
         None => std::env::current_dir().context("cannot determine the working directory")?,
@@ -235,6 +260,14 @@ pub(crate) async fn run(args: RunArgs, deferred_flags: BTreeMap<String, String>)
     for warning in customizations.warnings() {
         eprintln!("warning: {warning}");
     }
+    // Project personas are the most specific source: apply them after
+    // `config.toml` so `.codie/agents/<name>.md` can override a configured type.
+    if !customizations.agents().is_empty() {
+        config
+            .subagents
+            .apply_agent_definitions(customizations.agents());
+        config.subagents.validate().map_err(anyhow::Error::msg)?;
+    }
     if let Some(theme) = args.theme.as_deref() {
         // Declarative resources are validated before any extension process starts.
         let _ = codie_tui::Theme::load(Some(theme))?;
@@ -262,10 +295,7 @@ pub(crate) async fn run(args: RunArgs, deferred_flags: BTreeMap<String, String>)
         .map_err(anyhow::Error::msg)?;
     let extensions = Arc::new(extensions);
 
-    let interactive = !args.print
-        && !matches!(args.mode, OutputMode::Json | OutputMode::Rpc)
-        && std::io::stdin().is_terminal()
-        && (std::io::stdout().is_terminal() || matches!(args.tui_mode, TuiModeArg::Plain));
+    let interactive = args.interactive();
 
     let saved = config.load_selection();
     let requested_provider = args.provider.clone().or_else(|| {
@@ -550,6 +580,35 @@ pub(crate) async fn run(args: RunArgs, deferred_flags: BTreeMap<String, String>)
         bail!("--max-turns must be greater than zero");
     }
 
+    let subagent_mode = match args.subagents.as_deref() {
+        Some(value) => DelegationMode::parse(value)
+            .with_context(|| format!("invalid --subagents value `{value}`"))?,
+        None => DelegationMode::Auto,
+    };
+    let mut subagent_config = config.subagents.clone();
+    if (args.subagents.is_some() || args.subagents_parallel.is_some())
+        && subagent_mode != DelegationMode::Off
+    {
+        subagent_config.enabled = true;
+    }
+    if let Some(limit) = args.subagents_parallel {
+        if limit == 0 || limit > codie_subagents::DEFAULT_MAX_PARALLEL_LIMIT {
+            bail!(
+                "--subagents-parallel must be between 1 and {}",
+                codie_subagents::DEFAULT_MAX_PARALLEL_LIMIT
+            );
+        }
+        subagent_config.max_parallel = limit;
+    }
+    let available_tools = registry
+        .declarations()
+        .into_iter()
+        .map(|declaration| declaration.name)
+        .collect::<Vec<_>>();
+    subagent_config
+        .validate_tools(&available_tools)
+        .map_err(anyhow::Error::msg)?;
+
     if interactive {
         let session = open_session(&args, &cwd, &session_dir)?;
         let history = session
@@ -578,6 +637,9 @@ pub(crate) async fn run(args: RunArgs, deferred_flags: BTreeMap<String, String>)
             switch_provider,
             thinking,
             max_turns,
+            subagents: subagent_config.clone(),
+            subagent_mode,
+            subagent_force_once: false,
             session,
             history,
             initial_prompt,
@@ -602,10 +664,11 @@ pub(crate) async fn run(args: RunArgs, deferred_flags: BTreeMap<String, String>)
         return codie_tui::run(options).await;
     }
 
-    let toolbox: Arc<dyn Toolbox> = Arc::new(PolicyToolbox::new(
-        Arc::new(registry),
-        Policy::headless(allowed),
-    ));
+    let registry: Arc<dyn Toolbox> = Arc::new(registry);
+    let policy = Policy::headless(allowed.clone());
+    let inner_toolbox: Arc<dyn Toolbox> =
+        Arc::new(PolicyToolbox::new(Arc::clone(&registry), policy.clone()));
+    let mut toolbox: Arc<dyn Toolbox> = Arc::clone(&inner_toolbox);
 
     if matches!(args.mode, OutputMode::Rpc) {
         let mut session = open_session(&args, &cwd, &session_dir)?;
@@ -616,7 +679,7 @@ pub(crate) async fn run(args: RunArgs, deferred_flags: BTreeMap<String, String>)
         ensure_system_message(
             &mut history,
             &mut session,
-            toolbox.as_ref(),
+            registry.as_ref(),
             &cwd,
             preamble.as_deref(),
             append.as_deref(),
@@ -629,7 +692,9 @@ pub(crate) async fn run(args: RunArgs, deferred_flags: BTreeMap<String, String>)
         };
         return crate::rpc::run(crate::rpc::RpcOptions {
             client: provider,
-            toolbox,
+            toolbox: registry,
+            allowed,
+            config: config.clone(),
             cwd,
             session_dir,
             session,
@@ -699,6 +764,41 @@ pub(crate) async fn run(args: RunArgs, deferred_flags: BTreeMap<String, String>)
         text = prompt;
     }
 
+    let intent = detect_intent(&text);
+    let delegation_plan = effective_mode(subagent_config.enabled, subagent_mode, false, intent);
+    if subagent_config.enabled && delegation_plan.mode != DelegationMode::Off {
+        let prompt_input = PromptInput {
+            cwd: cwd.clone(),
+            tools: Vec::new(),
+            preamble: preamble.clone(),
+            append: append.clone(),
+            skills: customizations.skills().to_vec(),
+            project_context: load_project_context(&cwd),
+            project_memory: load_project_memory(&cwd),
+        };
+        let runtime = SubagentRuntime::new(
+            subagent_config.clone(),
+            Arc::clone(&provider),
+            Arc::clone(&inner_toolbox),
+            prompt_input,
+            session_dir.clone(),
+            session_id.clone(),
+            model_ref.clone(),
+            provider_models
+                .iter()
+                .map(|model| model.id.clone())
+                .collect(),
+        )
+        .map_err(anyhow::Error::msg)?;
+        runtime.set_mode(delegation_plan.mode);
+        runtime.set_thinking(thinking);
+        let subagents = Arc::new(SubagentToolbox::new(
+            Arc::clone(&registry),
+            Arc::new(runtime),
+        ));
+        toolbox = Arc::new(PolicyToolbox::new(subagents, policy.clone()));
+    }
+
     let expansion = expand_attachments(&text, &cwd);
     for error in &expansion.errors {
         eprintln!("warning: {error}");
@@ -719,6 +819,13 @@ pub(crate) async fn run(args: RunArgs, deferred_flags: BTreeMap<String, String>)
         append.as_deref(),
         &customizations,
     )?;
+    if delegation_plan.is_forced() {
+        let directive = Message::system(FORCED_DIRECTIVE, Vec::new());
+        if let Some(session) = session.as_mut() {
+            session.append_message(&directive)?;
+        }
+        history.push(directive);
+    }
     extensions.session_start(&session_info).await;
 
     let cancel = CancellationToken::new();
@@ -790,10 +897,15 @@ pub(crate) async fn run(args: RunArgs, deferred_flags: BTreeMap<String, String>)
     let mut final_stop;
     let mut status;
     let mut recovered = false;
+    let mut nudged = false;
+    let mut follow_up: Option<Message> = None;
 
     loop {
+        let mut had_task = false;
         let mut events = if recovered {
             agent.resume(history.clone(), agent_config.clone())
+        } else if let Some(message) = follow_up.take() {
+            agent.run(message, history.clone(), agent_config.clone())
         } else {
             agent.run(
                 prompt_message.clone(),
@@ -828,6 +940,9 @@ pub(crate) async fn run(args: RunArgs, deferred_flags: BTreeMap<String, String>)
                         }
                     }
                 }
+                AgentEvent::ToolExecutionStart { tool_name, .. } if tool_name == "task" => {
+                    had_task = true;
+                }
                 AgentEvent::AgentEnd { status: ended, .. } => {
                     status = *ended;
                     break;
@@ -839,7 +954,26 @@ pub(crate) async fn run(args: RunArgs, deferred_flags: BTreeMap<String, String>)
         let overflow = last_assistant.as_ref().is_some_and(|assistant| {
             codie_tui::compaction::is_context_overflow(&Message::Assistant(assistant.clone()))
         });
-        if status != RunStatus::Error || recovered || !overflow {
+        let recovering = status == RunStatus::Error && !recovered && overflow;
+        if !recovering {
+            // `AGENT-030`: one nudge when a forced run never delegated.
+            if delegation_plan.is_forced()
+                && !had_task
+                && !nudged
+                && matches!(status, RunStatus::Completed | RunStatus::TurnLimit)
+            {
+                nudged = true;
+                let nudge = Message::user(FORCED_NUDGE);
+                if let Some(session) = session.as_mut() {
+                    session.append_message(&nudge)?;
+                }
+                history.push(nudge.clone());
+                follow_up = Some(nudge);
+                if !matches!(args.mode, OutputMode::Json) {
+                    eprintln!("No delegation detected; asking once.");
+                }
+                continue;
+            }
             break;
         }
 
@@ -1270,4 +1404,19 @@ fn open_session(
         return Ok(Session::continue_recent(cwd, session_dir)?);
     }
     Ok(Some(Session::create(cwd, session_dir)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[codie_testkit::spec("CLI-013")]
+    fn spec_cli_013_subagent_flags() {
+        assert_eq!(DelegationMode::parse("off"), Some(DelegationMode::Off));
+        assert_eq!(DelegationMode::parse("auto"), Some(DelegationMode::Auto));
+        assert_eq!(DelegationMode::parse("force"), Some(DelegationMode::Force));
+        assert_eq!(DelegationMode::parse("nope"), None);
+        assert_eq!(codie_subagents::DEFAULT_MAX_PARALLEL_LIMIT, 8);
+    }
 }

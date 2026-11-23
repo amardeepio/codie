@@ -1,6 +1,6 @@
 //! `codie config` subcommands.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
@@ -90,7 +90,17 @@ fn get(config: &Config, key: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn set(path: &PathBuf, key: &str, value: &str) -> Result<()> {
+fn set(path: &Path, key: &str, value: &str) -> Result<()> {
+    apply_value(path, key, value)?;
+    println!("{key} = {value}");
+    Ok(())
+}
+
+/// Writes one key/value pair to `config.toml` without printing.
+///
+/// Shared by `codie config set` and the RPC `set_config` command so both paths
+/// validate and normalize values identically.
+pub(crate) fn apply_value(path: &Path, key: &str, value: &str) -> Result<()> {
     let mut document = if path.exists() {
         let contents = std::fs::read_to_string(path)
             .with_context(|| format!("cannot read {}", path.display()))?;
@@ -106,7 +116,6 @@ fn set(path: &PathBuf, key: &str, value: &str) -> Result<()> {
     }
     let rendered = toml::to_string_pretty(&document)?;
     std::fs::write(path, rendered).with_context(|| format!("cannot write {}", path.display()))?;
-    println!("{key} = {value}");
     Ok(())
 }
 

@@ -9,6 +9,7 @@
 - [Development](development.md)
 - [Configuration and environment](configuration.md)
 - [Interactive terminal](tui.md)
+- [Subagents](subagents.md)
 - [Terminal compatibility](terminals.md)
 - [Sessions](sessions.md)
 - [Specifications](specs.md)

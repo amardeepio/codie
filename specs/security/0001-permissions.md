@@ -2,9 +2,9 @@
 id: SPEC-SEC-001
 title: Permissions and tool safety
 status: accepted
-version: 1.0.0
+version: 1.1.0
 owners: ["@codie-maintainers"]
-requirements: ["SEC-001", "SEC-002", "SEC-003", "SEC-004", "SEC-005", "SEC-006"]
+requirements: ["SEC-001", "SEC-002", "SEC-003", "SEC-004", "SEC-005", "SEC-006", "SEC-009"]
 ---
 
 # Context
@@ -14,6 +14,7 @@ denied unless explicitly allowed with `--allow`, `--allow-all`, or configuration
 model can read, not a run failure. Interactive approval prompts arrive in Phase 2.
 
 Requirements `SEC-007` and `SEC-008` (project trust and approval prompts) are Phase 4 and are not allocated here.
+`SEC-009` gates the subagent delegation tool added by `SPEC-AGENT-003`.
 
 # Requirements
 
@@ -34,6 +35,9 @@ Verification: `crates/codie-ai/tests/redaction.rs::spec_prov_005_trace_redaction
 
 **SEC-006 (MUST)** The credential file is created with mode `0600` on Unix and is never written to a session.
 Verification: `crates/codie-ai/tests/auth.rs::store_round_trips_and_is_private`
+
+**SEC-009 (MUST)** The `task` tool is denied in headless mode unless `task` appears in the allow list and prompts interactively in the TUI; a denial is an error result and starts no child.
+Verification: `crates/codie-tools/src/registry.rs::spec_sec_009_task_requires_allow`
 
 # Failure modes
 

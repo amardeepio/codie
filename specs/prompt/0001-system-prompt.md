@@ -2,9 +2,9 @@
 id: SPEC-PRMPT-001
 title: System prompt assembly
 status: accepted
-version: 1.0.0
+version: 1.1.0
 owners: ["@codie-maintainers"]
-requirements: ["PRMPT-001", "PRMPT-002", "PRMPT-003", "PRMPT-004", "PRMPT-005", "PRMPT-006", "PRMPT-007", "PRMPT-008"]
+requirements: ["PRMPT-001", "PRMPT-002", "PRMPT-003", "PRMPT-004", "PRMPT-005", "PRMPT-006", "PRMPT-007", "PRMPT-008", "PRMPT-013", "PRMPT-014"]
 ---
 
 # Context
@@ -38,6 +38,12 @@ Verification: `crates/codie-prompt/tests/prompt.rs::system_message_carries_promp
 
 **PRMPT-008 (MUST)** An empty tool list still emits an empty `<tools>` section rather than omitting the tag.
 Verification: `crates/codie-prompt/tests/prompt.rs::empty_tools_still_produce_a_wrapped_section`
+
+**PRMPT-013 (MUST)** When subagents are enabled the `task` tool declaration in the `<tools>` section names the available agent types, states that a child receives no conversation history, and instructs the model to delegate only self-contained work with a complete prompt.
+Verification: `crates/codie-subagents/tests/subagents.rs::spec_prmpt_013_task_description_guidance`
+
+**PRMPT-014 (MUST)** A forced delegation mode appends one persisted system message to the transcript describing the mode change and the rule that delegation is only beneficial for independent subtasks and must not run concurrent edits to the same files.
+Verification: `crates/codie-subagents/tests/subagents.rs::spec_prmpt_014_forced_directive`
 
 # Failure modes
 

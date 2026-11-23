@@ -2,7 +2,7 @@
 id: SPEC-TUI-006
 title: Context, permissions, tool navigation, turns, and session preview
 status: implemented
-version: 1.0.0
+version: 1.2.0
 owners: ["@codie-maintainers"]
 requirements: ["TUI-024", "TUI-025", "TUI-026", "TUI-027", "TUI-028"]
 ---
@@ -21,8 +21,10 @@ Verification: `crates/codie-tui/src/render.rs::footer_shows_a_context_meter_and_
 
 **TUI-025 (MUST)** Permission prompts preview the pending operation: `edit` and overwriting `write` calls show a
 diff, new files show numbered code, and `bash` shows the command. Decisions remain allow-once, always-allow,
-deny, enter-to-allow, and full access.
-Verification: `crates/codie-tui/src/render.rs::permission_overlay_renders_an_edit_diff`
+deny, enter-to-allow, and full access. The dialog hugs its content horizontally, uses a rounded padded frame,
+and places the preview on the theme's raised surface.
+Verification: `crates/codie-tui/src/render.rs::permission_overlay_renders_an_edit_diff`,
+`crates/codie-tui/src/render.rs::spec_tui_025_permission_overlay_hugs_content_and_pads_the_preview`
 
 **TUI-026 (MUST)** Clicking a tool block header toggles that block. The tool picker supports keyboard selection,
 and a dedicated action expands or collapses every tool block.
@@ -39,7 +41,7 @@ Verification: `crates/codie-tui/src/render.rs::session_picker_shows_a_preview`
 
 # Edge cases
 
-- The context meter hides lower-priority footer parts before truncating the model and context information.
+- Below 120 columns, thinking level, throughput, and session id leave the footer before token, cost, model, and context information; `/usage` retains the complete breakdown.
 - Permission previews are capped and fall back to pretty JSON for unknown tools.
 - Tool and turn toggles keep the transcript cache coherent by bumping its revision.
 - A steering message does not start a new turn.

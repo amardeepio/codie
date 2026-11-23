@@ -1,7 +1,7 @@
 //! Application state, key handling, and the interactive run loop.
 
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,7 +18,11 @@ use codie_core::{
 use codie_prompt::{
     Customizations, PromptInput, build_system_message, load_project_context, load_project_memory,
 };
-use codie_session::{Session, SessionSummary, TreeEntry};
+use codie_session::{Session, SessionSummary, TreeEntry, estimate_message_tokens};
+use codie_subagents::{
+    DelegationIntent, DelegationMode, FORCED_DIRECTIVE, NudgeState, RunSnapshot, SubagentConfig,
+    SubagentRuntime, detect_intent, effective_mode, mode_directive,
+};
 use codie_tools::Registry;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -38,7 +42,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::commands::{Command, parse as parse_command, parse_thinking};
 use crate::editor::Editor;
 use crate::keybindings::{ActionId, Bindings};
-use crate::permissions::{Decision, PermissionBroker, PermissionRequest, PermissionToolbox};
+use crate::permissions::{Decision, PermissionBroker, PermissionRequest};
 use crate::plain;
 use crate::render;
 use crate::theme::Theme;
@@ -308,6 +312,12 @@ pub struct TuiOptions {
     pub thinking: ThinkingLevel,
     /// Maximum assistant requests per run.
     pub max_turns: usize,
+    /// Resolved subagent configuration.
+    pub subagents: SubagentConfig,
+    /// Session delegation mode.
+    pub subagent_mode: DelegationMode,
+    /// Force delegation for the next prompt only.
+    pub subagent_force_once: bool,
     /// Loaded session, or `None` for `--no-session`.
     pub session: Option<Session>,
     /// Conversation history projected from the session.
@@ -407,28 +417,150 @@ pub(crate) struct CachedToolView {
     pub truncated: bool,
 }
 
-/// Identity of one fully laid-out transcript.
+/// How one transcript entry is laid out in the current turn state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct TranscriptCacheKey {
-    /// Transcript content revision.
+pub(crate) enum EntryLayout {
+    /// Rendered in full.
+    Visible,
+    /// Hidden inside a collapsed turn.
+    Skipped,
+    /// Collapsed to a single summary row.
+    Collapsed,
+}
+
+/// Identity of one laid-out transcript entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CachedEntryKey {
+    /// Entry revision, or the turn fingerprint for a collapsed summary.
     pub revision: u64,
+    /// Current layout mode.
+    pub layout: EntryLayout,
+    /// Animation tick, or zero when the entry has no spinner.
+    pub animation_tick: u64,
+}
+
+/// One laid-out transcript entry.
+#[derive(Debug, Clone)]
+pub(crate) struct CachedEntry {
+    /// Cache identity.
+    pub key: CachedEntryKey,
+    /// Wrapped rows for this entry.
+    pub rows: Vec<Line<'static>>,
+    /// One optional target per row.
+    pub targets: Vec<Option<HitTarget>>,
+}
+
+/// Pre-wrapped transcript rows, cached per entry.
+#[derive(Debug, Clone)]
+pub(crate) struct CachedTranscript {
     /// Transcript width in columns.
     pub width: u16,
     /// Palette revision.
     pub theme_revision: u64,
-    /// Animation tick, or zero when no spinner is visible.
-    pub animation_tick: u64,
+    /// Layout generation from the transcript.
+    pub layout_generation: u64,
+    /// Animation tick of the last rebuild.
+    pub tick: u64,
+    /// Laid-out entries, aligned with `Transcript::entries`.
+    pub entries: Vec<CachedEntry>,
+    /// Fenwick tree over entry row counts, for O(log n) scroll lookup.
+    pub row_index: RowIndex,
+    /// Entries with a live spinner.
+    pub animated: HashSet<usize>,
+    /// Empty-state banner rows.
+    pub banner: Vec<Line<'static>>,
 }
 
-/// Pre-wrapped transcript rows and their click targets.
-#[derive(Debug, Clone)]
-pub(crate) struct CachedTranscript {
-    /// Cache identity.
-    pub key: TranscriptCacheKey,
-    /// Every laid-out row.
-    pub rows: Vec<Line<'static>>,
-    /// One optional target per row.
-    pub targets: Vec<Option<HitTarget>>,
+/// Fenwick tree over per-entry row counts.
+///
+/// It turns "which entry contains global row N" into a binary search over
+/// prefix sums, so a frame never scans the whole transcript.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RowIndex {
+    /// 1-based Fenwick nodes; index zero is unused.
+    tree: Vec<usize>,
+    len: usize,
+}
+
+impl RowIndex {
+    /// Builds an index from per-entry row counts.
+    #[must_use]
+    pub(crate) fn from_counts(counts: impl IntoIterator<Item = usize>) -> Self {
+        let counts = counts.into_iter().collect::<Vec<_>>();
+        let len = counts.len();
+        let mut tree: Vec<usize> = vec![0; len + 1];
+        for (index, count) in counts.into_iter().enumerate() {
+            let mut node = index + 1;
+            while node <= len {
+                tree[node] = tree[node].saturating_add(count);
+                node += low_bit(node);
+            }
+        }
+        Self { tree, len }
+    }
+
+    /// Returns the number of indexed entries.
+    #[must_use]
+    pub(crate) const fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Returns the total number of rows.
+    #[must_use]
+    pub(crate) fn total(&self) -> usize {
+        self.sum(self.len)
+    }
+
+    /// Replaces one entry's row count.
+    pub(crate) fn set(&mut self, index: usize, rows: usize, previous: usize) {
+        if index >= self.len || rows == previous {
+            return;
+        }
+        let added = rows.saturating_sub(previous);
+        let removed = previous.saturating_sub(rows);
+        let mut node = index + 1;
+        while node <= self.len {
+            self.tree[node] = self.tree[node]
+                .saturating_add(added)
+                .saturating_sub(removed);
+            node += low_bit(node);
+        }
+    }
+
+    /// Returns the entry and in-entry offset that contain a global row.
+    #[must_use]
+    pub(crate) fn find(&self, row: usize) -> Option<(usize, usize)> {
+        if row >= self.total() {
+            return None;
+        }
+        let mut position = 0;
+        let mut remaining = row;
+        let mut step = self.len.next_power_of_two() >> 1;
+        while step > 0 {
+            let next = position + step;
+            if next <= self.len && self.tree[next] <= remaining {
+                remaining -= self.tree[next];
+                position = next;
+            }
+            step >>= 1;
+        }
+        (position < self.len).then_some((position, remaining))
+    }
+
+    /// Returns the prefix sum of the first `len` entries.
+    fn sum(&self, mut len: usize) -> usize {
+        let mut total: usize = 0;
+        while len > 0 {
+            total = total.saturating_add(self.tree[len]);
+            len -= low_bit(len);
+        }
+        total
+    }
+}
+
+/// Returns the lowest set bit of `value`.
+fn low_bit(value: usize) -> usize {
+    value & value.wrapping_neg()
 }
 
 /// One overlay on top of the transcript.
@@ -439,6 +571,8 @@ pub enum Overlay {
     Hotkeys,
     /// A pending permission prompt.
     Permission(PermissionPrompt),
+    /// A pending question from a delegated run.
+    Question(QuestionPrompt),
     /// The current session tree.
     Tree(Vec<TreeEntry>),
     /// The session picker.
@@ -449,6 +583,19 @@ pub enum Overlay {
     Connect(ConnectState),
     /// Token, cost, and context usage details.
     Usage,
+    /// A read-only child transcript opened from `/subagents`.
+    Child {
+        /// Overlay title with the agent and label.
+        title: String,
+        /// Child session identifier, used to refresh while it runs.
+        session_id: String,
+        /// Pre-rendered transcript lines.
+        lines: Vec<String>,
+        /// Vertical scroll offset.
+        scroll: u16,
+        /// Last refresh time, for a one-second poll.
+        updated: Option<std::time::Instant>,
+    },
     /// A transient banner with an optional OK affordance.
     Notice {
         /// Banner title.
@@ -556,6 +703,12 @@ pub struct PermissionPrompt {
     pub tool: String,
     /// Parsed arguments.
     pub arguments: Value,
+    /// Agent type that asked for the call, when delegated.
+    pub agent: Option<String>,
+    /// Delegation depth of the caller.
+    pub depth: usize,
+    /// Session id of the asking run, used to look up its label.
+    pub session_id: Option<String>,
     /// Structured preview for edit, write, and bash calls.
     pub preview: Option<codie_protocol::ext::ExtRenderHint>,
     /// Vertical scroll offset for the preview body.
@@ -564,6 +717,20 @@ pub struct PermissionPrompt {
     pub expanded: bool,
     /// Reply channel.
     reply: Option<oneshot::Sender<Decision>>,
+}
+
+/// A question from a delegated run, answered with one line of text.
+pub struct QuestionPrompt {
+    /// Question text.
+    pub question: String,
+    /// Agent type that asked, when delegated.
+    pub agent: Option<String>,
+    /// Session id of the asking run, used to look up its label.
+    pub session_id: Option<String>,
+    /// Input buffer.
+    pub input: String,
+    /// Reply channel; `None` means dismissed.
+    reply: Option<oneshot::Sender<Option<String>>>,
 }
 
 /// Footer metadata.
@@ -707,6 +874,24 @@ pub struct App {
     pub run_started: Option<std::time::Instant>,
     /// Conversation history.
     pub history: Vec<Message>,
+    /// Configuration before project agent definitions are applied.
+    pub subagent_base: SubagentConfig,
+    /// Active subagent configuration, including project personas.
+    pub subagent_config: SubagentConfig,
+    /// Effective session delegation mode.
+    pub subagent_mode: DelegationMode,
+    /// Force delegation for the next prompt only.
+    pub subagent_force_once: bool,
+    /// Runtime used by `/subagents` when the tool is enabled.
+    pub subagent_runtime: Option<Arc<SubagentRuntime>>,
+    /// True when the active run was forced to delegate.
+    forced_run: bool,
+    /// True when the active run called `task` at least once.
+    run_had_task: bool,
+    /// One-shot forced-delegation nudge (`AGENT-030`).
+    nudge: NudgeState,
+    /// Follow-up to start after the current run ends.
+    pending_nudge: Option<String>,
     /// Active session, when persisted.
     pub session: Option<Session>,
     /// Pending manual compaction instructions.
@@ -727,6 +912,8 @@ pub struct App {
     cwd: PathBuf,
     /// Pending permission prompts.
     permissions: VecDeque<PermissionPrompt>,
+    /// Pending subagent questions.
+    questions: VecDeque<QuestionPrompt>,
     /// Exit code from a signal.
     pub signal: Arc<std::sync::atomic::AtomicI32>,
     /// Cancellation token for the current run.
@@ -782,7 +969,7 @@ impl App {
             .is_file()
             .then(|| crate::theme::ThemeWatcher::new(&theme.name));
         let session_id = session.as_ref().map(|session| session.id().to_owned());
-        let context_tokens = history.iter().map(message_chars).sum::<u64>() / 4;
+        let context_tokens = history.iter().map(estimate_message_tokens).sum::<u64>();
         let context_percent = if context_window == 0 {
             0
         } else {
@@ -833,6 +1020,15 @@ impl App {
             persist_selection: None,
             run_started: None,
             history,
+            subagent_base: SubagentConfig::default(),
+            subagent_config: SubagentConfig::default(),
+            subagent_mode: DelegationMode::Auto,
+            subagent_force_once: false,
+            subagent_runtime: None,
+            forced_run: false,
+            run_had_task: false,
+            nudge: NudgeState::default(),
+            pending_nudge: None,
             session,
             pending_compact: None,
             pending_prompt: None,
@@ -843,6 +1039,7 @@ impl App {
             session_dir,
             cwd: binding_cwd,
             permissions: VecDeque::new(),
+            questions: VecDeque::new(),
             signal,
             cancel: tokio_util::sync::CancellationToken::new(),
             bindings,
@@ -874,6 +1071,22 @@ impl App {
             return self.dispatch_action(ActionId::ToggleAutoApprove);
         }
         if self.overlay.is_some() {
+            // Session controls must not be swallowed by a modal overlay. Resolve
+            // them through the keymap so remapped shortcuts keep working. The
+            // connect overlay keeps its own Ctrl+C handling.
+            let action = self.bindings.action_for(&key);
+            if action == Some(ActionId::Quit) {
+                return Action::Quit;
+            }
+            if action == Some(ActionId::Cancel)
+                && !matches!(self.overlay, Some(Overlay::Connect(_)))
+            {
+                return if self.status == Status::Streaming {
+                    self.dispatch_action(ActionId::Cancel)
+                } else {
+                    Action::Quit
+                };
+            }
             return self.handle_overlay_key(key);
         }
 
@@ -1139,6 +1352,54 @@ impl App {
         if matches!(self.overlay, Some(Overlay::Connect(_))) {
             return self.handle_connect_key(key);
         }
+        if let Some(Overlay::Child { scroll, .. }) = self.overlay.as_mut() {
+            match key.code {
+                KeyCode::Up | KeyCode::Char('k') => *scroll = scroll.saturating_sub(1),
+                KeyCode::Down | KeyCode::Char('j') => *scroll = scroll.saturating_add(1),
+                KeyCode::PageUp => *scroll = scroll.saturating_sub(10),
+                KeyCode::PageDown => *scroll = scroll.saturating_add(10),
+                KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => self.overlay = None,
+                _ => {}
+            }
+            if self.overlay.is_none() {
+                self.show_next_prompt();
+            }
+            return Action::None;
+        }
+        if matches!(self.overlay, Some(Overlay::Question(_))) {
+            let overlay = self.overlay.take();
+            if let Some(Overlay::Question(mut prompt)) = overlay {
+                match key.code {
+                    KeyCode::Enter => {
+                        let answer = prompt.input.trim().to_owned();
+                        if let Some(reply) = prompt.reply.take() {
+                            let _ = reply.send((!answer.is_empty()).then_some(answer));
+                        }
+                    }
+                    KeyCode::Esc => {
+                        if let Some(reply) = prompt.reply.take() {
+                            let _ = reply.send(None);
+                        }
+                    }
+                    KeyCode::Backspace => {
+                        prompt.input.pop();
+                        self.overlay = Some(Overlay::Question(prompt));
+                        return Action::None;
+                    }
+                    KeyCode::Char(character) => {
+                        prompt.input.push(character);
+                        self.overlay = Some(Overlay::Question(prompt));
+                        return Action::None;
+                    }
+                    _ => {
+                        self.overlay = Some(Overlay::Question(prompt));
+                        return Action::None;
+                    }
+                }
+            }
+            self.show_next_prompt();
+            return Action::None;
+        }
         let permission = matches!(self.overlay, Some(Overlay::Permission(_)));
         if !permission {
             if matches!(key.code, KeyCode::Esc | KeyCode::Enter)
@@ -1146,6 +1407,7 @@ impl App {
                 || key.code == KeyCode::Char('?')
             {
                 self.overlay = None;
+                self.show_next_prompt();
             }
             return Action::None;
         }
@@ -1479,10 +1741,16 @@ impl App {
                     self.context_window = choice.context_window;
                     self.footer.provider = choice.provider.clone();
                     self.footer.model = choice.id.clone();
-                    if let Some(session) = self.session.as_mut() {
-                        let _ = session.append_model_change(choice.provider, choice.id.clone());
+                    if let Some(session) = self.session.as_mut()
+                        && let Err(error) =
+                            session.append_model_change(choice.provider, choice.id.clone())
+                    {
+                        self.transcript.push_error(format!(
+                            "Cannot record the model change in the session: {error}"
+                        ));
                     }
                     self.refresh_context();
+                    self.sync_subagent_model();
                     self.persist_selection();
                     self.transcript
                         .push_info(format!("Model: {} ({})", choice.name, choice.id));
@@ -1514,9 +1782,14 @@ impl App {
             ChoiceKind::Thinking => {
                 if let Some(level) = ThinkingLevel::parse(&item.value) {
                     self.thinking = level;
+                    self.sync_subagent_thinking();
                     self.footer.thinking = level.as_str().to_owned();
-                    if let Some(session) = self.session.as_mut() {
-                        let _ = session.append_thinking_level_change(level);
+                    if let Some(session) = self.session.as_mut()
+                        && let Err(error) = session.append_thinking_level_change(level)
+                    {
+                        self.transcript.push_error(format!(
+                            "Cannot record the reasoning level in the session: {error}"
+                        ));
                     }
                     self.transcript
                         .push_info(format!("Reasoning level: {}", level.as_str()));
@@ -1548,6 +1821,10 @@ impl App {
             ("debug", "Print diagnostics"),
             ("compact", "Compact the context"),
             ("usage", "Show token, cost, and context usage"),
+            (
+                "subagents",
+                "Configure subagent delegation (on, off, force, once, types)",
+            ),
             ("stop", "Stop the active run"),
             ("update", "Install a newer release"),
             ("reload", "Reload skills, templates, and themes"),
@@ -1627,6 +1904,7 @@ impl App {
             let refreshed = loader(&self.model.provider);
             if !refreshed.is_empty() {
                 self.models = refreshed;
+                self.sync_subagent_model();
             }
         }
         let current = self.model.model.clone();
@@ -1774,10 +2052,16 @@ impl App {
                 }
                 self.footer.provider = id.to_owned();
                 self.footer.model = self.model.model.clone();
-                if let Some(session) = self.session.as_mut() {
-                    let _ = session.append_model_change(id.to_owned(), self.model.model.clone());
+                if let Some(session) = self.session.as_mut()
+                    && let Err(error) =
+                        session.append_model_change(id.to_owned(), self.model.model.clone())
+                {
+                    self.transcript.push_error(format!(
+                        "Cannot record the model change in the session: {error}"
+                    ));
                 }
                 self.refresh_context();
+                self.sync_subagent_model();
                 self.persist_selection();
                 self.transcript
                     .push_info(format!("Provider: {name} · model: {}", self.model.model));
@@ -1883,10 +2167,60 @@ impl App {
     }
 
     fn refresh_context(&mut self) {
-        let tokens = self.history.iter().map(message_chars).sum::<u64>() / 4;
+        let tokens = self
+            .history
+            .iter()
+            .map(estimate_message_tokens)
+            .sum::<u64>();
         let percent = tokens.saturating_mul(100) / u64::from(self.context_window.max(1));
         self.footer.context_tokens = Some(tokens);
         self.footer.context_percent = Some(u8::try_from(percent.min(100)).unwrap_or(100));
+    }
+
+    /// Re-reads an open child transcript once a second while it may still grow.
+    fn refresh_child_overlay(&mut self) {
+        let Some(Overlay::Child {
+            session_id,
+            lines,
+            updated,
+            ..
+        }) = self.overlay.as_mut()
+        else {
+            return;
+        };
+        if updated.is_some_and(|updated| updated.elapsed() < std::time::Duration::from_secs(1)) {
+            return;
+        }
+        *updated = Some(std::time::Instant::now());
+        let path = self.session_dir.join(format!("{session_id}.jsonl"));
+        let Ok(session) = Session::open(path) else {
+            return;
+        };
+        let refreshed = child_transcript_lines(&session.projection());
+        if !refreshed.is_empty() && *lines != refreshed {
+            *lines = refreshed;
+        }
+    }
+
+    /// Keeps the subagent runtime's inherited model in sync with `/model`,
+    /// `/provider`, and catalog refreshes.
+    fn sync_subagent_thinking(&self) {
+        if let Some(runtime) = &self.subagent_runtime {
+            runtime.set_thinking(self.thinking);
+        }
+    }
+
+    fn sync_subagent_model(&self) {
+        let Some(runtime) = &self.subagent_runtime else {
+            return;
+        };
+        let known = self
+            .models
+            .iter()
+            .filter(|model| model.provider == self.model.provider)
+            .map(|model| model.id.clone())
+            .collect();
+        runtime.set_parent_model(self.model.clone(), known);
     }
 
     fn handle_picker_key(&mut self, key: KeyEvent) -> Action {
@@ -2222,11 +2556,17 @@ impl App {
                         self.model.provider = choice.provider.clone();
                         self.context_window = choice.context_window;
                         self.footer.provider = choice.provider.clone();
-                        if let Some(session) = self.session.as_mut() {
-                            let _ = session.append_model_change(choice.provider, choice.id.clone());
+                        if let Some(session) = self.session.as_mut()
+                            && let Err(error) =
+                                session.append_model_change(choice.provider, choice.id.clone())
+                        {
+                            self.transcript.push_error(format!(
+                                "Cannot record the model change in the session: {error}"
+                            ));
                         }
                     }
                     self.refresh_context();
+                    self.sync_subagent_model();
                     self.persist_selection();
                     self.transcript.push_info("Model changed for the next run.");
                 } else {
@@ -2237,9 +2577,14 @@ impl App {
                 if let Some(value) = argument {
                     if let Some(level) = parse_thinking(&value) {
                         self.thinking = level;
+                        self.sync_subagent_thinking();
                         self.footer.thinking = level.as_str().to_owned();
-                        if let Some(session) = self.session.as_mut() {
-                            let _ = session.append_thinking_level_change(level);
+                        if let Some(session) = self.session.as_mut()
+                            && let Err(error) = session.append_thinking_level_change(level)
+                        {
+                            self.transcript.push_error(format!(
+                                "Cannot record the reasoning level in the session: {error}"
+                            ));
                         }
                         self.transcript
                             .push_info(format!("Reasoning level: {}", level.as_str()));
@@ -2259,6 +2604,105 @@ impl App {
                 }
             }
             Command::Usage => self.overlay = Some(Overlay::Usage),
+            Command::Subagents(argument) => {
+                let runs = self
+                    .subagent_runtime
+                    .as_ref()
+                    .map(|runtime| runtime.runs())
+                    .unwrap_or_default();
+                match crate::subagents::parse_command(
+                    argument.as_deref(),
+                    &self.subagent_config,
+                    self.subagent_mode,
+                    self.subagent_force_once,
+                    &runs,
+                ) {
+                    crate::subagents::SubagentCommand::Status(text) => {
+                        self.transcript.push_info(text)
+                    }
+                    crate::subagents::SubagentCommand::Mode { mode, message } => {
+                        self.subagent_mode = mode;
+                        self.subagent_force_once = false;
+                        if let Some(runtime) = &self.subagent_runtime {
+                            runtime.set_mode(mode);
+                        }
+                        let directive = Message::system(mode_directive(mode), Vec::new());
+                        if let Some(session) = self.session.as_mut() {
+                            if let Err(error) = session.append_custom(
+                                "subagent_settings",
+                                serde_json::json!({"mode": mode.as_str(), "force_once": false}),
+                            ) {
+                                self.transcript.push_error(format!(
+                                    "Cannot record the subagent settings in the session: {error}"
+                                ));
+                            }
+                            if let Err(error) = session.append_message(&directive) {
+                                self.transcript.push_error(format!(
+                                    "Cannot record the subagent directive in the session: {error}"
+                                ));
+                            }
+                        }
+                        self.history.push(directive);
+                        self.transcript.push_info(message);
+                    }
+                    crate::subagents::SubagentCommand::Once { message } => {
+                        self.subagent_force_once = true;
+                        if let Some(runtime) = &self.subagent_runtime {
+                            runtime.set_mode(DelegationMode::Force);
+                        }
+                        self.transcript.push_info(message);
+                    }
+                    crate::subagents::SubagentCommand::Parallel { limit, message } => {
+                        let applied = self
+                            .subagent_runtime
+                            .as_ref()
+                            .is_some_and(|runtime| runtime.set_max_parallel(limit));
+                        if applied {
+                            self.subagent_config.max_parallel = limit;
+                            self.transcript.push_info(message);
+                        } else {
+                            let current = self
+                                .subagent_runtime
+                                .as_ref()
+                                .map_or(self.subagent_config.max_parallel, |runtime| {
+                                    runtime.max_parallel()
+                                });
+                            self.transcript.push_info(format!(
+                                "Subagent parallelism stays at {current}: stop running children before changing it."
+                            ));
+                        }
+                    }
+                    crate::subagents::SubagentCommand::Open(index) => {
+                        self.open_child_run(index, &runs);
+                    }
+                    crate::subagents::SubagentCommand::Stop(index) => {
+                        if let Some(run) = runs.get(index.saturating_sub(1)) {
+                            let cancelled = self
+                                .subagent_runtime
+                                .as_ref()
+                                .is_some_and(|runtime| runtime.cancel_run(&run.call_id));
+                            if cancelled {
+                                self.transcript.push_info(format!(
+                                    "Stopping subagent {} · {}…",
+                                    run.agent, run.description
+                                ));
+                            } else {
+                                self.transcript.push_error(format!(
+                                    "Subagent {} · {} is not running.",
+                                    run.agent, run.description
+                                ));
+                            }
+                        } else {
+                            self.transcript.push_error(format!(
+                                "No subagent run {index}. Use /subagents status to list runs."
+                            ));
+                        }
+                    }
+                    crate::subagents::SubagentCommand::Error(message) => {
+                        self.transcript.push_error(message)
+                    }
+                }
+            }
             Command::Skill(name, arguments) => {
                 if self.status == Status::Streaming {
                     self.transcript
@@ -2298,11 +2742,27 @@ impl App {
                 for warning in self.customizations.warnings() {
                     self.transcript.push_error(warning.clone());
                 }
+                let mut config = self.subagent_base.clone();
+                config.enabled = self.subagent_config.enabled;
+                config.max_parallel = self.subagent_config.max_parallel;
+                config.apply_agent_definitions(self.customizations.agents());
+                match config.validate() {
+                    Ok(()) => {
+                        self.subagent_config = config.clone();
+                        if let Some(runtime) = &self.subagent_runtime {
+                            runtime.set_config(config);
+                        }
+                    }
+                    Err(error) => self
+                        .transcript
+                        .push_error(format!("Cannot reload agent definitions: {error}")),
+                }
                 let refreshed = self.reload_project_memory();
                 self.transcript.push_info(format!(
-                    "Reloaded {} skill(s), {} template(s), and {} project memory.",
+                    "Reloaded {} skill(s), {} template(s), {} agent definition(s), and {} project memory.",
                     self.customizations.skills().len(),
                     self.customizations.templates().len(),
+                    self.customizations.agents().len(),
                     if refreshed { "refreshed" } else { "unchanged" }
                 ));
             }
@@ -2488,8 +2948,12 @@ impl App {
                 } => Some(id.clone()),
                 _ => None,
             });
-            if let Some(id) = target {
-                let _ = session.append_context_edit(id, Some(Content::text(updated)));
+            if let Some(id) = target
+                && let Err(error) = session.append_context_edit(id, Some(Content::text(updated)))
+            {
+                self.transcript.push_error(format!(
+                    "Cannot update the project memory in the session: {error}"
+                ));
             }
         }
         true
@@ -2501,12 +2965,27 @@ impl App {
         self.permissions.push_back(PermissionPrompt {
             tool: request.tool,
             arguments: request.arguments,
+            agent: request.agent,
+            depth: request.depth,
+            session_id: request.session_id,
             preview,
             scroll: 0,
             expanded: false,
             reply: Some(request.reply),
         });
-        self.show_next_permission();
+        self.show_next_prompt();
+    }
+
+    /// Adds a question from a delegated run, showing it when the interface is free.
+    pub fn push_question(&mut self, request: crate::questions::QuestionRequest) {
+        self.questions.push_back(QuestionPrompt {
+            question: request.question,
+            agent: request.agent,
+            session_id: request.session_id,
+            input: String::new(),
+            reply: Some(request.reply),
+        });
+        self.show_next_prompt();
     }
 
     /// Resolves the visible permission prompt.
@@ -2516,18 +2995,61 @@ impl App {
         {
             let _ = reply.send(decision);
         }
-        self.show_next_permission();
+        self.show_next_prompt();
     }
 
-    fn show_next_permission(&mut self) {
+    fn show_next_prompt(&mut self) {
         if self.overlay.is_some() {
             return;
         }
         if let Some(prompt) = self.permissions.pop_front() {
             self.status = Status::Waiting;
             self.overlay = Some(Overlay::Permission(prompt));
+        } else if let Some(prompt) = self.questions.pop_front() {
+            self.status = Status::Waiting;
+            self.overlay = Some(Overlay::Question(prompt));
         } else if self.status == Status::Waiting {
             self.status = Status::Streaming;
+        }
+    }
+
+    /// Opens a read-only view of one delegated child session.
+    fn open_child_run(&mut self, index: usize, runs: &[RunSnapshot]) {
+        let Some(run) = runs.get(index.saturating_sub(1)) else {
+            self.transcript.push_error(format!(
+                "No subagent run {index}. Use /subagents status to list runs."
+            ));
+            return;
+        };
+        let Some(session_id) = run.session_id.as_deref() else {
+            self.transcript.push_error(format!(
+                "Subagent {} · {} was not persisted, so there is no transcript to open.",
+                run.agent, run.description
+            ));
+            return;
+        };
+        let path = self.session_dir.join(format!("{session_id}.jsonl"));
+        match Session::open(&path) {
+            Ok(session) => {
+                let lines = child_transcript_lines(&session.projection());
+                if lines.is_empty() {
+                    self.transcript.push_info(format!(
+                        "Subagent {} · {} has no messages yet.",
+                        run.agent, run.description
+                    ));
+                    return;
+                }
+                self.overlay = Some(Overlay::Child {
+                    title: format!(" subagent · {} · {} ", run.agent, run.state.as_str()),
+                    session_id: session_id.to_owned(),
+                    lines,
+                    scroll: 0,
+                    updated: Some(std::time::Instant::now()),
+                });
+            }
+            Err(error) => self
+                .transcript
+                .push_error(format!("Cannot open child session {session_id}: {error}")),
         }
     }
 
@@ -2647,7 +3169,12 @@ impl App {
             .as_ref()
             .map_or_else(|| "ephemeral".to_owned(), |session| session.id().to_owned());
         let tokens = self.session.as_ref().map_or_else(
-            || self.history.iter().map(message_chars).sum::<u64>() / 4,
+            || {
+                self.history
+                    .iter()
+                    .map(estimate_message_tokens)
+                    .sum::<u64>()
+            },
             codie_session::Session::estimate_tokens,
         );
         let percent = self
@@ -2836,32 +3363,6 @@ fn path_like_query(query: &str) -> bool {
     !query.contains(':') && (query.contains('/') || query.starts_with('~'))
 }
 
-fn message_chars(message: &Message) -> u64 {
-    match message {
-        Message::System(system) => system.content.chars().count() as u64,
-        Message::User(user) => user
-            .content
-            .iter()
-            .map(|content| content.as_text().map_or(0, |text| text.len() as u64))
-            .sum(),
-        Message::Assistant(assistant) => assistant
-            .content
-            .iter()
-            .map(|content| match content {
-                Content::Text { text, .. } => text.chars().count() as u64,
-                Content::Thinking { thinking, .. } => thinking.chars().count() as u64,
-                Content::ToolCall { arguments, .. } => arguments.to_string().chars().count() as u64,
-                Content::Image { .. } => 4_800,
-            })
-            .sum(),
-        Message::ToolResult(result) => result
-            .content
-            .iter()
-            .map(|content| content.as_text().map_or(0, |text| text.len() as u64))
-            .sum(),
-    }
-}
-
 /// Runs the interactive interface and returns the process exit code.
 pub async fn run(options: TuiOptions) -> Result<u8> {
     if options.mode == TuiRunMode::Plain {
@@ -2872,19 +3373,54 @@ pub async fn run(options: TuiOptions) -> Result<u8> {
 
 async fn run_full(mut options: TuiOptions) -> Result<u8> {
     let theme = Theme::load(options.theme.as_deref())?;
-    let registry = Arc::clone(&options.registry);
+    let registry: Arc<dyn Toolbox> = options.registry.clone();
     let (permission_tx, mut permission_rx) = mpsc::unbounded_channel();
     let broker = PermissionBroker::new(permission_tx, options.auto_allowed.clone());
     let permission_broker = broker.clone();
-    let toolbox: Arc<dyn Toolbox> = Arc::new(PermissionToolbox::new(registry.clone(), broker));
-    let agent = Arc::new(match options.extensions.hooks() {
-        Some(hooks) => Agent::with_hooks(Arc::clone(&options.client), Arc::clone(&toolbox), hooks),
-        None => Agent::new(Arc::clone(&options.client), Arc::clone(&toolbox)),
-    });
+    let (question_tx, mut question_rx) = mpsc::unbounded_channel();
+    let questions = crate::questions::QuestionBroker::new(question_tx);
+    let registry: Arc<dyn Toolbox> =
+        Arc::new(crate::questions::QuestionToolbox::new(registry, questions));
     let session_id = options
         .session
         .as_ref()
         .map(|session| session.id().to_owned());
+    let built = crate::subagents::build(crate::subagents::BuildInput {
+        config: options.subagents.clone(),
+        mode: options.subagent_mode,
+        agents: options.customizations.agents().to_vec(),
+        registry,
+        broker,
+        client: Arc::clone(&options.client),
+        prompt: crate::subagents::prompt_input(
+            &options.cwd,
+            options.preamble.clone(),
+            options.append.clone(),
+            &options.customizations,
+        ),
+        session_dir: options.session_dir.clone(),
+        session_id: session_id.clone(),
+        model: options.model.clone(),
+        known_models: options
+            .models
+            .iter()
+            .filter(|model| model.provider == options.model.provider)
+            .map(|model| model.id.clone())
+            .collect(),
+        thinking: options.thinking,
+    })
+    .map_err(anyhow::Error::msg)?;
+    let toolbox = built.toolbox;
+    let subagents_available = built.runtime.is_some();
+    let initial_subagent_mode = if options.subagents.enabled {
+        options.subagent_mode
+    } else {
+        DelegationMode::Off
+    };
+    let agent = Arc::new(match options.extensions.hooks() {
+        Some(hooks) => Agent::with_hooks(Arc::clone(&options.client), Arc::clone(&toolbox), hooks),
+        None => Agent::new(Arc::clone(&options.client), Arc::clone(&toolbox)),
+    });
     options.extensions.set_session_id(session_id.clone());
 
     let mut history = options.history.clone();
@@ -2902,6 +3438,12 @@ async fn run_full(mut options: TuiOptions) -> Result<u8> {
         Bindings::load(options.keybindings.as_deref())?,
     );
     app.customizations = options.customizations.clone();
+    app.subagent_base = options.subagents.clone();
+    app.subagent_config = built.config.clone();
+    app.subagent_config.enabled = subagents_available;
+    app.subagent_mode = initial_subagent_mode;
+    app.subagent_force_once = options.subagent_force_once;
+    app.subagent_runtime = built.runtime;
     app.models_loader = options.models_loader.clone();
     app.providers = options.providers.clone();
     app.switch_provider = options.switch_provider.clone();
@@ -2959,6 +3501,7 @@ async fn run_full(mut options: TuiOptions) -> Result<u8> {
         toolbox,
         options,
         &mut permission_rx,
+        &mut question_rx,
         permission_broker,
     )
     .await;
@@ -3290,6 +3833,7 @@ async fn event_loop(
     toolbox: Arc<dyn Toolbox>,
     options: TuiOptions,
     permission_rx: &mut mpsc::UnboundedReceiver<PermissionRequest>,
+    question_rx: &mut mpsc::UnboundedReceiver<crate::questions::QuestionRequest>,
     broker: PermissionBroker,
 ) -> Result<u8> {
     let mut input = spawn_input();
@@ -3527,6 +4071,10 @@ async fn event_loop(
                 dirty = true;
                 app.push_permission(request);
             }
+            Some(request) = question_rx.recv() => {
+                dirty = true;
+                app.push_question(request);
+            }
             Some(event) = connect_rx.recv() => {
                 dirty = true;
                 match event {
@@ -3542,6 +4090,18 @@ async fn event_loop(
                 handle_agent_event(app, event);
                 if maybe_recover_overflow(app) {
                     start_compaction(app, &options, &compact_tx, String::new());
+                } else if let Some(nudge) = app.pending_nudge.take() {
+                    app.run_had_task = false;
+                    app.transcript
+                        .push_info("No delegation detected; asking once.");
+                    start_run(
+                        app,
+                        &agent,
+                        &options,
+                        &event_tx,
+                        Message::user(nudge.clone()),
+                        nudge,
+                    );
                 }
             }
             Some(update) = update_rx.recv() => {
@@ -3633,6 +4193,7 @@ async fn event_loop(
             }
             _ = tick.tick() => {
                 app.tick = app.tick.wrapping_add(1);
+                app.refresh_child_overlay();
                 if !auto_update_started {
                     auto_update_started = true;
                     // Start after the first frame so startup never waits on the network.
@@ -3846,6 +4407,38 @@ fn submit_prompt(
     app.last_prompt = Some(prompt.clone());
     app.overflow_retried = false;
 
+    let intent = detect_intent(&prompt);
+    let plan = effective_mode(
+        app.subagent_config.enabled,
+        app.subagent_mode,
+        app.subagent_force_once,
+        intent,
+    );
+    app.subagent_force_once = false;
+    app.forced_run = plan.is_forced();
+    app.run_had_task = false;
+    app.nudge.reset();
+    app.pending_nudge = None;
+    if let Some(runtime) = &app.subagent_runtime {
+        runtime.set_mode(plan.mode);
+    }
+    if plan.is_forced() {
+        let directive = Message::system(FORCED_DIRECTIVE, Vec::new());
+        if let Some(session) = app.session.as_mut()
+            && let Err(error) = session.append_message(&directive)
+        {
+            app.transcript.push_error(format!(
+                "Cannot record the subagent directive in the session: {error}"
+            ));
+        }
+        app.history.push(directive);
+        app.transcript
+            .push_info("Subagents requested for this run.");
+    } else if intent != DelegationIntent::None {
+        app.transcript
+            .push_info(format!("Subagents: {} for this run.", plan.mode.as_str()));
+    }
+
     let prompt_message = expand_prompt(app, &options.cwd, &prompt);
     let window = u64::from(app.context_window);
     let history_has_messages = app
@@ -3881,6 +4474,28 @@ fn expand_prompt(app: &mut App, cwd: &std::path::Path, prompt: &str) -> Message 
     Message::user_with_content(expansion.content)
 }
 
+/// Applies the state and configuration shared by every run.
+fn prepare_run(app: &mut App, options: &TuiOptions) -> Option<AgentConfig> {
+    app.status = Status::Streaming;
+    app.run_started = Some(std::time::Instant::now());
+    app.footer.tokens_per_sec = None;
+
+    let mut config = match AgentConfig::new(app.model.clone(), options.cwd.clone()) {
+        Ok(config) => config,
+        Err(error) => {
+            app.transcript.push_error(error);
+            app.status = Status::Error;
+            return None;
+        }
+    };
+    config.thinking = app.thinking;
+    config.max_turns = options.max_turns;
+    config.session_id = app.session.as_ref().map(|session| session.id().to_owned());
+    app.cancel = tokio_util::sync::CancellationToken::new();
+    config.cancel = app.cancel.clone();
+    Some(config)
+}
+
 fn start_run(
     app: &mut App,
     agent: &Arc<Agent>,
@@ -3890,27 +4505,11 @@ fn start_run(
     prompt: String,
 ) {
     app.transcript.push_user(prompt);
-    app.status = Status::Streaming;
-    app.run_started = Some(std::time::Instant::now());
-    app.footer.tokens_per_sec = None;
-
-    let mut config = match AgentConfig::new(app.model.clone(), options.cwd.clone()) {
-        Ok(config) => config,
-        Err(error) => {
-            app.transcript.push_error(error);
-            app.status = Status::Error;
-            return;
-        }
+    let Some(config) = prepare_run(app, options) else {
+        return;
     };
-    config.thinking = app.thinking;
-    config.max_turns = options.max_turns;
-    config.session_id = app.session.as_ref().map(|session| session.id().to_owned());
-    app.cancel = tokio_util::sync::CancellationToken::new();
-    config.cancel = app.cancel.clone();
-
     let history = app.history.clone();
-    let stream = agent.run(message, history, config);
-    forward_events(stream, sender.clone());
+    forward_events(agent.run(message, history, config), sender.clone());
 }
 
 fn start_resume(
@@ -3919,27 +4518,11 @@ fn start_resume(
     options: &TuiOptions,
     sender: &mpsc::UnboundedSender<AgentEvent>,
 ) {
-    app.status = Status::Streaming;
-    app.run_started = Some(std::time::Instant::now());
-    app.footer.tokens_per_sec = None;
-
-    let mut config = match AgentConfig::new(app.model.clone(), options.cwd.clone()) {
-        Ok(config) => config,
-        Err(error) => {
-            app.transcript.push_error(error);
-            app.status = Status::Error;
-            return;
-        }
+    let Some(config) = prepare_run(app, options) else {
+        return;
     };
-    config.thinking = app.thinking;
-    config.max_turns = options.max_turns;
-    config.session_id = app.session.as_ref().map(|session| session.id().to_owned());
-    app.cancel = tokio_util::sync::CancellationToken::new();
-    config.cancel = app.cancel.clone();
-
     let history = app.history.clone();
-    let stream = agent.resume(history, config);
-    forward_events(stream, sender.clone());
+    forward_events(agent.resume(history, config), sender.clone());
 }
 
 fn forward_events(
@@ -3986,7 +4569,10 @@ fn maybe_recover_overflow(app: &mut App) -> bool {
             .iter()
             .any(|entry| entry.id() == leaf && entry.message().is_some())
     {
-        let _ = session.append_context_edit(&leaf, None);
+        if let Err(error) = session.append_context_edit(&leaf, None) {
+            app.transcript
+                .push_error(format!("Cannot prune the session branch: {error}"));
+        }
         app.history = session.projection();
     }
 
@@ -4184,7 +4770,12 @@ fn handle_agent_event(app: &mut App, event: AgentEvent) {
             tool_call_id,
             tool_name,
             args,
-        } => app.transcript.tool_start(tool_call_id, tool_name, args),
+        } => {
+            if tool_name == "task" {
+                app.run_had_task = true;
+            }
+            app.transcript.tool_start(tool_call_id, tool_name, args);
+        }
         AgentEvent::ToolExecutionEnd {
             tool_call_id,
             result,
@@ -4203,7 +4794,7 @@ fn handle_agent_event(app: &mut App, event: AgentEvent) {
                 .and_then(|details| details.get("codie_render"))
                 .and_then(|value| serde_json::from_value(value.clone()).ok());
             app.transcript
-                .tool_end(&tool_call_id, output, is_error, render);
+                .tool_end(&tool_call_id, output, is_error, render, result.details);
         }
         AgentEvent::TurnEnd { .. } | AgentEvent::TurnStart => {}
         AgentEvent::AgentEnd { messages, status } => {
@@ -4220,8 +4811,28 @@ fn handle_agent_event(app: &mut App, event: AgentEvent) {
                 app.transcript
                     .push_error("Turn limit reached. Send another prompt to continue.");
             }
+            let forced = app.forced_run;
+            let delegated = app.run_had_task;
+            if matches!(status, RunStatus::Completed | RunStatus::TurnLimit)
+                && let Some(nudge) = app.nudge.after_turn(forced, delegated)
+            {
+                app.pending_nudge = Some(nudge.to_owned());
+            }
         }
-        AgentEvent::ToolExecutionUpdate { .. } => {}
+        AgentEvent::ToolExecutionUpdate {
+            tool_call_id,
+            partial,
+            ..
+        } => {
+            let label = partial
+                .content
+                .iter()
+                .filter_map(Content::as_text)
+                .collect::<Vec<_>>()
+                .join(" ");
+            app.transcript
+                .tool_progress(&tool_call_id, label, partial.details);
+        }
     }
 }
 
@@ -4240,7 +4851,136 @@ fn persist_tool_result(app: &mut App, result: &ToolResultMessage) {
             .as_ref()
             .and_then(|details| details.get("codie_render"))
             .and_then(|value| serde_json::from_value(value.clone()).ok()),
+        result.details.clone(),
     );
+
+    // Child usage is not in the parent's assistant messages; carry it into the
+    // footer and the session ledger so cost and `/usage` stay truthful.
+    if result.tool_name == "task"
+        && let Some(usage) = result.details.as_ref().and_then(subagent_usage)
+    {
+        app.footer.tokens = app.footer.tokens.saturating_add(usage.total_tokens);
+        app.footer.input_tokens = app.footer.input_tokens.saturating_add(usage.input);
+        app.footer.output_tokens = app.footer.output_tokens.saturating_add(usage.output);
+        app.footer.cost = app.footer.cost.saturating_add(usage.cost.total);
+        let provider = app.model.provider.clone();
+        let model = app.model.model.clone();
+        if let Some(session) = app.session.as_mut()
+            && let Err(error) = session.append_usage("subagent", provider, model, usage)
+        {
+            app.transcript.push_error(format!(
+                "Cannot record subagent usage in the session: {error}"
+            ));
+        }
+    }
+}
+
+/// Rebuilds child usage from a `task` result's structured details.
+fn subagent_usage(details: &Value) -> Option<Usage> {
+    let usage = details.get("usage")?;
+    let input = usage.get("input_tokens")?.as_u64()?;
+    let output = usage
+        .get("output_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let total = usage
+        .get("total_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or_else(|| input.saturating_add(output));
+    let nanos = codie_core::Cost::nanos_from_usd(
+        usage
+            .get("cost_usd")
+            .and_then(Value::as_f64)
+            .unwrap_or_default(),
+    );
+    Some(Usage {
+        input,
+        output,
+        cache_read: 0,
+        cache_write: 0,
+        reasoning: None,
+        total_tokens: total,
+        cost: codie_core::Cost {
+            total: nanos,
+            total_from_provider: true,
+            ..codie_core::Cost::default()
+        },
+    })
+}
+
+/// Renders a child session as plain transcript lines for the read-only overlay.
+fn child_transcript_lines(messages: &[Message]) -> Vec<String> {
+    let mut lines = Vec::new();
+    for message in messages {
+        match message {
+            Message::System(_) => {}
+            Message::User(user) => {
+                let text = user
+                    .content
+                    .iter()
+                    .filter_map(Content::as_text)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                push_transcript_block(&mut lines, "task", &text, usize::MAX);
+            }
+            Message::Assistant(assistant) => {
+                push_transcript_block(&mut lines, "child", &assistant.text(), usize::MAX);
+                for content in &assistant.content {
+                    if let Content::ToolCall {
+                        name, arguments, ..
+                    } = content
+                    {
+                        let summary = arguments
+                            .get("command")
+                            .or_else(|| arguments.get("path"))
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or_default();
+                        lines.push(format!("  → {name} {summary}"));
+                    }
+                }
+            }
+            Message::ToolResult(result) => {
+                let text = result
+                    .content
+                    .iter()
+                    .filter_map(Content::as_text)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let marker = if result.is_error { "✗" } else { "✓" };
+                let head = text
+                    .lines()
+                    .filter(|line| !line.trim().is_empty())
+                    .take(6)
+                    .map(|line| format!("    {line}"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if head.is_empty() {
+                    lines.push(format!("  {marker} {}", result.tool_name));
+                } else {
+                    lines.push(format!("  {marker} {}\n{head}", result.tool_name));
+                }
+            }
+        }
+    }
+    lines
+}
+
+fn push_transcript_block(lines: &mut Vec<String>, role: &str, text: &str, limit: usize) {
+    let text = text.trim();
+    if text.is_empty() {
+        return;
+    }
+    if !lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines.push(format!("{role}:"));
+    let content = text
+        .lines()
+        .take(limit)
+        .map(|line| format!("  {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    lines.push(content);
 }
 
 fn git_branch(cwd: &std::path::Path) -> Option<String> {
@@ -4296,6 +5036,261 @@ mod tests {
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn run(session_id: Option<String>) -> RunSnapshot {
+        RunSnapshot {
+            call_id: "call_1".to_owned(),
+            agent: "explore".to_owned(),
+            description: "Map the parser".to_owned(),
+            depth: 1,
+            session_id,
+            turns: 2,
+            activity: "completed".to_owned(),
+            state: codie_subagents::RunState::Completed,
+            elapsed: std::time::Duration::from_secs(5),
+            cost_nanos: 0,
+            error: None,
+            persisted: true,
+        }
+    }
+
+    #[test]
+    #[spec("TUI-041")]
+    fn open_child_run_reports_missing_transcripts() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = app();
+        app.session_dir = dir.path().to_path_buf();
+
+        app.open_child_run(1, &[]);
+        assert!(matches!(
+            app.transcript.entries().last(),
+            Some(Entry::Error(text)) if text.contains("No subagent run 1")
+        ));
+
+        app.open_child_run(1, &[run(None)]);
+        assert!(matches!(
+            app.transcript.entries().last(),
+            Some(Entry::Error(text)) if text.contains("was not persisted")
+        ));
+
+        app.open_child_run(1, &[run(Some("ses_missing".to_owned()))]);
+        assert!(matches!(
+            app.transcript.entries().last(),
+            Some(Entry::Error(text)) if text.contains("Cannot open child session")
+        ));
+    }
+
+    #[test]
+    #[spec("TUI-041")]
+    fn open_child_run_renders_the_child_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut child = Session::create_child(dir.path(), dir.path(), "ses_parent").unwrap();
+        child
+            .append_message(&Message::user("review the header"))
+            .unwrap();
+        child
+            .append_message(&Message::Assistant(codie_core::AssistantMessage::partial(
+                "test-api",
+                "test-provider",
+                "test-model",
+            )))
+            .unwrap();
+        let id = child.id().to_owned();
+
+        let mut app = app();
+        app.session_dir = dir.path().to_path_buf();
+        app.open_child_run(1, &[run(Some(id))]);
+        match &app.overlay {
+            Some(Overlay::Child { lines, .. }) => {
+                let body = lines.join("\n");
+                assert!(body.contains("review the header"), "{body}");
+            }
+            _ => panic!("expected child overlay"),
+        }
+    }
+
+    struct NoopChat;
+
+    impl ChatClient for NoopChat {
+        fn stream(
+            &self,
+            _context: &[Message],
+            _options: &codie_core::StreamOptions,
+        ) -> codie_core::AssistantEventStream {
+            codie_core::AssistantEventStream::channel(1).0
+        }
+    }
+
+    fn subagent_runtime(app: &App, dir: &std::path::Path) -> Arc<SubagentRuntime> {
+        Arc::new(
+            SubagentRuntime::new(
+                SubagentConfig::default(),
+                Arc::new(NoopChat),
+                Arc::new(codie_tools::Registry::new(Vec::new())),
+                PromptInput::new(dir),
+                dir,
+                None,
+                app.model.clone(),
+                Vec::new(),
+            )
+            .expect("runtime"),
+        )
+    }
+
+    #[test]
+    #[spec("TUI-049")]
+    fn task_result_usage_reaches_the_footer_and_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = app();
+        app.session = Some(Session::create(dir.path(), dir.path()).unwrap());
+        let result = ToolResultMessage {
+            tool_call_id: "call_1".to_owned(),
+            tool_name: "task".to_owned(),
+            content: vec![Content::text("done")],
+            details: Some(serde_json::json!({
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 5,
+                    "total_tokens": 15,
+                    "cost_usd": 0.25
+                }
+            })),
+            is_error: false,
+            duration_ms: None,
+            timestamp: 0,
+        };
+        persist_tool_result(&mut app, &result);
+        assert_eq!(app.footer.tokens, 15);
+        assert_eq!(app.footer.input_tokens, 10);
+        assert_eq!(app.footer.cost, 250_000_000);
+        assert!(
+            app.session
+                .as_ref()
+                .unwrap()
+                .entries()
+                .iter()
+                .any(|entry| matches!(
+                    entry,
+                    codie_session::Entry::Usage { kind, .. } if kind == "subagent"
+                ))
+        );
+    }
+
+    #[test]
+    #[spec("AGENT-030")]
+    fn forced_run_without_task_queues_one_nudge() {
+        let mut app = app();
+        app.forced_run = true;
+        app.run_had_task = false;
+        app.nudge.reset();
+
+        handle_agent_event(
+            &mut app,
+            AgentEvent::AgentEnd {
+                messages: Vec::new(),
+                status: RunStatus::Completed,
+            },
+        );
+        assert!(app.pending_nudge.is_some());
+
+        app.pending_nudge = None;
+        handle_agent_event(
+            &mut app,
+            AgentEvent::AgentEnd {
+                messages: Vec::new(),
+                status: RunStatus::Completed,
+            },
+        );
+        assert!(app.pending_nudge.is_none(), "only one nudge per prompt");
+    }
+
+    #[test]
+    fn delegated_run_does_not_queue_a_nudge() {
+        let mut app = app();
+        app.forced_run = true;
+        app.run_had_task = true;
+        app.nudge.reset();
+        handle_agent_event(
+            &mut app,
+            AgentEvent::AgentEnd {
+                messages: Vec::new(),
+                status: RunStatus::Completed,
+            },
+        );
+        assert!(app.pending_nudge.is_none());
+    }
+
+    #[test]
+    #[spec("AGENT-036")]
+    fn model_changes_reach_the_subagent_runtime() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = app();
+        let runtime = subagent_runtime(&app, dir.path());
+        app.subagent_runtime = Some(Arc::clone(&runtime));
+
+        app.model.provider = "openrouter".to_owned();
+        app.model.model = "tencent/hy4-flash".to_owned();
+        app.sync_subagent_model();
+
+        let parent = runtime.parent_model();
+        assert_eq!(parent.provider, "openrouter");
+        assert_eq!(parent.model, "tencent/hy4-flash");
+
+        app.thinking = ThinkingLevel::High;
+        app.sync_subagent_thinking();
+        assert_eq!(runtime.thinking(), ThinkingLevel::High);
+    }
+
+    #[test]
+    #[spec("TUI-046")]
+    fn reload_applies_project_agent_definitions() {
+        let config = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let path = project.path().join(".codie/agents/reviewer.md");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "---\ndescription: Reviews code\n---\nReview the change.\n",
+        )
+        .unwrap();
+
+        let mut app = app();
+        app.customizations = Customizations::load(config.path(), Some(project.path()));
+        app.subagent_base = SubagentConfig::default();
+        app.subagent_config = SubagentConfig::default();
+
+        assert!(app.handle_command("/reload"));
+        assert!(
+            app.subagent_config.agent_type("reviewer").is_some(),
+            "reload must add the persona without a restart"
+        );
+    }
+
+    #[test]
+    #[spec("TUI-047")]
+    fn open_child_overlay_refreshes_while_it_grows() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut child = Session::create_child(dir.path(), dir.path(), "ses_parent").unwrap();
+        child.append_message(&Message::user("first line")).unwrap();
+        let id = child.id().to_owned();
+
+        let mut app = app();
+        app.session_dir = dir.path().to_path_buf();
+        app.open_child_run(1, &[run(Some(id))]);
+        child.append_message(&Message::user("second line")).unwrap();
+
+        if let Some(Overlay::Child { updated, .. }) = &mut app.overlay {
+            *updated = Some(std::time::Instant::now() - std::time::Duration::from_secs(2));
+        }
+        app.refresh_child_overlay();
+        match &app.overlay {
+            Some(Overlay::Child { lines, .. }) => {
+                let body = lines.join("\n");
+                assert!(body.contains("second line"), "{body}");
+            }
+            _ => panic!("expected child overlay"),
+        }
     }
 
     #[test]
@@ -4358,6 +5353,45 @@ mod tests {
         app.status = Status::Idle;
         assert_eq!(
             app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            Action::Quit
+        );
+    }
+
+    #[test]
+    fn ctrl_c_and_ctrl_d_are_not_swallowed_by_overlays() {
+        let mut idle = app();
+        assert!(idle.handle_command("/help"));
+        assert_eq!(
+            idle.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            Action::Quit
+        );
+
+        let mut running = app();
+        assert!(running.handle_command("/help"));
+        running.status = Status::Streaming;
+        assert_eq!(
+            running.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            Action::Cancel
+        );
+        assert_eq!(running.status, Status::Waiting);
+        assert_eq!(
+            running.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            Action::Quit
+        );
+
+        let mut quitting = app();
+        assert!(quitting.handle_command("/help"));
+        assert_eq!(
+            quitting.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL)),
+            Action::Quit
+        );
+
+        // The connect overlay owns Ctrl+C and still quits even mid-run.
+        let mut connecting = app();
+        connecting.overlay = Some(Overlay::Connect(ConnectState::new("openrouter")));
+        connecting.status = Status::Streaming;
+        assert_eq!(
+            connecting.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
             Action::Quit
         );
     }
@@ -4614,6 +5648,9 @@ mod tests {
         app.push_permission(PermissionRequest {
             tool: "bash".to_owned(),
             arguments: serde_json::json!({"command": "ls"}),
+            agent: None,
+            depth: 0,
+            session_id: None,
             reply,
         });
         assert!(matches!(app.overlay, Some(Overlay::Permission(_))));
@@ -4651,6 +5688,9 @@ mod tests {
         app.push_permission(PermissionRequest {
             tool: "write".to_owned(),
             arguments: serde_json::json!({"path": "a.txt"}),
+            agent: None,
+            depth: 0,
+            session_id: None,
             reply,
         });
         app.handle_key(key(KeyCode::Char('y')));
@@ -4661,6 +5701,9 @@ mod tests {
         app.push_permission(PermissionRequest {
             tool: "write".to_owned(),
             arguments: serde_json::json!({"path": "a.txt"}),
+            agent: None,
+            depth: 0,
+            session_id: None,
             reply,
         });
         app.handle_key(key(KeyCode::Char('n')));
@@ -4954,6 +5997,9 @@ mod tests {
             switch_provider: None,
             thinking: ThinkingLevel::Medium,
             max_turns: 10,
+            subagents: SubagentConfig::default(),
+            subagent_mode: DelegationMode::Auto,
+            subagent_force_once: false,
             session: None,
             history: app.history.clone(),
             initial_prompt: None,
@@ -5001,6 +6047,10 @@ mod tests {
         assert!(
             list.items.iter().any(|item| item.value == "update"),
             "the palette must offer /update"
+        );
+        assert!(
+            list.items.iter().any(|item| item.value == "subagents"),
+            "the palette must offer /subagents"
         );
 
         for character in "theme".chars() {
@@ -5479,5 +6529,31 @@ mod tests {
 
         app.handle_key(key(KeyCode::Enter));
         assert!(matches!(app.overlay, Some(Overlay::Connect(_))));
+    }
+
+    #[test]
+    fn row_index_finds_entries_and_updates_counts() {
+        let empty = RowIndex::from_counts([]);
+        assert_eq!(empty.total(), 0);
+        assert_eq!(empty.find(0), None);
+
+        let mut index = RowIndex::from_counts([3, 0, 2, 4]);
+        assert_eq!(index.total(), 9);
+        assert_eq!(index.find(0), Some((0, 0)));
+        assert_eq!(index.find(2), Some((0, 2)));
+        assert_eq!(index.find(3), Some((2, 0)));
+        assert_eq!(index.find(4), Some((2, 1)));
+        assert_eq!(index.find(5), Some((3, 0)));
+        assert_eq!(index.find(8), Some((3, 3)));
+        assert_eq!(index.find(9), None);
+
+        index.set(1, 5, 0);
+        assert_eq!(index.total(), 14);
+        assert_eq!(index.find(3), Some((1, 0)));
+
+        index.set(0, 1, 3);
+        assert_eq!(index.total(), 12);
+        assert_eq!(index.find(0), Some((0, 0)));
+        assert_eq!(index.find(1), Some((1, 0)));
     }
 }

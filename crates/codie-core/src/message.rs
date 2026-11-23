@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::content::{Content, StopReason, ToolCall, ToolDecl, Usage};
 
 /// A system message, including the tool declarations effective at that point.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SystemMessage {
     /// Prompt text.
@@ -18,6 +20,8 @@ pub struct SystemMessage {
 }
 
 /// A user message.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UserMessage {
     /// Text and image blocks.
@@ -28,6 +32,8 @@ pub struct UserMessage {
 }
 
 /// An assistant message.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AssistantMessage {
     /// Text, thinking, and tool-call blocks in source order.
@@ -131,6 +137,8 @@ impl AssistantMessage {
 }
 
 /// The result of one tool call.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolResultMessage {
     /// Identifier of the call this result answers.
@@ -159,6 +167,8 @@ pub struct ToolResultMessage {
 /// message type and boxing it would add an allocation to every turn. The
 /// resulting size difference is accepted and documented.
 #[allow(clippy::large_enum_variant)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "role", rename_all = "snake_case")]
 pub enum Message {

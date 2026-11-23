@@ -16,6 +16,7 @@ struct PtySession {
     child: Box<dyn Child + Send + Sync>,
     buffer: Arc<Mutex<Vec<u8>>>,
     reader: Option<JoinHandle<()>>,
+    home: TempHome,
 }
 
 impl PtySession {
@@ -81,11 +82,16 @@ impl PtySession {
             child,
             buffer,
             reader: Some(reader),
+            home,
         }
     }
 
     fn text(&self) -> String {
         String::from_utf8_lossy(&self.buffer.lock().expect("pty buffer")).into_owned()
+    }
+
+    fn log_path(&self) -> std::path::PathBuf {
+        self.home.data_dir().join("logs").join("codie.log")
     }
 
     fn wait_for(&self, needle: &str, timeout: Duration) -> bool {
@@ -186,6 +192,52 @@ fn spec_tui_033_first_run_opens_the_connect_overlay() {
     session.write("/quit\r");
     let code = session.wait(Duration::from_secs(10));
     assert_eq!(code, Some(0));
+}
+
+#[test]
+fn tui_logs_do_not_corrupt_the_terminal() {
+    let mut session = PtySession::spawn(&[
+        "--provider",
+        "ollama",
+        "--model",
+        "qwen3-coder",
+        "--base-url",
+        "http://127.0.0.1:1/v1",
+    ]);
+    assert!(
+        session.wait_for("qwen3-coder", Duration::from_secs(10)),
+        "the TUI did not start: {:?}",
+        session.text()
+    );
+
+    let started = Instant::now();
+    let mut log = String::new();
+    while started.elapsed() < Duration::from_secs(10) {
+        log = std::fs::read_to_string(session.log_path()).unwrap_or_default();
+        if log.contains("provider catalog refresh failed") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert!(
+        log.contains("provider catalog refresh failed"),
+        "the catalog warning was not redirected to the log: {log:?}"
+    );
+
+    let text = session.text();
+    assert!(
+        !text.contains("WARN"),
+        "log output reached the terminal: {text:?}"
+    );
+    assert!(
+        !text.contains("catalog transport error"),
+        "log output reached the terminal: {text:?}"
+    );
+
+    session.write("\u{1b}");
+    std::thread::sleep(Duration::from_millis(300));
+    session.write("/quit\r");
+    assert_eq!(session.wait(Duration::from_secs(10)), Some(0));
 }
 
 #[test]

@@ -12,6 +12,8 @@ use crate::tool::{ToolProgress, ToolResult};
 /// Terminal variants carry the full assistant message; the size difference is
 /// accepted to keep streaming allocation-free.
 #[allow(clippy::large_enum_variant)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AssistantDelta {
@@ -129,8 +131,13 @@ pub struct AssistantEventStream {
 
 impl AssistantEventStream {
     /// Creates a stream with the given channel capacity.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `capacity` is zero.
     #[must_use]
     pub fn channel(capacity: usize) -> (Self, AssistantStreamSender) {
+        assert!(capacity > 0, "channel capacity must be greater than zero");
         let (sender, receiver) = mpsc::channel(capacity);
         (Self { receiver }, AssistantStreamSender { sender })
     }
@@ -190,6 +197,8 @@ impl AssistantStreamSender {
 
 /// High-level agent events consumed by interfaces and persistence.
 #[allow(clippy::large_enum_variant)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentEvent {
@@ -265,6 +274,8 @@ pub enum AgentEvent {
 }
 
 /// Why an agent run ended.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RunStatus {
@@ -279,6 +290,8 @@ pub enum RunStatus {
 }
 
 /// The result of draining an agent event stream.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentRunResult {
     /// Messages produced by the run.
@@ -291,14 +304,34 @@ pub struct AgentRunResult {
 #[derive(Debug)]
 pub struct AgentEventStream {
     receiver: mpsc::Receiver<AgentEvent>,
+    cancel: Option<tokio_util::sync::CancellationToken>,
 }
 
 impl AgentEventStream {
     /// Creates a stream with the given channel capacity.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `capacity` is zero.
     #[must_use]
     pub fn channel(capacity: usize) -> (Self, AgentEventSender) {
+        assert!(capacity > 0, "channel capacity must be greater than zero");
         let (sender, receiver) = mpsc::channel(capacity);
-        (Self { receiver }, AgentEventSender { sender })
+        (
+            Self {
+                receiver,
+                cancel: None,
+            },
+            AgentEventSender {
+                sender,
+                cancel: std::sync::Arc::new(std::sync::OnceLock::new()),
+            },
+        )
+    }
+
+    /// Attaches the run token so dropping the stream cancels the run.
+    pub fn attach_cancel(&mut self, cancel: tokio_util::sync::CancellationToken) {
+        self.cancel = Some(cancel);
     }
 
     /// Receives the next event.
@@ -320,21 +353,85 @@ impl AgentEventStream {
     }
 }
 
+impl Drop for AgentEventStream {
+    fn drop(&mut self) {
+        if let Some(cancel) = &self.cancel {
+            cancel.cancel();
+        }
+    }
+}
+
 /// The sending half of an agent event stream.
 #[derive(Debug, Clone)]
 pub struct AgentEventSender {
     sender: mpsc::Sender<AgentEvent>,
+    cancel: std::sync::Arc<std::sync::OnceLock<tokio_util::sync::CancellationToken>>,
 }
 
 impl AgentEventSender {
-    /// Sends an event, returning false when the consumer is gone.
+    /// Attaches the run's cancellation token.
+    ///
+    /// Called once by the agent loop so a send can be interrupted when the run
+    /// is cancelled and a dropped consumer can stop the run.
+    pub fn attach_cancel(&self, cancel: tokio_util::sync::CancellationToken) {
+        let _ = self.cancel.set(cancel);
+    }
+
+    /// Resolves when every receiver has been dropped.
+    pub async fn closed(&self) {
+        self.sender.closed().await;
+    }
+
+    /// Returns true when every receiver has been dropped.
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.sender.is_closed()
+    }
+
+    /// Sends an event, returning false when the consumer is gone or the run is
+    /// cancelled.
+    ///
+    /// A closed consumer also cancels the attached run token, so tools stop
+    /// instead of mutating the workspace with nobody listening.
     pub async fn send(&self, event: AgentEvent) -> bool {
+        if self.sender.is_closed() {
+            if let Some(cancel) = self.cancel.get() {
+                cancel.cancel();
+            }
+            return false;
+        }
+        // Streaming updates are cumulative and may be dropped under
+        // backpressure (`AGENT-001`); dropping one is better than stalling the
+        // run on a full channel. Lifecycle events always wait, because the
+        // transcript and `AgentEnd` must not be lost.
+        if matches!(
+            event,
+            AgentEvent::MessageUpdate { .. } | AgentEvent::ToolExecutionUpdate { .. }
+        ) {
+            return match self.sender.try_send(event) {
+                Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => true,
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    if let Some(cancel) = self.cancel.get() {
+                        cancel.cancel();
+                    }
+                    false
+                }
+            };
+        }
+        // Completion events (notably `AgentEnd`) must be delivered even after
+        // cancellation, so the terminal send is not raced against the token.
         self.sender.send(event).await.is_ok()
     }
 
     /// Tries to send without waiting.
     #[must_use]
     pub fn try_send(&self, event: AgentEvent) -> bool {
+        if self.sender.is_closed() {
+            if let Some(cancel) = self.cancel.get() {
+                cancel.cancel();
+            }
+            return false;
+        }
         self.sender.try_send(event).is_ok()
     }
 }
@@ -397,5 +494,43 @@ mod tests {
         let result = stream.result().await;
         assert_eq!(result.status, RunStatus::Completed);
         assert_eq!(result.messages.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod sender_lifetime {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    #[should_panic(expected = "capacity")]
+    fn zero_capacity_panics() {
+        let _ = AgentEventStream::channel(0);
+    }
+
+    #[tokio::test]
+    async fn streaming_updates_drop_instead_of_blocking() {
+        let (_stream, sender) = AgentEventStream::channel(1);
+        assert!(sender.try_send(AgentEvent::AgentStart));
+        let update = AgentEvent::MessageUpdate {
+            message: Message::user("x"),
+            delta: AssistantDelta::ToolCallStart { index: 0 },
+        };
+        let sent = tokio::time::timeout(Duration::from_millis(100), sender.send(update))
+            .await
+            .expect("a cumulative update must not block");
+        assert!(sent);
+    }
+
+    #[tokio::test]
+    async fn closed_resolves_when_receiver_drops() {
+        let (stream, sender) = AgentEventStream::channel(4);
+        let watchdog = sender.clone();
+        let task = tokio::spawn(async move { watchdog.closed().await });
+        drop(stream);
+        tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("closed must resolve")
+            .expect("task");
     }
 }

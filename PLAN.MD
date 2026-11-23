@@ -73,7 +73,8 @@ top, not baked into the loop.
 
 ### 1.2 Non-goals (for v1.0)
 
-- Sub-agents, plan mode, multi-agent orchestration.
+- Plan mode and multi-agent orchestration. Subagent delegation is post-1.0 (§12.7); plan mode remains out of
+  scope.
 - A web UI, desktop app, or IDE plugin.
 - OAuth/subscription login (API keys only at launch).
 - Sandboxing/containerization built into the binary (we document external patterns instead).
@@ -1535,6 +1536,23 @@ testing and packaging effort, not a rewrite.
 None of this is in the 1.0 critical path. macOS-only code must sit behind `cfg(target_os = "macos")` and
 must not leak into shared modules.
 
+### 12.7 Post-1.0 subagent delegation
+
+Subagents are a post-1.0 feature defined by `SPEC-AGENT-003` (`AGENT-014`..`AGENT-030`) and ADR 0004.
+
+- A child is an in-process `Agent::run` with a fresh transcript, its own model, turn budget, cancellation token,
+  and a tool subset intersected with the parent's permitted tools.
+- The `task` tool is host-registered by `codie-subagents`; it is not a tenth built-in and does not change
+  `TOOL-001`.
+- Progress uses the existing `ToolExecutionUpdate` path, so there is no new agent event or protocol schema.
+- Child sessions use the existing `parent_session` header and a `custom` `subagent` entry, so the frozen session
+  format is unchanged.
+- Delegation is off by default. `/subagents` and `--subagents` control it; prompt intent detection is
+  deterministic (`AGENT-029`).
+- Depth defaults to 0 (no grandchildren), parallelism to 4, and aggregate token and cost caps are optional but
+  recommended.
+- Out-of-process, sandboxed, and durable background agents remain out of scope.
+
 ---
 
 ## 13. Risks, mitigations, and open decisions
@@ -1709,6 +1727,7 @@ implementations.
 | `specs/provider/0003-openrouter.md` | profile of PROV-010..022; no new IDs | 1 |
 | `specs/provider/0004-auth.md` | PROV-030..034 | 1 |
 | `specs/agent/0001-turn-loop.md` | AGENT-001..012 | 1 |
+| `specs/agent/0003-subagent-delegation.md` | AGENT-014..030 | 8 (post-1.0) |
 | `specs/tools/0001-tool-contract.md` | TOOL-001..008 | 1 |
 | `specs/tools/0002..0008-*.md` | per tool | 1–2 |
 | `specs/session/0001-jsonl-format.md` | SESS-001..009 | 1, frozen in 3 |

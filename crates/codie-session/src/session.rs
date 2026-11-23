@@ -58,6 +58,8 @@ pub struct SessionSummary {
     pub cost: u64,
     /// Most recent user prompt.
     pub last_user: Option<String>,
+    /// First user prompt, used as a display title when the session is unnamed.
+    pub first_user: Option<String>,
     /// Most recent assistant reply.
     pub last_assistant: Option<String>,
 }
@@ -86,6 +88,19 @@ impl Session {
     /// created until the first message is appended.
     pub fn create(cwd: impl AsRef<Path>, session_dir: impl AsRef<Path>) -> Result<Self> {
         Self::create_with_parent(cwd, session_dir, None)
+    }
+
+    /// Creates a new, empty session linked to the session it was delegated from.
+    ///
+    /// Unlike [`Self::fork_at`], no entries are copied: a subagent starts with
+    /// its own fresh transcript and only records the parent identifier in the
+    /// header (`SPEC-AGENT-003`).
+    pub fn create_child(
+        cwd: impl AsRef<Path>,
+        session_dir: impl AsRef<Path>,
+        parent_session: impl Into<String>,
+    ) -> Result<Self> {
+        Self::create_with_parent(cwd, session_dir, Some(parent_session.into()))
     }
 
     /// Creates a new session that records the session it was derived from.
@@ -280,6 +295,18 @@ impl Session {
                 .and_then(|metadata| metadata.modified())
                 .unwrap_or(SystemTime::UNIX_EPOCH);
             let projection = session.projection();
+            let first_user = projection.iter().find_map(|message| {
+                let Message::User(user) = message else {
+                    return None;
+                };
+                let text = user
+                    .content
+                    .iter()
+                    .filter_map(Content::as_text)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                (!text.trim().is_empty()).then_some(text)
+            });
             let last_user = projection.iter().rev().find_map(|message| {
                 let Message::User(user) = message else {
                     return None;
@@ -338,6 +365,7 @@ impl Session {
                 tokens,
                 cost,
                 last_user,
+                first_user,
                 last_assistant,
             });
         }
@@ -752,6 +780,25 @@ impl Session {
             label,
         };
         self.commit(entry)
+    }
+
+    /// Returns the most recent custom entry of `custom_type` on the current leaf branch.
+    ///
+    /// This is how the host restores settings such as the subagent delegation
+    /// mode after resuming a session.
+    #[must_use]
+    pub fn latest_custom(&self, custom_type: &str) -> Option<&serde_json::Value> {
+        let mut cursor = self.leaf.as_deref();
+        while let Some(id) = cursor {
+            let entry = self.entries.iter().find(|entry| entry.id() == id)?;
+            if let Some((kind, data)) = entry.custom()
+                && kind == custom_type
+            {
+                return Some(data);
+            }
+            cursor = entry.parent_id();
+        }
+        None
     }
 
     /// Stores extension-owned metadata without interpreting it.
@@ -1223,7 +1270,11 @@ fn truncate_preview(text: &str) -> String {
 }
 
 /// Estimates tokens for one message with the documented `chars / 4` rule.
-fn estimate_message_tokens(message: &Message) -> u64 {
+///
+/// Images count as 4,800 characters (`CTX-002`) and the result rounds up per
+/// message, matching [`Session::estimate_tokens`].
+#[must_use]
+pub fn estimate_message_tokens(message: &Message) -> u64 {
     let chars = match message {
         Message::System(system) => system.content.chars().count() as u64,
         Message::User(user) => message_chars(&user.content),
@@ -1335,8 +1386,27 @@ mod tests {
             tokens: 0,
             cost: 0,
             last_user: None,
+            first_user: None,
             last_assistant: None,
         }
+    }
+
+    #[test]
+    fn summaries_include_first_and_last_user_prompts() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let mut session =
+            Session::create(directory.path(), directory.path()).expect("create session");
+        session
+            .append_message(&Message::user("first prompt"))
+            .expect("append first");
+        session
+            .append_message(&Message::user("second prompt"))
+            .expect("append second");
+
+        let summaries = Session::list(directory.path()).expect("list sessions");
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].first_user.as_deref(), Some("first prompt"));
+        assert_eq!(summaries[0].last_user.as_deref(), Some("second prompt"));
     }
 
     #[test]

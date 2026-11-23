@@ -14,6 +14,7 @@ mod config;
 mod config_cmd;
 mod ext_flags;
 mod models_cmd;
+mod permissions;
 mod rpc;
 mod run;
 mod sessions_cmd;
@@ -88,7 +89,7 @@ async fn main() -> ExitCode {
         eprintln!("error: {error:#}");
         return ExitCode::from(1);
     }
-    init_tracing(cli.verbose);
+    init_tracing(cli.verbose, cli.command.is_none() && cli.run.interactive());
 
     if cli.command.is_some() && !deferred.values.is_empty() {
         let name = deferred
@@ -156,13 +157,7 @@ fn install_crash_reporter() {
 }
 
 fn write_crash_report(info: &std::panic::PanicHookInfo<'_>) -> Option<PathBuf> {
-    let base = std::env::var_os("CODIE_DATA_DIR")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME")
-                .or_else(|| std::env::var_os("USERPROFILE"))
-                .map(|home| PathBuf::from(home).join(".local/share/codie"))
-        })?;
+    let base = data_directory()?;
     let directory = base.join("crashes");
     std::fs::create_dir_all(&directory).ok()?;
 
@@ -192,8 +187,23 @@ fn write_crash_report(info: &std::panic::PanicHookInfo<'_>) -> Option<PathBuf> {
     Some(path)
 }
 
-/// Initializes structured logging on stderr.
-fn init_tracing(verbosity: u8) {
+/// Returns the per-user data directory.
+fn data_directory() -> Option<PathBuf> {
+    std::env::var_os("CODIE_DATA_DIR")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .map(|home| PathBuf::from(home).join(".local/share/codie"))
+        })
+}
+
+/// Initializes structured logging.
+///
+/// Interactive runs write to a file because stderr shares the terminal with
+/// the TUI; a stray warning on stderr corrupts the alternate screen. Every
+/// other mode keeps diagnostics on stderr.
+fn init_tracing(verbosity: u8, interactive: bool) {
     let default_level = match verbosity {
         0 => "warn",
         1 => "info",
@@ -203,12 +213,40 @@ fn init_tracing(verbosity: u8) {
 
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new(format!("codie={default_level},xtask={default_level}")));
-
-    let _ = tracing_subscriber::fmt()
+    let format = tracing_subscriber::fmt()
         .with_env_filter(filter)
-        .with_writer(std::io::stderr)
-        .with_target(false)
-        .try_init();
+        .with_target(false);
+
+    if interactive {
+        match tui_log_file() {
+            Some(file) => {
+                let _ = format
+                    .with_writer(std::sync::Mutex::new(file))
+                    .with_ansi(false)
+                    .try_init();
+            }
+            None => {
+                let _ = format
+                    .with_writer(std::io::sink)
+                    .with_ansi(false)
+                    .try_init();
+            }
+        }
+        return;
+    }
+
+    let _ = format.with_writer(std::io::stderr).try_init();
+}
+
+/// Opens the append-only log used while the TUI owns the terminal.
+fn tui_log_file() -> Option<std::fs::File> {
+    let directory = data_directory()?.join("logs");
+    std::fs::create_dir_all(&directory).ok()?;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(directory.join("codie.log"))
+        .ok()
 }
 
 /// Loads environment variables from `.env` or an explicit file.

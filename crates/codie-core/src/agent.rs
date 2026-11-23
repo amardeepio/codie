@@ -3,16 +3,17 @@
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use futures_util::stream::FuturesUnordered;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::content::{Content, StopReason, ThinkingLevel, ToolCall};
 use crate::event::{AgentEvent, AgentEventSender, AgentEventStream, AssistantDelta, RunStatus};
 use crate::message::{AssistantMessage, Message, ToolResultMessage, now_ms};
-use crate::tool::{ExecutionMode, Tool, ToolContext, ToolResult, Toolbox};
+use crate::tool::{ExecutionMode, Tool, ToolContext, ToolProgress, ToolResult, Toolbox};
 
 /// Model identity needed by the loop and by assistant messages.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -129,6 +130,8 @@ pub struct AgentConfig {
     pub max_turns: usize,
     /// Batch scheduling mode.
     pub tool_execution: ExecutionMode,
+    /// Maximum tool calls from one assistant message that may execute at once.
+    pub max_parallel_tools: usize,
     /// Session identifier.
     pub session_id: Option<String>,
     /// Maximum output tokens per request.
@@ -141,6 +144,10 @@ pub struct AgentConfig {
     pub follow_up_mode: QueueMode,
     /// Cancellation signal.
     pub cancel: CancellationToken,
+    /// Delegation depth of this run; the root run is 0.
+    pub delegation_depth: usize,
+    /// Agent type name for a delegated run; `None` for the root run.
+    pub agent: Option<String>,
 }
 
 impl AgentConfig {
@@ -148,7 +155,7 @@ impl AgentConfig {
     ///
     /// # Errors
     ///
-    /// Returns an error when `max_turns` is zero.
+    /// Returns an error when the working directory is empty.
     pub fn new(model: ModelRef, cwd: PathBuf) -> Result<Self, String> {
         if cwd.as_os_str().is_empty() {
             return Err("working directory must not be empty".to_owned());
@@ -159,12 +166,15 @@ impl AgentConfig {
             thinking: ThinkingLevel::default(),
             max_turns: 200,
             tool_execution: ExecutionMode::Parallel,
+            max_parallel_tools: 8,
             session_id: None,
             max_output_tokens: None,
             temperature: None,
             steering_mode: QueueMode::OneAtATime,
             follow_up_mode: QueueMode::OneAtATime,
             cancel: CancellationToken::new(),
+            delegation_depth: 0,
+            agent: None,
         })
     }
 }
@@ -260,9 +270,17 @@ impl Agent {
         &self,
         prompt: Option<Message>,
         history: Vec<Message>,
-        config: AgentConfig,
+        mut config: AgentConfig,
     ) -> AgentEventStream {
-        let (stream, sender) = AgentEventStream::channel(256);
+        let (mut stream, sender) = AgentEventStream::channel(256);
+        // The run gets its own child token: dropping the stream stops this run
+        // without cancelling a token the caller reuses for a retry.
+        let run_cancel = config.cancel.child_token();
+        config.cancel = run_cancel.clone();
+        stream.attach_cancel(run_cancel.clone());
+        // Dropping the consumer must stop the run: tools would otherwise keep
+        // editing files and running commands with nobody listening.
+        sender.attach_cancel(run_cancel);
         let client = Arc::clone(&self.client);
         let toolbox = Arc::clone(&self.toolbox);
         let hooks = self.hooks.clone();
@@ -299,7 +317,9 @@ async fn run_inner(
     let hooks = hooks.as_deref();
 
     if config.max_turns == 0 {
-        finish(&sender, Vec::new(), RunStatus::TurnLimit).await;
+        // No request is made, but the caller's transcript and prompt are
+        // returned instead of an empty history.
+        finish(&sender, context, RunStatus::TurnLimit).await;
         return;
     }
 
@@ -342,6 +362,9 @@ async fn run_inner(
             return;
         }
         if turns >= config.max_turns {
+            // One final text-only request so the caller gets a handoff summary
+            // instead of an empty turn-limit result.
+            wrap_up(&client, &mut context, &config, &sender).await;
             finish(&sender, context, RunStatus::TurnLimit).await;
             return;
         }
@@ -456,10 +479,10 @@ async fn run_inner(
         }
 
         let calls = message.tool_calls();
-        let results = if calls.is_empty() {
-            Vec::new()
+        let (results, terminate) = if calls.is_empty() {
+            (Vec::new(), false)
         } else if message.stop_reason == StopReason::Length {
-            truncated_results(&calls)
+            (truncated_results(&calls), false)
         } else {
             execute_tools(&calls, &config, toolbox.as_ref(), hooks, &sender).await
         };
@@ -510,6 +533,13 @@ async fn run_inner(
             return;
         }
 
+        if terminate {
+            // Every tool in the batch asked to stop after it; the results are
+            // already part of the transcript, so the run ends cleanly.
+            finish(&sender, context, RunStatus::Completed).await;
+            return;
+        }
+
         let steering = take_shared(&queues, QueueKind::Steering, config.steering_mode);
         if !steering.is_empty() {
             for message in steering {
@@ -549,6 +579,71 @@ async fn run_inner(
         finish(&sender, context, RunStatus::Completed).await;
         return;
     }
+}
+
+/// Instruction sent when the turn budget is exhausted.
+pub const TURN_LIMIT_PROMPT: &str = "The turn budget for this run is exhausted. Do not call any \
+    tools. Reply with a concise summary of what was completed, what remains, and the next step.";
+
+/// Makes one tools-disabled request asking for a handoff summary.
+async fn wrap_up(
+    client: &Arc<dyn ChatClient>,
+    context: &mut Vec<Message>,
+    config: &AgentConfig,
+    sender: &AgentEventSender,
+) {
+    let prompt = Message::user(TURN_LIMIT_PROMPT);
+    context.push(prompt.clone());
+    emit(
+        sender,
+        AgentEvent::MessageStart {
+            message: prompt.clone(),
+        },
+    )
+    .await;
+    emit(sender, AgentEvent::MessageEnd { message: prompt }).await;
+
+    let mut request = context.clone();
+    for message in &mut request {
+        if let Message::System(system) = message {
+            system.tools.clear();
+        }
+    }
+    let options = StreamOptions {
+        model: config.model.clone(),
+        thinking: config.thinking,
+        max_output_tokens: config.max_output_tokens,
+        temperature: config.temperature,
+        session_id: config.session_id.clone(),
+        cancel: config.cancel.clone(),
+    };
+    let Some(message) = stream_assistant(client, &request, &options, sender).await else {
+        return;
+    };
+    let message = Message::Assistant(message);
+    context.push(message.clone());
+    emit(
+        sender,
+        AgentEvent::MessageStart {
+            message: message.clone(),
+        },
+    )
+    .await;
+    emit(
+        sender,
+        AgentEvent::MessageEnd {
+            message: message.clone(),
+        },
+    )
+    .await;
+    emit(
+        sender,
+        AgentEvent::TurnEnd {
+            message,
+            tool_results: Vec::new(),
+        },
+    )
+    .await;
 }
 
 async fn stream_assistant(
@@ -665,11 +760,17 @@ fn apply_delta(message: &mut AssistantMessage, delta: &AssistantDelta) {
         AssistantDelta::ToolCallDelta { .. } => {}
         AssistantDelta::ToolCallEnd { index, call } => {
             ensure_slot(message, *index);
+            let thought_signature = match message.content.get(*index) {
+                Some(Content::ToolCall {
+                    thought_signature, ..
+                }) => thought_signature.clone(),
+                _ => None,
+            };
             message.content[*index] = Content::ToolCall {
                 id: call.id.clone(),
                 name: call.name.clone(),
                 arguments: call.arguments.clone(),
-                thought_signature: None,
+                thought_signature,
             };
         }
         AssistantDelta::Start { .. }
@@ -708,7 +809,7 @@ async fn execute_tools(
     toolbox: &dyn Toolbox,
     hooks: Option<&dyn Hooks>,
     sender: &AgentEventSender,
-) -> Vec<ToolResultMessage> {
+) -> (Vec<ToolResultMessage>, bool) {
     let sequential = config.tool_execution == ExecutionMode::Sequential
         || calls.iter().any(|call| {
             toolbox
@@ -718,75 +819,98 @@ async fn execute_tools(
 
     if sequential {
         let mut results = Vec::with_capacity(calls.len());
+        let mut terminate = !calls.is_empty();
         for call in calls {
             let result = execute_one(call, config, toolbox, hooks, sender, true).await;
+            terminate &= result.terminate;
             results.push(result_message(call, &result));
         }
-        return results;
+        return (results, terminate);
     }
 
-    let mut handles = Vec::with_capacity(calls.len());
+    let limit = config.max_parallel_tools.max(1);
     let mut results: Vec<Option<ToolResultMessage>> = vec![None; calls.len()];
+    let mut terminate = !calls.is_empty();
 
-    for (index, call) in calls.iter().enumerate() {
-        emit(
-            sender,
-            AgentEvent::ToolExecutionStart {
-                tool_call_id: call.id.clone(),
-                tool_name: call.name.clone(),
-                args: call.arguments.clone(),
-            },
-        )
-        .await;
+    // Run in bounded groups so one assistant message cannot spawn an
+    // unbounded number of processes (`AGENT-001`).
+    for (offset, chunk) in calls.chunks(limit).enumerate() {
+        if sender.is_closed() {
+            config.cancel.cancel();
+            terminate = false;
+            break;
+        }
+        let mut handles = Vec::with_capacity(chunk.len());
+        for (local, call) in chunk.iter().enumerate() {
+            let index = offset * limit + local;
+            emit(
+                sender,
+                AgentEvent::ToolExecutionStart {
+                    tool_call_id: call.id.clone(),
+                    tool_name: call.name.clone(),
+                    args: call.arguments.clone(),
+                },
+            )
+            .await;
 
-        if let Some(reason) = toolbox.denial(&call.name) {
-            let result = ToolResult::error(format!("Tool `{}` was denied: {reason}", call.name))
-                .with_duration(0);
-            emit_tool_end(sender, call, &result).await;
-            results[index] = Some(result_message(call, &result));
-            continue;
+            if let Some(reason) = toolbox.denial(&call.name) {
+                let result =
+                    ToolResult::error(format!("Tool `{}` was denied: {reason}", call.name))
+                        .with_duration(0);
+                emit_tool_end(sender, call, &result).await;
+                terminate = false;
+                results[index] = Some(result_message(call, &result));
+                continue;
+            }
+
+            let Some(tool) = toolbox.get(&call.name) else {
+                let result =
+                    ToolResult::error(format!("Tool `{}` not found", call.name)).with_duration(0);
+                emit_tool_end(sender, call, &result).await;
+                terminate = false;
+                results[index] = Some(result_message(call, &result));
+                continue;
+            };
+
+            if let Some(hooks) = hooks
+                && let Err(reason) = hooks.before_tool(call).await
+            {
+                let result = blocked_by_hook(&call.name, &reason);
+                emit_tool_end(sender, call, &result).await;
+                terminate = false;
+                results[index] = Some(result_message(call, &result));
+                continue;
+            }
+
+            let call_clone = call.clone();
+            let context = ToolContext {
+                cwd: config.cwd.clone(),
+                cancel: config.cancel.clone(),
+                session_id: config.session_id.clone(),
+                delegation_depth: config.delegation_depth,
+                agent: config.agent.clone(),
+            };
+            let sender_clone = sender.clone();
+            let event_sender = sender.clone();
+            handles.push(async move {
+                let started = Instant::now();
+                let result =
+                    run_tool_with_hooks(hooks, tool, &call_clone, &context, Some(&event_sender))
+                        .await;
+                let result = result.with_duration(elapsed_ms(started));
+                emit_tool_end(&sender_clone, &call_clone, &result).await;
+                (index, result)
+            });
         }
 
-        let Some(tool) = toolbox.get(&call.name) else {
-            let result =
-                ToolResult::error(format!("Tool `{}` not found", call.name)).with_duration(0);
-            emit_tool_end(sender, call, &result).await;
-            results[index] = Some(result_message(call, &result));
-            continue;
-        };
-
-        if let Some(hooks) = hooks
-            && let Err(reason) = hooks.before_tool(call).await
-        {
-            let result = blocked_by_hook(&call.name, &reason);
-            emit_tool_end(sender, call, &result).await;
-            results[index] = Some(result_message(call, &result));
-            continue;
+        let mut pending = handles.into_iter().collect::<FuturesUnordered<_>>();
+        while let Some((index, result)) = pending.next().await {
+            terminate &= result.terminate;
+            results[index] = Some(result_message(&calls[index], &result));
         }
-
-        let call_clone = call.clone();
-        let context = ToolContext {
-            cwd: config.cwd.clone(),
-            cancel: config.cancel.clone(),
-            session_id: config.session_id.clone(),
-        };
-        let sender_clone = sender.clone();
-        handles.push(async move {
-            let started = Instant::now();
-            let result = run_tool_with_hooks(hooks, tool, &call_clone, &context).await;
-            let duration = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-            let result = result.with_duration(duration);
-            emit_tool_end(&sender_clone, &call_clone, &result).await;
-            (index, result)
-        });
     }
 
-    let mut pending = handles.into_iter().collect::<FuturesUnordered<_>>();
-    while let Some((index, result)) = pending.next().await {
-        results[index] = Some(result_message(&calls[index], &result));
-    }
-
-    results.into_iter().flatten().collect()
+    (results.into_iter().flatten().collect(), terminate)
 }
 
 async fn execute_one(
@@ -810,7 +934,7 @@ async fn execute_one(
     }
 
     let result = if let Some(reason) = toolbox.denial(&call.name) {
-        ToolResult::error(format!("Tool `{}` was denied: {reason}", call.name))
+        ToolResult::error(format!("Tool `{}` was denied: {reason}", call.name)).with_duration(0)
     } else if let Some(hooks) = hooks
         && let Err(reason) = hooks.before_tool(call).await
     {
@@ -820,12 +944,16 @@ async fn execute_one(
             cwd: config.cwd.clone(),
             cancel: config.cancel.clone(),
             session_id: config.session_id.clone(),
+            delegation_depth: config.delegation_depth,
+            agent: config.agent.clone(),
         };
-        run_tool_with_hooks(hooks, tool, call, &context).await
+        let started = Instant::now();
+        run_tool_with_hooks(hooks, tool, call, &context, emit_events.then_some(sender))
+            .await
+            .with_duration(elapsed_ms(started))
     } else {
-        ToolResult::error(format!("Tool `{}` not found", call.name))
-    }
-    .with_duration(0);
+        ToolResult::error(format!("Tool `{}` not found", call.name)).with_duration(0)
+    };
 
     if emit_events {
         emit_tool_end(sender, call, &result).await;
@@ -833,11 +961,16 @@ async fn execute_one(
     result
 }
 
-async fn execute_tool(tool: Arc<dyn Tool>, call: &ToolCall, context: &ToolContext) -> ToolResult {
+async fn execute_tool(
+    tool: Arc<dyn Tool>,
+    call: &ToolCall,
+    context: &ToolContext,
+    updates: Option<mpsc::UnboundedSender<ToolProgress>>,
+) -> ToolResult {
     use futures_util::FutureExt as _;
     use std::panic::AssertUnwindSafe;
 
-    match AssertUnwindSafe(tool.execute(call, context, None))
+    match AssertUnwindSafe(tool.execute(call, context, updates))
         .catch_unwind()
         .await
     {
@@ -852,8 +985,44 @@ async fn run_tool_with_hooks(
     tool: Arc<dyn Tool>,
     call: &ToolCall,
     context: &ToolContext,
+    events: Option<&AgentEventSender>,
 ) -> ToolResult {
-    let result = execute_tool(tool, call, context).await;
+    // A tool's progress reaches the host as an update on the same call, so a
+    // long delegation can show what it is doing without polluting the
+    // transcript with child messages (`AGENT-024`).
+    let (updates, mut progress) = mpsc::unbounded_channel::<ToolProgress>();
+    let forwarder = events.map(|events| {
+        let events = events.clone();
+        let tool_call_id = call.id.clone();
+        let tool_name = call.name.clone();
+        let args = call.arguments.clone();
+        tokio::spawn(async move {
+            while let Some(partial) = progress.recv().await {
+                // Progress is best-effort: a slow consumer drops an update
+                // instead of applying backpressure to the tool or growing a
+                // queue without bound.
+                let _ = events.try_send(AgentEvent::ToolExecutionUpdate {
+                    tool_call_id: tool_call_id.clone(),
+                    tool_name: tool_name.clone(),
+                    args: args.clone(),
+                    partial,
+                });
+            }
+        })
+    });
+    let result = execute_tool(tool, call, context, Some(updates)).await;
+    if let Some(forwarder) = forwarder {
+        // Dropping the sender above normally ends the loop, but a tool may
+        // clone it into a detached task. Progress is best-effort, so drain
+        // briefly and then abort rather than hanging the run forever.
+        let abort = forwarder.abort_handle();
+        if tokio::time::timeout(Duration::from_millis(100), forwarder)
+            .await
+            .is_err()
+        {
+            abort.abort();
+        }
+    }
     let Some(hooks) = hooks else {
         return result;
     };
@@ -922,6 +1091,10 @@ fn result_message(call: &ToolCall, result: &ToolResult) -> ToolResultMessage {
         duration_ms: result.duration_ms,
         timestamp: now_ms(),
     }
+}
+
+fn elapsed_ms(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 async fn emit(sender: &AgentEventSender, event: AgentEvent) {

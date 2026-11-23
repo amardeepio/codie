@@ -134,6 +134,35 @@ Not: a git branch. codie branches are internal session-tree paths and are unrela
 
 See `SESS-005`, `SESS-006`.
 
+## subagent
+
+A child agent run started by the `task` tool. It has its own transcript, model, turn budget, cancellation token,
+tool subset, and optional session file. It never sees the parent conversation unless the caller includes the
+needed context in the `prompt` argument, and its messages never enter the parent transcript.
+
+Not: a prompt template or a skill. Those expand text in the parent run; a subagent is a separate run.
+
+See `AGENT-014`..`AGENT-027` and `specs/agent/0003-subagent-delegation.md`.
+
+## delegation depth
+
+The number of delegation edges between the root run and the current run. The root has depth 0; its direct
+children have depth 1. `max_depth = 0` allows the root to delegate but forbids grandchildren.
+
+Not: the session tree depth. Session entries have their own depth from the session root.
+
+See `AGENT-019`.
+
+## delegation mode
+
+The per-session pressure to delegate: `off`, `auto`, or `force`. The effective mode for one run also considers
+the prompt's own request or suppression and an optional one-shot override.
+
+Not: the permission decision. Mode controls whether the model is encouraged to use `task`; `SEC-009` controls
+whether the call is allowed.
+
+See `AGENT-028`, `AGENT-029`.
+
 ## Additional terms
 
 - **assistant event stream**: the provider-layer sequence `start -> text/thinking/toolcall deltas -> done|error`.

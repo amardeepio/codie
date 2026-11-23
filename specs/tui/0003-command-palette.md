@@ -2,7 +2,7 @@
 id: SPEC-TUI-003
 title: Command palette and live pickers
 status: implemented
-version: 1.1.0
+version: 1.2.0
 owners: ["@codie-maintainers"]
 requirements: ["TUI-014", "TUI-015", "TUI-016", "TUI-017"]
 ---
@@ -21,9 +21,11 @@ description, `Up`/`Down` and `PageUp`/`PageDown` move the selection with scrolli
 closes without running anything. Selecting a command with optional text inserts `/name ` into the editor.
 Selecting `/update` requests exactly one update check, showing a "Checking for updates…" notice and then either
 the available release or the failure reason; repeating the selection while a check or install is running is
-ignored.
+ignored. List overlays are at most 88 columns wide, show at most 16 item rows, shrink to fit filtered results,
+highlight the selected row across the full inner width, and render descriptions and keyboard hints in foreground text.
 Verification: `crates/codie-tui/src/app.rs::spec_tui_014_slash_opens_a_filterable_command_palette`,
-`crates/codie-tui/src/app.rs::spec_tui_014_selecting_update_from_the_palette_requests_a_check`
+`crates/codie-tui/src/app.rs::spec_tui_014_selecting_update_from_the_palette_requests_a_check`,
+`crates/codie-tui/src/render.rs::spec_tui_014_list_overlay_hugs_results_and_highlights_the_full_row`
 
 **TUI-015 (MUST)** The model picker lists models for the active provider, marks the current model, applies the
 selection to the next request, updates the context window, and persists a model-change entry. The provider picker

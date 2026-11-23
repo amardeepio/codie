@@ -53,6 +53,8 @@ pub enum Command {
     Compact(Option<String>),
     /// Show token, cost, and context usage.
     Usage,
+    /// Inspect or change subagent delegation settings.
+    Subagents(Option<String>),
     /// Invoke a skill with arguments.
     Skill(String, String),
     /// Expand a prompt template with arguments.
@@ -123,6 +125,7 @@ pub fn parse(input: &str) -> Option<Command> {
         "thinking" => Command::Thinking(argument),
         "compact" => Command::Compact(argument),
         "usage" => Command::Usage,
+        "subagents" | "agents" => Command::Subagents(argument),
         "reload" => Command::Reload,
         "init" => Command::Init,
         other => Command::Unknown(other.to_owned()),
@@ -163,6 +166,7 @@ pub fn names() -> &'static [&'static str] {
         "/thinking",
         "/compact",
         "/usage",
+        "/subagents",
         "/reload",
         "/init",
     ]
@@ -258,6 +262,25 @@ mod tests {
         );
         assert_eq!(parse("/logout"), Some(Command::Logout(None)));
         assert_eq!(parse("/auth"), Some(Command::Auth));
+    }
+
+    #[test]
+    #[codie_testkit::spec("TUI-042")]
+    fn spec_tui_042_subagent_command() {
+        assert_eq!(parse("/subagents"), Some(Command::Subagents(None)));
+        assert_eq!(
+            parse("/subagents on"),
+            Some(Command::Subagents(Some("on".to_owned())))
+        );
+        assert_eq!(
+            parse("/subagents force"),
+            Some(Command::Subagents(Some("force".to_owned())))
+        );
+        assert_eq!(
+            parse("/subagents parallel 2"),
+            Some(Command::Subagents(Some("parallel 2".to_owned())))
+        );
+        assert!(names().contains(&"/subagents"));
     }
 
     #[test]

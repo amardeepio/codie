@@ -87,6 +87,8 @@ pub(crate) fn run(args: SessionsArgs, config: &Config) -> Result<u8> {
                             "created_at": summary.created_at,
                             "messages": summary.message_count,
                             "parent_session": summary.parent_session,
+                            "first_user": summary.first_user,
+                            "last_user": summary.last_user,
                         })
                     );
                 }

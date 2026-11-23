@@ -8,22 +8,63 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use codie_ai::{AuthStore, auth_status, provider_env_var};
-use codie_core::{Agent, AgentConfig, AgentEvent, Content, Message, RunStatus, Toolbox};
+use codie_core::{Agent, AgentConfig, AgentEvent, Content, Message, RunStatus};
 use codie_prompt::{PromptInput, build_system_message, load_project_context, load_project_memory};
 use codie_session::Session;
+use codie_subagents::{
+    DelegationIntent, DelegationMode, FORCED_DIRECTIVE, FORCED_NUDGE, SubagentRuntime,
+    detect_intent, effective_mode, mode_directive,
+};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::app::TuiOptions;
 use crate::commands::{Command, parse as parse_command};
-use crate::permissions::{Decision, PermissionBroker, PermissionRequest, PermissionToolbox};
+use crate::permissions::{Decision, PermissionBroker, PermissionRequest};
 
 /// Runs the append-only interface and returns the process exit code.
 pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
     let registry = Arc::clone(&options.registry);
     let (permission_tx, mut permission_rx) = mpsc::unbounded_channel();
     let broker = PermissionBroker::new(permission_tx, options.auto_allowed.clone());
-    let toolbox: Arc<dyn Toolbox> = Arc::new(PermissionToolbox::new(registry.clone(), broker));
+    let mut session = options.session.take();
+    let session_id = session.as_ref().map(|session| session.id().to_owned());
+    let built = crate::subagents::build(crate::subagents::BuildInput {
+        config: options.subagents.clone(),
+        mode: options.subagent_mode,
+        agents: options.customizations.agents().to_vec(),
+        registry,
+        broker,
+        client: Arc::clone(&options.client),
+        prompt: crate::subagents::prompt_input(
+            &options.cwd,
+            options.preamble.clone(),
+            options.append.clone(),
+            &options.customizations,
+        ),
+        session_dir: options.session_dir.clone(),
+        session_id,
+        model: options.model.clone(),
+        known_models: options
+            .models
+            .iter()
+            .filter(|model| model.provider == options.model.provider)
+            .map(|model| model.id.clone())
+            .collect(),
+        thinking: options.thinking,
+    })
+    .map_err(anyhow::Error::msg)?;
+    let toolbox = built.toolbox;
+    let subagent_runtime = built.runtime;
+    let mut subagent_config = built.config.clone();
+    let subagents_available = subagent_runtime.is_some();
+    let initial_subagent_mode = if options.subagents.enabled {
+        options.subagent_mode
+    } else {
+        DelegationMode::Off
+    };
+    options.subagents.enabled = subagents_available;
+    options.subagent_mode = initial_subagent_mode;
     let agent = Arc::new(match options.extensions.hooks() {
         Some(hooks) => Agent::with_hooks(Arc::clone(&options.client), toolbox.clone(), hooks),
         None => Agent::new(Arc::clone(&options.client), toolbox.clone()),
@@ -37,7 +78,6 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
 
     let mut history = options.history.clone();
     let mut last_assistant = String::new();
-    let mut session = options.session.take();
     if !matches!(history.first(), Some(Message::System(_))) {
         let declarations = toolbox.declarations();
         let input = PromptInput {
@@ -92,10 +132,12 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
             &agent,
             &mut history,
             &mut session,
-            &options,
+            &mut options,
             &cancel,
             &mut permission_rx,
             &mut last_assistant,
+            &subagent_runtime,
+            true,
             prompt,
         )
         .await?;
@@ -121,10 +163,12 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
                         &agent,
                         &mut history,
                         &mut session,
-                        &options,
+                        &mut options,
                         &cancel,
                         &mut permission_rx,
                         &mut last_assistant,
+                        &subagent_runtime,
+                        true,
                         line,
                     )
                     .await?;
@@ -136,10 +180,12 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
                             &agent,
                             &mut history,
                             &mut session,
-                            &options,
+                            &mut options,
                             &cancel,
                             &mut permission_rx,
                             &mut last_assistant,
+                            &subagent_runtime,
+                            true,
                             prompt,
                         )
                         .await?;
@@ -159,9 +205,87 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
                 Command::Usage => {
                     println!("Usage details are available in the full-screen interface.")
                 }
+                Command::Subagents(argument) => match crate::subagents::parse_command(
+                    argument.as_deref(),
+                    &subagent_config,
+                    options.subagent_mode,
+                    options.subagent_force_once,
+                    &subagent_runtime
+                        .as_ref()
+                        .map(|runtime| runtime.runs())
+                        .unwrap_or_default(),
+                ) {
+                    crate::subagents::SubagentCommand::Status(text) => println!("{text}"),
+                    crate::subagents::SubagentCommand::Mode { mode, message } => {
+                        options.subagent_mode = mode;
+                        options.subagent_force_once = false;
+                        if let Some(runtime) = &subagent_runtime {
+                            runtime.set_mode(mode);
+                        }
+                        let directive = Message::system(mode_directive(mode), Vec::new());
+                        if let Some(session) = session.as_mut() {
+                            session.append_custom(
+                                "subagent_settings",
+                                serde_json::json!({"mode": mode.as_str(), "force_once": false}),
+                            )?;
+                            session.append_message(&directive)?;
+                        }
+                        history.push(directive);
+                        println!("{message}");
+                    }
+                    crate::subagents::SubagentCommand::Once { message } => {
+                        options.subagent_force_once = true;
+                        if let Some(runtime) = &subagent_runtime {
+                            runtime.set_mode(DelegationMode::Force);
+                        }
+                        println!("{message}");
+                    }
+                    crate::subagents::SubagentCommand::Parallel { limit, message } => {
+                        let applied = subagent_runtime
+                            .as_ref()
+                            .is_some_and(|runtime| runtime.set_max_parallel(limit));
+                        if applied {
+                            subagent_config.max_parallel = limit;
+                            println!("{message}");
+                        } else {
+                            println!(
+                                "Subagent parallelism stays at {}: stop running children first.",
+                                subagent_runtime
+                                    .as_ref()
+                                    .map_or(subagent_config.max_parallel, |runtime| {
+                                        runtime.max_parallel()
+                                    })
+                            );
+                        }
+                    }
+                    crate::subagents::SubagentCommand::Open(index) => println!(
+                        "Subagent {index} transcript opens in the full-screen interface; its session id is listed by /subagents."
+                    ),
+                    crate::subagents::SubagentCommand::Stop(index) => {
+                        let runs = subagent_runtime
+                            .as_ref()
+                            .map(|runtime| runtime.runs())
+                            .unwrap_or_default();
+                        match runs.get(index.saturating_sub(1)) {
+                            Some(run)
+                                if subagent_runtime
+                                    .as_ref()
+                                    .is_some_and(|runtime| runtime.cancel_run(&run.call_id)) =>
+                            {
+                                println!("Stopping subagent {} · {}…", run.agent, run.description);
+                            }
+                            Some(run) => println!(
+                                "Subagent {} · {} is not running.",
+                                run.agent, run.description
+                            ),
+                            None => println!("No subagent run {index}."),
+                        }
+                    }
+                    crate::subagents::SubagentCommand::Error(message) => println!("{message}"),
+                },
                 Command::Help | Command::Hotkeys => {
                     println!(
-                        "/help /quit /stop /usage /new /session /tree /fork /clone /name /export [path] /export html [path] /copy /debug /update /theme /connect [provider] /provider [id] /logout [provider] /auth /model [id] /thinking [level] /compact /skill:<name> /template:<name> /reload /init"
+                        "/help /quit /stop /usage /subagents /new /session /tree /fork /clone /name /export [path] /export html [path] /copy /debug /update /theme /connect [provider] /provider [id] /logout [provider] /auth /model [id] /thinking [level] /compact /skill:<name> /template:<name> /reload /init"
                     )
                 }
                 Command::Theme(argument) => match argument {
@@ -179,11 +303,21 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
                                 options.model.provider = provider.clone();
                                 options.model.model = runtime.default_model.clone();
                                 options.models = runtime.models;
+                                if let Some(window) = model_window(
+                                    &options.models,
+                                    &options.model.provider,
+                                    &options.model.model,
+                                ) {
+                                    options.context_window = window;
+                                }
                                 if let Some(session) = session.as_mut() {
                                     session.append_model_change(
                                         provider.clone(),
                                         runtime.default_model.clone(),
                                     )?;
+                                }
+                                if let Some(persist) = &options.persist_selection {
+                                    persist(&options.model.provider, &options.model.model);
                                 }
                                 session_info.model = Some(runtime.default_model.clone());
                                 println!("Provider: {provider} · model: {}", runtime.default_model);
@@ -229,7 +363,22 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
                 }
                 Command::Model(argument) => {
                     if let Some(model) = argument {
-                        options.model.model = model;
+                        options.model.model.clone_from(&model);
+                        if let Some(window) =
+                            model_window(&options.models, &options.model.provider, &model)
+                        {
+                            options.context_window = window;
+                        }
+                        if let Some(session) = session.as_mut() {
+                            session.append_model_change(
+                                options.model.provider.clone(),
+                                model.clone(),
+                            )?;
+                        }
+                        if let Some(persist) = &options.persist_selection {
+                            persist(&options.model.provider, &options.model.model);
+                        }
+                        session_info.model = Some(model);
                     }
                     println!("Model: {}", options.model.model);
                 }
@@ -480,10 +629,12 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
                             &agent,
                             &mut history,
                             &mut session,
-                            &options,
+                            &mut options,
                             &cancel,
                             &mut permission_rx,
                             &mut last_assistant,
+                            &subagent_runtime,
+                            true,
                             prompt,
                         )
                         .await?;
@@ -498,10 +649,12 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
                                 &agent,
                                 &mut history,
                                 &mut session,
-                                &options,
+                                &mut options,
                                 &cancel,
                                 &mut permission_rx,
                                 &mut last_assistant,
+                                &subagent_runtime,
+                                true,
                                 prompt,
                             )
                             .await?;
@@ -548,10 +701,12 @@ pub(crate) async fn run(mut options: TuiOptions) -> Result<u8> {
             &agent,
             &mut history,
             &mut session,
-            &options,
+            &mut options,
             &cancel,
             &mut permission_rx,
             &mut last_assistant,
+            &subagent_runtime,
+            true,
             line,
         )
         .await?;
@@ -607,10 +762,12 @@ async fn run_prompt(
     agent: &Arc<Agent>,
     history: &mut Vec<Message>,
     session: &mut Option<Session>,
-    options: &TuiOptions,
+    options: &mut TuiOptions,
     cancel: &CancellationToken,
     permission_rx: &mut mpsc::UnboundedReceiver<PermissionRequest>,
     last_assistant: &mut String,
+    runtime: &Option<Arc<SubagentRuntime>>,
+    allow_nudge: bool,
     prompt: String,
 ) -> Result<()> {
     let mut config =
@@ -632,6 +789,27 @@ async fn run_prompt(
         None => prompt,
     };
     println!("\n› {prompt}");
+    let intent = detect_intent(&prompt);
+    let plan = effective_mode(
+        options.subagents.enabled,
+        options.subagent_mode,
+        options.subagent_force_once,
+        intent,
+    );
+    options.subagent_force_once = false;
+    if let Some(runtime) = runtime {
+        runtime.set_mode(plan.mode);
+    }
+    if plan.is_forced() {
+        let directive = Message::system(FORCED_DIRECTIVE, Vec::new());
+        if let Some(session) = session.as_mut() {
+            session.append_message(&directive)?;
+        }
+        history.push(directive);
+        println!("Subagents requested for this run.");
+    } else if intent != DelegationIntent::None {
+        println!("Subagents: {} for this run.", plan.mode.as_str());
+    }
     let expansion = codie_prompt::expand_attachments(&prompt, &options.cwd);
     for error in &expansion.errors {
         println!("warning: {error}");
@@ -641,6 +819,7 @@ async fn run_prompt(
         history.clone(),
         config,
     );
+    let mut had_task = false;
     let mut printed = 0_usize;
     let mut in_text = false;
 
@@ -697,6 +876,9 @@ async fn run_prompt(
                         }
                     }
                     AgentEvent::ToolExecutionStart { tool_name, args, .. } => {
+                        if tool_name == "task" {
+                            had_task = true;
+                        }
                         let summary = args
                             .get("path")
                             .or_else(|| args.get("command"))
@@ -731,6 +913,23 @@ async fn run_prompt(
         if cancel.is_cancelled() {
             break;
         }
+    }
+
+    if allow_nudge && plan.is_forced() && !had_task && !cancel.is_cancelled() {
+        println!("No delegation detected; asking once.");
+        Box::pin(run_prompt(
+            agent,
+            history,
+            session,
+            options,
+            cancel,
+            permission_rx,
+            last_assistant,
+            runtime,
+            false,
+            FORCED_NUDGE.to_owned(),
+        ))
+        .await?;
     }
     Ok(())
 }
@@ -767,4 +966,41 @@ async fn read_line() -> Option<String> {
     .await
     .ok()
     .flatten()
+}
+
+/// Returns the catalog context window for a model on one provider.
+fn model_window(models: &[crate::app::ModelChoice], provider: &str, model: &str) -> Option<u32> {
+    models
+        .iter()
+        .find(|choice| choice.provider == provider && choice.id == model)
+        .map(|choice| choice.context_window)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::ModelChoice;
+
+    fn choice(provider: &str, id: &str, context_window: u32) -> ModelChoice {
+        ModelChoice {
+            provider: provider.to_owned(),
+            id: id.to_owned(),
+            name: id.to_owned(),
+            context_window,
+        }
+    }
+
+    #[test]
+    fn model_window_matches_the_provider_and_model() {
+        let models = vec![
+            choice("deepseek", "flash", 128_000),
+            choice("deepseek", "pro", 200_000),
+            choice("openai", "flash", 64_000),
+        ];
+
+        assert_eq!(model_window(&models, "deepseek", "pro"), Some(200_000));
+        assert_eq!(model_window(&models, "deepseek", "flash"), Some(128_000));
+        assert_eq!(model_window(&models, "openai", "flash"), Some(64_000));
+        assert_eq!(model_window(&models, "deepseek", "missing"), None);
+    }
 }

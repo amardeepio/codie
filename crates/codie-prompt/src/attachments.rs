@@ -281,6 +281,39 @@ fn strip_matching_quotes(text: &str) -> Option<&str> {
     None
 }
 
+/// Validates a client-supplied base64 image and builds an image content block.
+///
+/// Used by RPC clients that paste or drag images rather than referencing a
+/// path. The decoded size is bounded by [`MAX_ATTACHMENT_BYTES`].
+///
+/// # Errors
+///
+/// Returns a human-readable message when the MIME type is not `image/*`, the
+/// payload is not valid base64, is empty, or exceeds the size limit.
+pub fn inline_image(data: &str, mime_type: &str) -> Result<Content, String> {
+    if !mime_type.starts_with("image/") {
+        return Err(format!(
+            "unsupported MIME type `{mime_type}`; expected image/*"
+        ));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .map_err(|error| format!("invalid base64 image: {error}"))?;
+    if bytes.is_empty() {
+        return Err("image attachment is empty".to_owned());
+    }
+    if bytes.len() as u64 > MAX_ATTACHMENT_BYTES {
+        return Err(format!(
+            "image attachment is larger than {} MiB",
+            MAX_ATTACHMENT_BYTES / (1024 * 1024)
+        ));
+    }
+    Ok(Content::Image {
+        data: data.to_owned(),
+        mime_type: mime_type.to_owned(),
+    })
+}
+
 /// Formats a path as an attachment token, quoting it when it contains spaces.
 #[must_use]
 pub fn quote_attachment_path(path: &Path) -> String {

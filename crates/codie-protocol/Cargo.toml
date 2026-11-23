@@ -12,10 +12,12 @@ authors.workspace = true
 [features]
 default = []
 schema = ["dep:schemars"]
+typescript = ["dep:ts-rs"]
 
 [dependencies]
 schemars = { version = "1", features = ["derive"], optional = true }
 serde.workspace = true
+ts-rs = { version = "12", optional = true, features = ["serde-json-impl"] }
 serde_json.workspace = true
 
 [dev-dependencies]

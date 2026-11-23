@@ -34,11 +34,12 @@ pub mod trust;
 
 pub use attachments::{
     Expansion, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, attachment_token_for_path_text,
-    expand_attachments, is_image_path, looks_like_path_text, quote_attachment_path,
+    expand_attachments, inline_image, is_image_path, looks_like_path_text, quote_attachment_path,
     resolve_path_text,
 };
 pub use customization::{
-    Customizations, MAX_RESOURCE_BYTES, MAX_SKILLS, MAX_TEMPLATES, Skill, Template,
+    AgentDefinition, Customizations, MAX_AGENTS, MAX_RESOURCE_BYTES, MAX_SKILLS, MAX_TEMPLATES,
+    Skill, Template,
 };
 pub use instructions::{Instructions, combine_appends, load_instructions};
 pub use memory::{

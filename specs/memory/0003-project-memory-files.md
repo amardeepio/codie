@@ -40,7 +40,7 @@ one-line heading.
 Verification: `crates/codie-tools/tests/project_memory.rs::spec_mem_012_tool_appends_creates_sections_and_dedupes`
 
 **MEM-013 (MUST)** The tool redacts credential-shaped values (`*_KEY`, `*_TOKEN`, `password=`, `Bearer ...`,
-private key blocks) before writing. It refuses a single entry over 1 KiB, a `CODIE.MD` over 32 KiB, and a `PLAN.MD`
+private key blocks) before writing. It refuses a single entry over 7 KiB, a `CODIE.MD` over 32 KiB, and a `PLAN.MD`
 over 128 KiB, and rejects an unknown `file` argument. Writes are atomic through a temporary file and rename.
 Verification: `crates/codie-tools/tests/project_memory.rs::spec_mem_013_tool_redacts_credentials_and_enforces_caps`
 

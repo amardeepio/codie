@@ -52,9 +52,9 @@ providers, and persisted provider/model selection. See the
 
 ## Non-goals for v1.0
 
-Sub-agents, plan mode, multi-agent orchestration, a web or desktop UI, OAuth login, built-in sandboxing, MCP and
-LSP, additional native provider adapters, image generation, and Windows as a tier-1 platform. These are scoped
-in `PLAN.MD` §1.2 and §12.6.
+Plan mode, multi-agent orchestration, a web or desktop UI, OAuth login, built-in sandboxing, MCP and LSP,
+additional native provider adapters, image generation, and Windows as a tier-1 platform. Subagent delegation is
+post-1.0 (`PLAN.MD` §12.7). These are scoped in `PLAN.MD` §1.2, §12.6, and §12.7.
 
 ## Where to go next
 

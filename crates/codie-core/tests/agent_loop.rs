@@ -220,6 +220,7 @@ enum ToolOutcome {
     Text(String),
     Error(String),
     WaitForCancel,
+    Terminate,
 }
 
 struct FakeTool {
@@ -232,6 +233,8 @@ struct FakeTool {
     gate_out: Option<Arc<AtomicBool>>,
     on_execute: Option<Arc<dyn Fn() + Send + Sync>>,
     calls: Arc<AtomicUsize>,
+    active: Arc<AtomicUsize>,
+    max_active: Arc<AtomicUsize>,
 }
 
 impl FakeTool {
@@ -246,12 +249,21 @@ impl FakeTool {
             gate_out: None,
             on_execute: None,
             calls: Arc::new(AtomicUsize::new(0)),
+            active: Arc::new(AtomicUsize::new(0)),
+            max_active: Arc::new(AtomicUsize::new(0)),
         }
     }
 
     fn error(name: &'static str, message: &str) -> Self {
         Self {
             outcome: ToolOutcome::Error(message.to_owned()),
+            ..Self::new(name)
+        }
+    }
+
+    fn terminate(name: &'static str) -> Self {
+        Self {
+            outcome: ToolOutcome::Terminate,
             ..Self::new(name)
         }
     }
@@ -291,6 +303,14 @@ impl FakeTool {
     fn calls(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
     }
+
+    fn max_active(&self) -> usize {
+        self.max_active.load(Ordering::SeqCst)
+    }
+
+    fn active(&self) -> usize {
+        self.active.load(Ordering::SeqCst)
+    }
 }
 
 #[async_trait]
@@ -318,6 +338,8 @@ impl Tool for FakeTool {
         _updates: Option<mpsc::UnboundedSender<ToolProgress>>,
     ) -> ToolResult {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+        self.max_active.fetch_max(active, Ordering::SeqCst);
 
         if let Some(callback) = &self.on_execute {
             callback();
@@ -340,14 +362,17 @@ impl Tool for FakeTool {
             gate.store(true, Ordering::SeqCst);
         }
 
-        match &self.outcome {
+        let result = match &self.outcome {
             ToolOutcome::Text(text) => ToolResult::text(text.clone()),
             ToolOutcome::Error(text) => ToolResult::error(text.clone()),
             ToolOutcome::WaitForCancel => {
                 context.cancel.cancelled().await;
                 ToolResult::error("aborted by cancellation")
             }
-        }
+            ToolOutcome::Terminate => ToolResult::text("stop requested").with_terminate(true),
+        };
+        self.active.fetch_sub(1, Ordering::SeqCst);
+        result
     }
 }
 
@@ -613,6 +638,7 @@ async fn spec_agent_002_assistant_finalized_before_tools() {
         Script::ToolCalls(vec![call("call_1", "read")]),
         text("done"),
     ]));
+    let client: Arc<dyn ChatClient> = client;
     let agent = Agent::new(client, toolbox(vec![read]));
 
     let events = collect_run(agent.run(Message::user("hi"), Vec::new(), run_config())).await;
@@ -1206,6 +1232,7 @@ async fn spec_agent_009_max_turns_enforced() {
     let client = Arc::new(FakeClient::new(vec![
         Script::ToolCalls(vec![call("call_1", "read")]),
         Script::ToolCalls(vec![call("call_2", "read")]),
+        text("wrap-up"),
     ]));
     let agent = Agent::new(
         as_chat_client(&client),
@@ -1217,11 +1244,15 @@ async fn spec_agent_009_max_turns_enforced() {
 
     let events = collect_run(agent.run(Message::user("prompt"), Vec::new(), config)).await;
 
-    assert_eq!(client.request_count(), 2, "at most max_turns requests");
+    assert_eq!(
+        client.request_count(),
+        3,
+        "two normal turns plus one wrap-up request"
+    );
     let (messages, status) = agent_end(&events);
     assert_eq!(status, RunStatus::TurnLimit);
-    assert_eq!(assistant_messages(&messages).len(), 2);
-    assert_eq!(turn_end_count(&events), 2);
+    assert_eq!(assistant_messages(&messages).len(), 3);
+    assert_eq!(turn_end_count(&events), 3);
 }
 
 // ---------------------------------------------------------------------------
@@ -1465,5 +1496,432 @@ async fn spec_agent_012_tool_panic_is_caught() {
             .last()
             .map(|message| message.text()),
         Some("recovered".to_owned())
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Tool progress forwarding
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[spec("AGENT-033")]
+async fn tool_progress_is_forwarded_before_the_end() {
+    struct ProgressTool;
+
+    #[async_trait]
+    impl Tool for ProgressTool {
+        fn name(&self) -> &str {
+            "progress"
+        }
+
+        fn description(&self) -> &str {
+            "emits progress"
+        }
+
+        fn schema(&self) -> Value {
+            json!({"type": "object", "additionalProperties": true})
+        }
+
+        async fn execute(
+            &self,
+            _call: &ToolCall,
+            _context: &ToolContext,
+            updates: Option<mpsc::UnboundedSender<ToolProgress>>,
+        ) -> ToolResult {
+            if let Some(updates) = updates {
+                let _ = updates.send(ToolProgress {
+                    content: vec![Content::text("halfway")],
+                    details: Some(json!({"step": 1})),
+                });
+            }
+            ToolResult::text("finished")
+        }
+    }
+
+    let client = Arc::new(FakeClient::new(vec![
+        Script::ToolCalls(vec![ToolCall {
+            id: "call_1".to_owned(),
+            name: "progress".to_owned(),
+            arguments: json!({}),
+        }]),
+        text("done"),
+    ]));
+    let tool: Arc<dyn Tool> = Arc::new(ProgressTool);
+    let agent = Agent::new(as_chat_client(&client), toolbox(vec![tool]));
+    let events = collect_run(agent.run(Message::user("go"), Vec::new(), run_config())).await;
+
+    let start = events
+        .iter()
+        .position(|event| matches!(event, AgentEvent::ToolExecutionStart { .. }))
+        .expect("start");
+    let update = events
+        .iter()
+        .position(|event| matches!(event, AgentEvent::ToolExecutionUpdate { .. }))
+        .expect("update");
+    let end = events
+        .iter()
+        .position(|event| matches!(event, AgentEvent::ToolExecutionEnd { .. }))
+        .expect("end");
+    assert!(start < update && update < end, "{events:?}");
+
+    match &events[update] {
+        AgentEvent::ToolExecutionUpdate { partial, .. } => {
+            assert_eq!(partial.content[0].as_text(), Some("halfway"));
+            assert_eq!(partial.details.as_ref().unwrap()["step"], 1);
+        }
+        other => panic!("expected update, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tool scheduling bounds, consumer lifetime, and signature preservation
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[spec("AGENT-041")]
+async fn parallel_tool_execution_is_bounded() {
+    let tool = Arc::new(FakeTool::new("slow").with_delay(Duration::from_millis(20)));
+    let calls = (0..12)
+        .map(|index| call(&format!("call_{index}"), "slow"))
+        .collect::<Vec<_>>();
+    let client = Arc::new(FakeClient::new(vec![
+        Script::ToolCalls(calls),
+        text("done"),
+    ]));
+    let agent = Agent::new(as_chat_client(&client), toolbox(vec![tool.clone()]));
+    let mut config = run_config();
+    config.max_parallel_tools = 3;
+
+    let events = collect_run(agent.run(Message::user("go"), Vec::new(), config)).await;
+    let (_, status) = agent_end(&events);
+    assert_eq!(status, RunStatus::Completed);
+    assert_eq!(tool.calls(), 12);
+    assert_eq!(
+        tool.max_active(),
+        3,
+        "at most max_parallel_tools calls may execute at once"
+    );
+}
+
+#[tokio::test]
+#[spec("AGENT-040")]
+async fn dropping_the_consumer_cancels_running_tools() {
+    let started = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&started);
+    let tool = Arc::new(FakeTool::wait_for_cancel("wait").on_execute(move || {
+        flag.store(true, Ordering::SeqCst);
+    }));
+    let client = Arc::new(FakeClient::new(vec![
+        Script::ToolCalls(vec![call("call_1", "wait")]),
+        text("done"),
+    ]));
+    let agent = Agent::new(as_chat_client(&client), toolbox(vec![tool.clone()]));
+    let mut stream = agent.run(Message::user("go"), Vec::new(), run_config());
+
+    while let Some(event) = stream.recv().await {
+        if matches!(event, AgentEvent::ToolExecutionStart { .. }) {
+            break;
+        }
+    }
+    assert!(started.load(Ordering::SeqCst));
+    drop(stream);
+
+    for _ in 0..100 {
+        if tool.active() == 0 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("the tool kept running after the consumer was dropped");
+}
+
+#[tokio::test]
+#[spec("AGENT-033")]
+async fn a_cloned_progress_sender_does_not_hang_the_run() {
+    struct LeakyProgress;
+
+    #[async_trait]
+    impl Tool for LeakyProgress {
+        fn name(&self) -> &str {
+            "leaky"
+        }
+
+        fn description(&self) -> &str {
+            "clones the progress sender"
+        }
+
+        fn schema(&self) -> Value {
+            json!({"type": "object", "additionalProperties": true})
+        }
+
+        async fn execute(
+            &self,
+            _call: &ToolCall,
+            _context: &ToolContext,
+            updates: Option<mpsc::UnboundedSender<ToolProgress>>,
+        ) -> ToolResult {
+            if let Some(updates) = updates {
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    let _ = updates.send(ToolProgress {
+                        content: vec![Content::text("late")],
+                        details: None,
+                    });
+                });
+            }
+            ToolResult::text("done")
+        }
+    }
+
+    let client = Arc::new(FakeClient::new(vec![
+        Script::ToolCalls(vec![call("call_1", "leaky")]),
+        text("done"),
+    ]));
+    let tool: Arc<dyn Tool> = Arc::new(LeakyProgress);
+    let agent = Agent::new(client, toolbox(vec![tool]));
+    let events = tokio::time::timeout(
+        Duration::from_secs(2),
+        collect_run(agent.run(Message::user("go"), Vec::new(), run_config())),
+    )
+    .await
+    .expect("a detached progress sender must not hang the run");
+    let (_, status) = agent_end(&events);
+    assert_eq!(status, RunStatus::Completed);
+}
+
+struct SignedClient {
+    calls: Arc<AtomicUsize>,
+}
+
+impl ChatClient for SignedClient {
+    fn stream(&self, _context: &[Message], _options: &StreamOptions) -> AssistantEventStream {
+        let index = self.calls.fetch_add(1, Ordering::SeqCst);
+        let (stream, sender) = AssistantEventStream::channel(8);
+        tokio::spawn(async move {
+            if index == 0 {
+                let mut partial = AssistantMessage::partial(API, PROVIDER, MODEL);
+                partial.content.push(Content::ToolCall {
+                    id: "signed".to_owned(),
+                    name: "read".to_owned(),
+                    arguments: json!({"path": "src/lib.rs"}),
+                    thought_signature: Some("sig-abc".to_owned()),
+                });
+                sender
+                    .send(AssistantDelta::Start {
+                        partial: partial.clone(),
+                    })
+                    .await;
+                sender
+                    .send(AssistantDelta::ToolCallEnd {
+                        index: 0,
+                        call: ToolCall {
+                            id: "signed".to_owned(),
+                            name: "read".to_owned(),
+                            arguments: json!({"path": "src/lib.rs"}),
+                        },
+                    })
+                    .await;
+                partial.stop_reason = StopReason::ToolUse;
+                sender
+                    .send(AssistantDelta::Done {
+                        reason: StopReason::ToolUse,
+                        message: partial,
+                    })
+                    .await;
+            } else {
+                let mut message = AssistantMessage::partial(API, PROVIDER, MODEL);
+                message.content.push(Content::text("done"));
+                message.stop_reason = StopReason::Stop;
+                sender
+                    .send(AssistantDelta::Done {
+                        reason: StopReason::Stop,
+                        message,
+                    })
+                    .await;
+            }
+        });
+        stream
+    }
+}
+
+#[tokio::test]
+#[spec("AGENT-042")]
+async fn thought_signature_survives_the_agent_loop() {
+    let client = Arc::new(SignedClient {
+        calls: Arc::new(AtomicUsize::new(0)),
+    });
+    let read: Arc<dyn Tool> = Arc::new(FakeTool::new("read"));
+    let agent = Agent::new(client, toolbox(vec![read]));
+    let events = collect_run(agent.run(Message::user("go"), Vec::new(), run_config())).await;
+    let (messages, status) = agent_end(&events);
+    assert_eq!(status, RunStatus::Completed);
+
+    let signature = assistant_messages(&messages)
+        .into_iter()
+        .find(|message| message.tool_calls().len() == 1)
+        .and_then(|message| {
+            message.content.iter().find_map(|block| match block {
+                Content::ToolCall {
+                    thought_signature, ..
+                } => thought_signature.clone(),
+                _ => None,
+            })
+        });
+    assert_eq!(signature.as_deref(), Some("sig-abc"));
+
+    let streamed = events.iter().find_map(|event| match event {
+        AgentEvent::MessageUpdate {
+            message: Message::Assistant(message),
+            ..
+        } if message.tool_calls().len() == 1 => {
+            message.content.iter().find_map(|block| match block {
+                Content::ToolCall {
+                    thought_signature, ..
+                } => thought_signature.clone(),
+                _ => None,
+            })
+        }
+        _ => None,
+    });
+    assert_eq!(
+        streamed.as_deref(),
+        Some("sig-abc"),
+        "a streaming update must not lose the signature"
+    );
+}
+
+#[tokio::test]
+#[spec("AGENT-043")]
+async fn sequential_tools_report_measured_duration() {
+    let tool = Arc::new(
+        FakeTool::new("slow")
+            .with_delay(Duration::from_millis(30))
+            .sequential(),
+    );
+    let client = Arc::new(FakeClient::new(vec![
+        Script::ToolCalls(vec![call("call_1", "slow")]),
+        text("done"),
+    ]));
+    let agent = Agent::new(as_chat_client(&client), toolbox(vec![tool]));
+    let events = collect_run(agent.run(Message::user("go"), Vec::new(), run_config())).await;
+
+    let duration = events
+        .iter()
+        .find_map(|event| match event {
+            AgentEvent::ToolExecutionEnd { duration_ms, .. } => *duration_ms,
+            _ => None,
+        })
+        .expect("tool duration");
+    assert!(
+        duration >= 20,
+        "the sequential path must measure wall time, got {duration}ms"
+    );
+}
+
+#[tokio::test]
+#[spec("AGENT-044")]
+async fn zero_turn_budget_keeps_the_caller_transcript() {
+    let client = Arc::new(FakeClient::new(Vec::new()));
+    let agent = Agent::new(as_chat_client(&client), toolbox(Vec::new()));
+    let mut config = run_config();
+    config.max_turns = 0;
+
+    let events = collect_run(agent.run(
+        Message::user("prompt"),
+        vec![Message::user("earlier")],
+        config,
+    ))
+    .await;
+
+    assert_eq!(client.request_count(), 0);
+    let (messages, status) = agent_end(&events);
+    assert_eq!(status, RunStatus::TurnLimit);
+    let texts = user_texts(&messages);
+    assert!(texts.iter().any(|text| text == "earlier"), "{texts:?}");
+    assert!(texts.iter().any(|text| text == "prompt"), "{texts:?}");
+}
+
+#[tokio::test]
+#[spec("AGENT-045")]
+async fn a_unanimous_terminate_stops_after_the_batch() {
+    let tool = Arc::new(FakeTool::terminate("stop"));
+    let client = Arc::new(FakeClient::new(vec![
+        Script::ToolCalls(vec![call("call_1", "stop")]),
+        text("unused"),
+    ]));
+    let agent = Agent::new(as_chat_client(&client), toolbox(vec![tool]));
+    let events = collect_run(agent.run(Message::user("go"), Vec::new(), run_config())).await;
+
+    assert_eq!(client.request_count(), 1, "no request after termination");
+    let (messages, status) = agent_end(&events);
+    assert_eq!(status, RunStatus::Completed);
+    assert!(
+        messages.iter().any(|message| matches!(
+            message,
+            Message::ToolResult(result) if result.tool_call_id == "call_1"
+        )),
+        "the terminating result stays in the transcript"
+    );
+}
+
+#[tokio::test]
+async fn a_partial_terminate_does_not_stop_the_run() {
+    let stop = Arc::new(FakeTool::terminate("stop"));
+    let read = Arc::new(FakeTool::new("read"));
+    let client = Arc::new(FakeClient::new(vec![
+        Script::ToolCalls(vec![call("call_1", "stop"), call("call_2", "read")]),
+        text("done"),
+    ]));
+    let agent = Agent::new(
+        as_chat_client(&client),
+        toolbox(vec![stop, read as Arc<dyn Tool>]),
+    );
+    let events = collect_run(agent.run(Message::user("go"), Vec::new(), run_config())).await;
+
+    assert_eq!(client.request_count(), 2, "one vote is not unanimous");
+    let (_, status) = agent_end(&events);
+    assert_eq!(status, RunStatus::Completed);
+}
+
+#[tokio::test]
+#[spec("AGENT-047")]
+async fn turn_limit_wrap_up_requests_a_summary_without_tools() {
+    let read: Arc<dyn Tool> = Arc::new(FakeTool::new("read"));
+    let client = Arc::new(FakeClient::new(vec![
+        Script::ToolCalls(vec![call("call_1", "read")]),
+        text("wrapped up"),
+    ]));
+    let agent = Agent::new(as_chat_client(&client), toolbox(vec![read]));
+    let system = Message::system(
+        "system",
+        vec![ToolDecl {
+            name: "read".to_owned(),
+            description: "read".to_owned(),
+            parameters: json!({"type": "object"}),
+        }],
+    );
+    let mut config = run_config();
+    config.max_turns = 1;
+
+    let events = collect_run(agent.run(Message::user("go"), vec![system], config)).await;
+    assert_eq!(client.request_count(), 2, "one turn plus one wrap-up");
+
+    let second = &client.requests()[1];
+    let tools = second
+        .iter()
+        .find_map(|message| match message {
+            Message::System(system) => Some(&system.tools),
+            _ => None,
+        })
+        .expect("system message");
+    assert!(tools.is_empty(), "the wrap-up request must not offer tools");
+
+    let (messages, status) = agent_end(&events);
+    assert_eq!(status, RunStatus::TurnLimit);
+    assert_eq!(
+        assistant_messages(&messages)
+            .last()
+            .map(|message| message.text()),
+        Some("wrapped up".to_owned())
     );
 }

@@ -1,5 +1,15 @@
 {
   "$defs": {
+    "PermissionRequestType": {
+      "description": "The only value of [`RpcPermissionRequest::record_type`].",
+      "oneOf": [
+        {
+          "const": "permission_request",
+          "description": "`permission_request`",
+          "type": "string"
+        }
+      ]
+    },
     "ReadyType": {
       "description": "The only value of [`RpcReady::record_type`].",
       "oneOf": [
@@ -38,9 +48,85 @@
       ],
       "type": "object"
     },
+    "RpcFeature": {
+      "description": "Optional server capabilities advertised in [`RpcReady`].",
+      "oneOf": [
+        {
+          "const": "permissions",
+          "description": "`permission_request` records and `permission_response` commands.",
+          "type": "string"
+        },
+        {
+          "const": "auth",
+          "description": "`auth_status`, `auth_set_key`, and `auth_logout` commands.",
+          "type": "string"
+        },
+        {
+          "const": "catalog",
+          "description": "`get_catalog` command.",
+          "type": "string"
+        },
+        {
+          "const": "config",
+          "description": "`get_config` and `set_config` commands.",
+          "type": "string"
+        },
+        {
+          "const": "attachments",
+          "description": "`prompt` attachments.",
+          "type": "string"
+        }
+      ]
+    },
+    "RpcPermissionRequest": {
+      "description": "A mutating tool call waiting for a client decision.\n\nEmitted only after the client sends [`RpcCommand::SetPermissionMode`] with\n`ask` or `allow`; version 1 clients never receive it.",
+      "properties": {
+        "arguments": {
+          "description": "Parsed tool arguments."
+        },
+        "id": {
+          "description": "Identifier to send back in [`RpcCommand::PermissionResponse`].",
+          "type": "string"
+        },
+        "tool": {
+          "description": "Tool name, for example `edit` or `bash`.",
+          "type": "string"
+        },
+        "tool_call_id": {
+          "description": "Identifier of the tool call being authorized.",
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/PermissionRequestType",
+          "description": "Discriminator; always `permission_request`."
+        },
+        "version": {
+          "description": "Protocol version.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "type",
+        "version",
+        "id",
+        "tool_call_id",
+        "tool",
+        "arguments"
+      ],
+      "type": "object"
+    },
     "RpcReady": {
       "description": "First record emitted by the server, before any session header.",
       "properties": {
+        "features": {
+          "description": "Optional capabilities this server implements. Absent in version 1.",
+          "items": {
+            "$ref": "#/$defs/RpcFeature"
+          },
+          "type": "array"
+        },
         "type": {
           "$ref": "#/$defs/ReadyType",
           "description": "Discriminator; always `rpc_ready`."
@@ -199,6 +285,10 @@
     {
       "$ref": "#/$defs/RpcSessionHeader",
       "description": "Session header."
+    },
+    {
+      "$ref": "#/$defs/RpcPermissionRequest",
+      "description": "Permission request."
     },
     {
       "$ref": "#/$defs/RpcResponse",

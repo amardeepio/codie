@@ -2,9 +2,9 @@
 id: SPEC-TUI-001
 title: Interactive terminal interface
 status: accepted
-version: 1.1.0
+version: 2.0.0
 owners: ["@codie-maintainers"]
-requirements: ["TUI-001", "TUI-002", "TUI-003", "TUI-004", "TUI-005", "TUI-006", "TUI-007", "TUI-008", "TUI-009", "TUI-010", "TUI-030"]
+requirements: ["TUI-001", "TUI-002", "TUI-003", "TUI-004", "TUI-005", "TUI-006", "TUI-007", "TUI-008", "TUI-009", "TUI-010", "TUI-030", "TUI-039"]
 ---
 
 # Context
@@ -14,8 +14,8 @@ assistant output, tool blocks, a footer, themes, slash commands, steering, keybi
 
 # Requirements
 
-**TUI-001 (MUST)** `full` mode uses the alternate screen with a scrolling transcript, a fixed editor dock, and a one-line footer; `inline` mode renders the same layout without entering the alternate screen.
-Verification: `crates/codie-tui/src/render.rs::spec_tui_001_fixed_editor_and_footer`
+**TUI-001 (MUST)** `full` mode uses the alternate screen with a scrolling transcript, a fixed editor dock, and a responsive footer; `inline` mode renders the same layout without entering the alternate screen. The footer uses one row at widths of 80 columns or more and separate location/status rows below 80 columns.
+Verification: `crates/codie-tui/src/render.rs::spec_tui_001_fixed_editor_and_footer`, `crates/codie-tui/src/render.rs::spec_tui_001_narrow_footer_uses_two_rows`
 
 **TUI-002 (MUST)** Assistant streaming replaces the cumulative message text in place rather than appending duplicates, and rendering is coalesced by a tick so the agent task is never blocked by the UI.
 Verification: `crates/codie-tui/src/app.rs::spec_tui_002_streaming_updates_replace_text`
@@ -29,8 +29,8 @@ Verification: `crates/codie-tui/src/markdown.rs::spec_tui_004_headings_lists_and
 **TUI-005 (MUST)** Tool calls render as stateful blocks with running/success/error states and a compact summary. `edit` results show a side-by-side, line-numbered diff with added and removed rows tinted, and `write` results show the written file with line numbers and syntax highlighting. Rich bodies are visible by default, capped at a preview, and `Ctrl+O` toggles the full body.
 Verification: `crates/codie-tui/src/transcript.rs::tool_blocks_transition_and_expand`, `crates/codie-tui/src/render.rs::edit_results_render_a_side_by_side_diff`
 
-**TUI-006 (MUST)** The footer shows the working directory, git branch when present, model, thinking level, tokens, cost, context estimate, and session identifier.
-Verification: `crates/codie-tui/src/render.rs::empty_state_and_footer_render`
+**TUI-006 (MUST)** The footer shows the working directory, git branch when present, model, tokens, cost, and context estimate; at widths of 120 columns or more it also shows thinking level, throughput when available, and session identifier.
+Verification: `crates/codie-tui/src/render.rs::empty_state_and_footer_render`, `crates/codie-tui/src/render.rs::spec_tui_006_medium_footer_drops_metadata_before_essentials`
 
 **TUI-007 (MUST)** Keybindings are configurable in `keybindings.toml`; unbinding is supported with an empty key list, and unknown actions or keys are rejected with an error.
 Verification: `crates/codie-tui/src/keybindings.rs::spec_tui_007_default_bindings_and_unbind`

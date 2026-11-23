@@ -113,6 +113,7 @@ snake_case so failures are readable without the macro.
 | [`SPEC-MSG-001`](message/0001-message-model.md) — Message model | `MSG-001`..`MSG-010`, `MSG-040`..`MSG-044` | accepted | 1 |
 | [`SPEC-AGENT-001`](agent/0001-turn-loop.md) — Agent turn loop | `AGENT-001`..`AGENT-012` | accepted | 1 |
 | [`SPEC-AGENT-002`](agent/0002-continuation.md) — Transcript continuation | `AGENT-013` | implemented | 3 |
+| [`SPEC-AGENT-003`](agent/0003-subagent-delegation.md) — Subagent delegation | `AGENT-014`..`AGENT-030` | draft | 8 |
 | [`SPEC-PROV-001`](provider/0001-openai-compatible.md) — OpenAI-compatible provider | `PROV-001`..`PROV-005`, `PROV-010`..`PROV-022` | accepted | 1 |
 | [`SPEC-PROV-002`](provider/0002-deepseek.md) — DeepSeek profile | none (profile) | accepted | 1 |
 | [`SPEC-PROV-003`](provider/0003-openrouter.md) — OpenRouter profile | none (profile) | accepted | 1 |
@@ -124,15 +125,15 @@ snake_case so failures are readable without the macro.
 | [`SPEC-SESS-001`](session/0001-jsonl-format.md) — Session JSONL v1 | `SESS-001`..`SESS-009` | accepted | 1 |
 | [`SPEC-SESS-002`](session/0002-tree-operations.md) — Session tree operations | `SESS-010`..`SESS-025` | implemented | 3 |
 | [`SPEC-CTX-001`](context/0001-compaction.md) — Context compaction | `CTX-001`..`CTX-007` | implemented | 3 |
-| [`SPEC-PRMPT-001`](prompt/0001-system-prompt.md) — System prompt | `PRMPT-001`..`PRMPT-008` | accepted | 1 |
+| [`SPEC-PRMPT-001`](prompt/0001-system-prompt.md) — System prompt | `PRMPT-001`..`PRMPT-008`, `PRMPT-013`, `PRMPT-014` | accepted | 1 |
 | [`SPEC-PRMPT-002`](prompt/0004-instructions-and-attachments.md) — System instructions and attachments | `PRMPT-009`..`PRMPT-011` | implemented | 4 |
 | [`SPEC-SKILL-001`](prompt/0002-skills.md) — Skills | `SKILL-001`..`SKILL-004` | implemented | 4 |
 | [`SPEC-TMPL-001`](prompt/0003-templates.md) — Prompt templates | `TMPL-001`..`TMPL-003` | implemented | 4 |
-| [`SPEC-CLI-001`](cli/0001-cli-surface.md) — CLI surface | `CLI-001`..`CLI-008` | implemented | 1, 6 |
+| [`SPEC-CLI-001`](cli/0001-cli-surface.md) — CLI surface | `CLI-001`..`CLI-008`, `CLI-012`, `CLI-013` | implemented | 1, 6 |
 | [`SPEC-CLI-002`](cli/0002-windows-preview.md) — Windows x64 preview packaging and install | `CLI-009`..`CLI-011` | implemented | 7 |
 | [`SPEC-PROTO-001`](protocol/0001-json-events.md) — JSON events | `PROTO-001`, `PROTO-002`, `PROTO-004`, `PROTO-005` | accepted | 1 |
 | [`SPEC-PROTO-002`](protocol/0002-rpc.md) — RPC mode | `PROTO-003`, `PROTO-006` | implemented | 5 |
-| [`SPEC-SEC-001`](security/0001-permissions.md) — Permissions | `SEC-001`..`SEC-006` | accepted | 1 |
+| [`SPEC-SEC-001`](security/0001-permissions.md) — Permissions | `SEC-001`..`SEC-006`, `SEC-009` | accepted | 1 |
 | [`SPEC-EXT-001`](extensions/0001-jsonrpc-hooks.md) — Out-of-process extensions | `EXT-001`..`EXT-016` | implemented | 6 |
 | [`SPEC-SEC-002`](security/0002-trust.md) — Project trust | `TRUST-001`..`TRUST-004` | implemented | 4 |
 | [`SPEC-TUI-001`](tui/0001-layout-and-rendering.md) — Interactive terminal | `TUI-001`..`TUI-010` | accepted | 2 |
@@ -141,6 +142,7 @@ snake_case so failures are readable without the macro.
 | [`SPEC-TUI-004`](tui/0004-permission-mode.md) — Permission choices and full access | `TUI-018`, `TUI-019` | implemented | 3 |
 | [`SPEC-TUI-005`](tui/0005-running-indicators.md) — Running indicators, reasoning, stopping, and scrolling | `TUI-020`..`TUI-023` | implemented | 4 |
 | [`SPEC-TUI-006`](tui/0006-navigation-and-details.md) — Context, permissions, tool navigation, turns, and session preview | `TUI-024`..`TUI-028` | implemented | 4 |
+| [`SPEC-TUI-010`](tui/0010-subagent-runs.md) — Subagent runs and delegation controls | `TUI-040`..`TUI-043` | draft | 8 |
 
 `SEC-007`/`SEC-008` (project trust and approval prompts) are canonical in `specs/security/0002-trust.md`. The
 full planned index is in `PLAN.MD` Appendix D.

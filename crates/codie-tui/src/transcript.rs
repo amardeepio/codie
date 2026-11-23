@@ -31,6 +31,10 @@ pub struct ToolBlock {
     pub output: String,
     /// Optional structured render hint from an extension.
     pub render: Option<codie_protocol::ext::ExtRenderHint>,
+    /// Host-only structured details from the final result or the latest update.
+    pub details: Option<Value>,
+    /// Latest one-line progress label while the call runs.
+    pub progress: Option<String>,
     /// Whether the full output is visible.
     pub expanded: bool,
     /// When the call started, for the live elapsed indicator.
@@ -116,12 +120,20 @@ pub enum Entry {
 #[derive(Debug, Clone, Default)]
 pub struct Transcript {
     entries: Vec<Entry>,
+    /// One revision per entry, aligned with `entries`, for layout caching.
+    entry_revisions: Vec<u64>,
     scroll: u16,
     follow: bool,
     max_scroll: u16,
     revision: u64,
+    /// Entries whose cached layout is stale.
+    dirty_entries: HashSet<usize>,
+    /// Bumped when collapse state changes the layout of existing entries.
+    layout_generation: u64,
     collapsed_turns: HashSet<usize>,
     turn_starts: HashSet<usize>,
+    /// Turn start indices in increasing order, for turn lookup.
+    turn_order: Vec<usize>,
 }
 
 impl Transcript {
@@ -130,12 +142,16 @@ impl Transcript {
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
+            entry_revisions: Vec::new(),
             scroll: 0,
             follow: true,
             max_scroll: 0,
             revision: 0,
+            dirty_entries: HashSet::new(),
+            layout_generation: 0,
             collapsed_turns: HashSet::new(),
             turn_starts: HashSet::new(),
+            turn_order: Vec::new(),
         }
     }
 
@@ -177,47 +193,120 @@ impl Transcript {
         self.revision = self.revision.wrapping_add(1);
     }
 
+    /// Bumps the revision of one entry so its cached layout is rebuilt.
+    ///
+    /// Revisions come from the global counter so entries created after a
+    /// `clear` can never collide with a cache from the previous transcript.
+    fn touch_entry(&mut self, index: usize) {
+        self.touch();
+        if let Some(revision) = self.entry_revisions.get_mut(index) {
+            *revision = self.revision;
+        }
+        self.mark_dirty(index);
+    }
+
+    /// Appends an entry with a fresh revision.
+    fn push_entry(&mut self, entry: Entry) -> usize {
+        self.touch();
+        self.entries.push(entry);
+        self.entry_revisions.push(self.revision);
+        self.follow = true;
+        let index = self.entries.len() - 1;
+        self.mark_dirty(index);
+        index
+    }
+
+    /// Marks one entry, and its collapsed turn label, for re-layout.
+    fn mark_dirty(&mut self, index: usize) {
+        self.dirty_entries.insert(index);
+        if self.collapsed_turns.is_empty() {
+            return;
+        }
+        if let Some(start) = self.turn_start_of(index)
+            && start != index
+            && self.collapsed_turns.contains(&start)
+        {
+            if let Some(revision) = self.entry_revisions.get_mut(start) {
+                *revision = self.revision;
+            }
+            self.dirty_entries.insert(start);
+        }
+    }
+
+    /// Returns the start of the turn containing `index`.
+    fn turn_start_of(&self, index: usize) -> Option<usize> {
+        let position = self.turn_order.partition_point(|&start| start <= index);
+        position
+            .checked_sub(1)
+            .map(|position| self.turn_order[position])
+    }
+
+    /// Bumps the layout generation so every cached entry is rebuilt.
+    fn touch_layout(&mut self) {
+        self.layout_generation = self.layout_generation.wrapping_add(1);
+        self.touch();
+    }
+
+    /// Returns the revision of one entry, for layout caching.
+    #[must_use]
+    pub(crate) fn entry_revision(&self, index: usize) -> u64 {
+        self.entry_revisions.get(index).copied().unwrap_or_default()
+    }
+
+    /// Returns the layout generation, which changes when turns collapse.
+    #[must_use]
+    pub(crate) const fn layout_generation(&self) -> u64 {
+        self.layout_generation
+    }
+
+    /// Takes the entries whose cached layout is stale.
+    pub(crate) fn take_dirty(&mut self) -> Vec<usize> {
+        self.dirty_entries.drain().collect()
+    }
+
+    /// Returns true when `index` is hidden inside an earlier collapsed turn.
+    #[must_use]
+    pub(crate) fn is_skipped(&self, index: usize) -> bool {
+        self.turn_start_of(index)
+            .filter(|&start| start != index)
+            .is_some_and(|start| self.collapsed_turns.contains(&start))
+    }
+
     /// Adds a new user turn and folds every earlier turn.
     pub fn push_user(&mut self, text: impl Into<String>) {
+        let folded = !self.turn_starts.is_empty();
         self.collapsed_turns
             .extend(self.turn_starts.iter().copied());
         let index = self.entries.len();
-        self.entries.push(Entry::User(text.into()));
+        self.push_entry(Entry::User(text.into()));
         self.turn_starts.insert(index);
-        self.follow = true;
-        self.touch();
+        self.turn_order.push(index);
+        if folded {
+            self.touch_layout();
+        }
     }
 
     /// Adds a steering or follow-up message without starting a new turn.
     pub fn push_steering(&mut self, text: impl Into<String>) {
-        self.entries.push(Entry::User(text.into()));
-        self.follow = true;
-        self.touch();
+        self.push_entry(Entry::User(text.into()));
     }
 
     /// Adds an informational line.
     pub fn push_info(&mut self, text: impl Into<String>) {
-        self.entries.push(Entry::Info(text.into()));
-        self.follow = true;
-        self.touch();
+        self.push_entry(Entry::Info(text.into()));
     }
 
     /// Adds an error line.
     pub fn push_error(&mut self, text: impl Into<String>) {
-        self.entries.push(Entry::Error(text.into()));
-        self.follow = true;
-        self.touch();
+        self.push_entry(Entry::Error(text.into()));
     }
 
     /// Starts a streaming assistant entry and returns its index.
     pub fn start_assistant(&mut self) -> usize {
-        self.entries.push(Entry::Assistant(AssistantEntry {
+        self.push_entry(Entry::Assistant(AssistantEntry {
             streaming: true,
             ..AssistantEntry::default()
-        }));
-        self.follow = true;
-        self.touch();
-        self.entries.len() - 1
+        }))
     }
 
     /// Appends visible text to the streaming assistant entry.
@@ -225,7 +314,7 @@ impl Transcript {
         if let Some(Entry::Assistant(assistant)) = self.entries.last_mut() {
             assistant.text.push_str(text);
             self.follow = true;
-            self.touch();
+            self.touch_entry(self.entries.len() - 1);
         }
     }
 
@@ -234,7 +323,7 @@ impl Transcript {
         if let Some(Entry::Assistant(assistant)) = self.entries.last_mut() {
             assistant.text = text;
             self.follow = true;
-            self.touch();
+            self.touch_entry(self.entries.len() - 1);
         }
     }
 
@@ -243,7 +332,7 @@ impl Transcript {
         if let Some(Entry::Assistant(assistant)) = self.entries.last_mut() {
             assistant.thinking.push_str(text);
             self.follow = true;
-            self.touch();
+            self.touch_entry(self.entries.len() - 1);
         }
     }
 
@@ -252,7 +341,7 @@ impl Transcript {
         if let Some(Entry::Assistant(assistant)) = self.entries.last_mut() {
             assistant.thinking = text;
             self.follow = true;
-            self.touch();
+            self.touch_entry(self.entries.len() - 1);
         }
     }
 
@@ -260,7 +349,7 @@ impl Transcript {
     pub fn finish_assistant(&mut self) {
         if let Some(Entry::Assistant(assistant)) = self.entries.last_mut() {
             assistant.streaming = false;
-            self.touch();
+            self.touch_entry(self.entries.len() - 1);
         }
     }
 
@@ -268,7 +357,7 @@ impl Transcript {
     pub fn toggle_thinking(&mut self, index: usize) -> bool {
         if let Some(Entry::Assistant(assistant)) = self.entries.get_mut(index) {
             assistant.thinking_expanded = !assistant.thinking_expanded;
-            self.touch();
+            self.touch_entry(index);
             true
         } else {
             false
@@ -279,17 +368,18 @@ impl Transcript {
     ///
     /// Returns true when at least one panel was open.
     pub fn collapse_thinking(&mut self) -> bool {
-        let mut collapsed = false;
-        for entry in &mut self.entries {
+        let mut changed = Vec::new();
+        for (index, entry) in self.entries.iter_mut().enumerate() {
             if let Entry::Assistant(assistant) = entry
                 && assistant.thinking_expanded
             {
                 assistant.thinking_expanded = false;
-                collapsed = true;
+                changed.push(index);
             }
         }
-        if collapsed {
-            self.touch();
+        let collapsed = !changed.is_empty();
+        for index in changed {
+            self.touch_entry(index);
         }
         collapsed
     }
@@ -309,18 +399,18 @@ impl Transcript {
 
     /// Starts a tool block.
     pub fn tool_start(&mut self, id: String, name: String, arguments: Value) {
-        self.entries.push(Entry::Tool(ToolBlock {
+        self.push_entry(Entry::Tool(ToolBlock {
             id,
             name,
             arguments,
             status: ToolStatus::Running,
             output: String::new(),
             render: None,
+            details: None,
+            progress: None,
             expanded: false,
             started: Some(Instant::now()),
         }));
-        self.follow = true;
-        self.touch();
     }
 
     /// Returns the most recent tool that is still running.
@@ -339,11 +429,19 @@ impl Transcript {
         output: String,
         is_error: bool,
         render: Option<codie_protocol::ext::ExtRenderHint>,
+        details: Option<Value>,
     ) {
-        if let Some(block) = self.entries.iter_mut().rev().find_map(|entry| match entry {
-            Entry::Tool(block) if block.id == id => Some(block),
-            _ => None,
-        }) {
+        let Some(index) = self
+            .entries
+            .iter()
+            .rposition(|entry| matches!(entry, Entry::Tool(block) if block.id == id))
+        else {
+            return;
+        };
+        {
+            let Some(Entry::Tool(block)) = self.entries.get_mut(index) else {
+                return;
+            };
             block.status = if is_error {
                 ToolStatus::Error
             } else {
@@ -351,21 +449,49 @@ impl Transcript {
             };
             block.output = output;
             block.render = render;
-            self.follow = true;
-            self.touch();
+            block.details = details;
+            block.progress = None;
         }
+        self.follow = true;
+        self.touch_entry(index);
+    }
+
+    /// Records a one-line progress update for a running tool.
+    pub fn tool_progress(&mut self, id: &str, label: String, details: Option<Value>) {
+        let Some(index) = self
+            .entries
+            .iter()
+            .rposition(|entry| matches!(entry, Entry::Tool(block) if block.id == id))
+        else {
+            return;
+        };
+        {
+            let Some(Entry::Tool(block)) = self.entries.get_mut(index) else {
+                return;
+            };
+            block.progress = Some(label);
+            if details.is_some() {
+                block.details = details;
+            }
+        }
+        self.follow = true;
+        self.touch_entry(index);
     }
 
     /// Toggles the most recent tool block.
     pub fn toggle_last_tool(&mut self) -> bool {
-        for entry in self.entries.iter_mut().rev() {
-            if let Entry::Tool(block) = entry {
-                block.expanded = !block.expanded;
-                self.touch();
-                return true;
-            }
+        let Some(index) = self
+            .entries
+            .iter()
+            .rposition(|entry| matches!(entry, Entry::Tool(_)))
+        else {
+            return false;
+        };
+        if let Some(Entry::Tool(block)) = self.entries.get_mut(index) {
+            block.expanded = !block.expanded;
         }
-        false
+        self.touch_entry(index);
+        true
     }
 
     /// Expands every tool block, or collapses them when all are expanded.
@@ -382,12 +508,16 @@ impl Transcript {
             .entries
             .iter()
             .any(|entry| matches!(entry, Entry::Tool(block) if !block.expanded));
-        for entry in &mut self.entries {
+        let mut changed = Vec::new();
+        for (index, entry) in self.entries.iter_mut().enumerate() {
             if let Entry::Tool(block) = entry {
                 block.expanded = expand;
+                changed.push(index);
             }
         }
-        self.touch();
+        for index in changed {
+            self.touch_entry(index);
+        }
         true
     }
 
@@ -395,7 +525,7 @@ impl Transcript {
     pub fn toggle_tool(&mut self, index: usize) -> bool {
         if let Some(Entry::Tool(block)) = self.entries.get_mut(index) {
             block.expanded = !block.expanded;
-            self.touch();
+            self.touch_entry(index);
             true
         } else {
             false
@@ -422,7 +552,7 @@ impl Transcript {
         if !self.collapsed_turns.insert(index) {
             self.collapsed_turns.remove(&index);
         }
-        self.touch();
+        self.touch_layout();
         true
     }
 
@@ -442,7 +572,7 @@ impl Transcript {
                 self.collapsed_turns.insert(index);
             }
         }
-        self.touch();
+        self.touch_layout();
         true
     }
 
@@ -484,12 +614,15 @@ impl Transcript {
     /// Clears every entry.
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.entry_revisions.clear();
+        self.dirty_entries.clear();
         self.scroll = 0;
         self.follow = true;
         self.max_scroll = 0;
         self.collapsed_turns.clear();
         self.turn_starts.clear();
-        self.touch();
+        self.turn_order.clear();
+        self.touch_layout();
     }
 
     /// Returns true when there is no content.
@@ -542,7 +675,7 @@ mod tests {
         assert_eq!(running.name, "bash");
         assert!(running.elapsed_label().is_some());
 
-        transcript.tool_end("call_1", "ok".into(), false, None);
+        transcript.tool_end("call_1", "ok".into(), false, None, None);
         assert!(transcript.running_tool().is_none());
     }
 
@@ -555,7 +688,7 @@ mod tests {
             "edit".into(),
             json!({"path": "src/lib.rs"}),
         );
-        transcript.tool_end("call_1", "ok".into(), false, None);
+        transcript.tool_end("call_1", "ok".into(), false, None, None);
         assert!(matches!(
             &transcript.entries()[0],
             Entry::Tool(block)
@@ -625,5 +758,29 @@ mod tests {
         assert!(!transcript.is_following());
         transcript.scroll_to_bottom();
         assert!(transcript.is_following());
+    }
+
+    #[test]
+    fn only_changed_entries_are_marked_dirty() {
+        let mut transcript = Transcript::new();
+        transcript.push_user("first");
+        transcript.start_assistant();
+        transcript.set_text("answer".into());
+        let initial = transcript.take_dirty();
+        assert!(initial.contains(&0));
+        assert!(initial.contains(&1));
+
+        transcript.set_text("updated".into());
+        assert_eq!(transcript.take_dirty(), vec![1]);
+
+        transcript.push_user("second");
+        assert!(transcript.is_skipped(1));
+        assert!(transcript.take_dirty().contains(&2));
+
+        // A change inside a folded turn must refresh its summary row too.
+        assert!(transcript.toggle_thinking(1));
+        let dirty = transcript.take_dirty();
+        assert!(dirty.contains(&0), "collapsed label must be rebuilt");
+        assert!(dirty.contains(&1));
     }
 }
