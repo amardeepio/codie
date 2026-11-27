@@ -11,7 +11,15 @@ that major series, with migrations applied on read.
 
 ### Added
 
-- Nothing yet.
+- Desktop subagent delegation. The desktop app starts the RPC sidecar with delegation enabled, renders
+  `task` calls as dedicated cards with live turn/activity and final cost/session details, and adds
+  inspector plus command-palette controls for `off`, `auto`, and `force`. A running child can be
+  cancelled, its session opened, and child sessions are badged in the sidebar. Child permission
+  requests now name the asking agent and depth, and `allow_always` is scoped to that agent type
+  (`AGENT-034`, `PROTO-013`).
+- RPC commands `get_subagents`, `set_subagents`, and `cancel_subagent`, with delegated usage included
+  in `get_state` totals. The sidecar now wires subagents into `--mode rpc` when `[subagents] enabled`
+  or `--subagents` is set.
 
 ### Changed
 
@@ -19,7 +27,9 @@ that major series, with migrations applied on read.
 
 ### Fixed
 
-- Nothing yet.
+- RPC sessions now declare `task` in the model-visible system prompt when delegation is enabled.
+  Resumed sessions whose persisted prompt predates delegation are repaired in memory before the
+  first request, so the desktop's subagent tool is no longer invisible to the model.
 
 ### Removed
 

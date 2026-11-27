@@ -6,7 +6,8 @@
 //! to its root as a transcript.
 //!
 //! Persistence is lazy (SESS-002): [`Session::create`] prepares the session
-//! directory but the file appears only when the first message is appended.
+//! directory but the file appears only when the first conversation message is
+//! appended. A session that only holds the system prompt leaves no file behind.
 //! Format version 1 is the only version this build writes or accepts; newer
 //! versions are refused with a clear error (SESS-007).
 

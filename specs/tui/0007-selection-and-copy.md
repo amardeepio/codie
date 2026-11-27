@@ -59,5 +59,7 @@ of scope. `/copy` continues to target the last assistant message only.
 
 # Security and performance
 
-Selection reads only cells already on screen and never re-reads the session file. Clipboard writes inherit the
-existing `copy_to_clipboard` behavior and run once per release, not per frame.
+Selection reads only cells already on screen and never re-reads the session file. `render::draw` performs no I/O:
+it captures the selected text into `App::pending_copy`, and the event loop copies it on a blocking task, so a
+slow, missing, or hung clipboard command never blocks rendering or input. Clipboard writes run once per release,
+not per frame, and every helper is killed after a two-second timeout.

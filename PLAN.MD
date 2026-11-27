@@ -10,7 +10,7 @@
 | Reference implementation | [`earendil-works/pi`](https://github.com/earendil-works/pi) (TypeScript, MIT) |
 | Target language | Rust (edition 2024, MSRV pinned in `rust-toolchain.toml`) |
 | Initial providers | **OpenRouter**, **DeepSeek** (HTTP API, API-key auth only) |
-| License | Dual MIT OR Apache-2.0 |
+| License | MIT |
 | Development model | Spec-driven, phase-gated, trunk-based, every phase shippable |
 
 > This document is the single source of truth for *what* we build and *why*. Normative behavior lives in
@@ -1067,8 +1067,8 @@ Deliverables:
 - Spec framework: `specs/` tree, template, `xtask spec-check`, ADR/RFC templates.
 - CI: one `cargo build --workspace --all-targets` job on macOS x64. Formatting, linting, tests,
   spec-check, docs, machete, and deny run locally via `cargo xtask ci` and before releases.
-- OSS files: `README.md`, `LICENSE-MIT`, `LICENSE-APACHE`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`,
-  `SECURITY.md`, `CHANGELOG.md`, issue/PR templates, `docs/` skeleton.
+- OSS files: `README.md`, `LICENSE-MIT`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`,
+  `CHANGELOG.md`, issue/PR templates, `docs/` skeleton.
 - `codie-testkit`: `FakeProvider` (scripted SSE), temp-home harness, `#[spec]` macro, snapshot helpers.
 
 Exit criteria:
@@ -1408,7 +1408,6 @@ codie/
 ├── CODE_OF_CONDUCT.md
 ├── SECURITY.md
 ├── LICENSE-MIT
-├── LICENSE-APACHE
 ├── crates/
 │   ├── codie-core/
 │   ├── codie-ai/
@@ -1582,7 +1581,7 @@ them.
 | # | Decision | Proposed | Alternatives |
 |---|---|---|---|
 | D-1 | Project name | **`codie` — confirmed 2026-11-11** | `tenon`, `relay`, `forge` |
-| D-2 | License | MIT OR Apache-2.0 | MIT only |
+| D-2 | License | **MIT — confirmed** | Apache-2.0 (rejected) |
 | D-3 | Config format | TOML | JSON + schema |
 | D-4 | TUI framework | ratatui + crossterm | custom renderer (pi-style) |
 | D-5 | Extension model | **out-of-process JSON-RPC — confirmed 2026-11-11** | embedded Rhai/Lua/WASM |

@@ -10,7 +10,7 @@
 //! on a channel and resolves each one with a oneshot reply. Cancelling the run
 //! or dropping the receiver denies the call.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -29,6 +29,10 @@ pub(crate) struct PermissionPrompt {
     pub(crate) tool: String,
     pub(crate) tool_call_id: String,
     pub(crate) arguments: Value,
+    /// Agent type that owns the call; `None` for the root run.
+    pub(crate) agent: Option<String>,
+    /// Delegation depth of the calling run; `0` for the root run.
+    pub(crate) depth: usize,
     pub(crate) reply: oneshot::Sender<PermissionDecision>,
 }
 
@@ -59,8 +63,10 @@ pub(crate) struct PermissionGate {
     /// Tools pre-approved by configuration or `--allow`; replaced by
     /// `set_config allow`.
     configured: Arc<Mutex<HashSet<String>>>,
-    /// Tools approved with `allow_always` during this session; never revoked.
-    granted: Arc<Mutex<HashSet<String>>>,
+    /// Tools approved with `allow_always`, scoped to the asking agent type so a
+    /// child's approval never grants the same tool to the root or a sibling
+    /// persona (`AGENT-034`).
+    granted: Arc<Mutex<HashMap<Option<String>, HashSet<String>>>>,
     mode: Arc<AtomicU8>,
 }
 
@@ -73,7 +79,7 @@ impl PermissionGate {
         Self {
             sender,
             configured: Arc::new(Mutex::new(allowed.into_iter().collect())),
-            granted: Arc::new(Mutex::new(HashSet::new())),
+            granted: Arc::new(Mutex::new(HashMap::new())),
             mode: Arc::new(AtomicU8::new(MODE_HEADLESS)),
         }
     }
@@ -93,24 +99,28 @@ impl PermissionGate {
         }
     }
 
-    /// Returns true when `tool` may run without asking.
-    pub(crate) fn is_allowed(&self, tool: &str) -> bool {
+    /// Returns true when `tool` may run without asking for `agent`.
+    pub(crate) fn is_allowed(&self, tool: &str, agent: Option<&str>) -> bool {
         self.mode() == PermissionMode::Allow
             || is_read_only(tool)
             || self
                 .configured
                 .lock()
                 .is_ok_and(|allowed| allowed.contains(tool))
-            || self
-                .granted
-                .lock()
-                .is_ok_and(|allowed| allowed.contains(tool))
+            || self.granted.lock().is_ok_and(|granted| {
+                granted
+                    .get(&agent.map(str::to_owned))
+                    .is_some_and(|allowed| allowed.contains(tool))
+            })
     }
 
-    /// Pre-approves `tool` for the rest of the session.
-    pub(crate) fn allow_always(&self, tool: &str) {
+    /// Pre-approves `tool` for `agent` for the rest of the session.
+    pub(crate) fn allow_always(&self, tool: &str, agent: Option<&str>) {
         if let Ok(mut granted) = self.granted.lock() {
-            granted.insert(tool.to_owned());
+            granted
+                .entry(agent.map(str::to_owned))
+                .or_default()
+                .insert(tool.to_owned());
         }
     }
 
@@ -123,9 +133,11 @@ impl PermissionGate {
         tool: &str,
         tool_call_id: &str,
         arguments: &Value,
+        agent: Option<&str>,
+        depth: usize,
         cancel: &CancellationToken,
     ) -> PermissionDecision {
-        if self.is_allowed(tool) {
+        if self.is_allowed(tool, agent) {
             return PermissionDecision::AllowOnce;
         }
 
@@ -134,6 +146,8 @@ impl PermissionGate {
             tool: tool.to_owned(),
             tool_call_id: tool_call_id.to_owned(),
             arguments: arguments.clone(),
+            agent: agent.map(str::to_owned),
+            depth,
             reply,
         };
         if self.sender.send(prompt).is_err() {
@@ -143,7 +157,7 @@ impl PermissionGate {
         tokio::select! {
             answer = answer => match answer {
                 Ok(PermissionDecision::AllowAlways) => {
-                    self.allow_always(tool);
+                    self.allow_always(tool, agent);
                     PermissionDecision::AllowAlways
                 }
                 Ok(decision) => decision,
@@ -173,6 +187,18 @@ impl RpcToolbox {
             policy: Policy::headless(allowed),
             gate,
         }
+    }
+
+    /// Wraps one tool with this gate.
+    ///
+    /// Used to install the nested `task` tool so grandchildren pass the same
+    /// permission gate as the root call (`AGENT-038`).
+    pub(crate) fn guard(&self, inner: Arc<dyn Tool>) -> Arc<dyn Tool> {
+        Arc::new(GatedTool {
+            pre_allowed: self.policy.allow.contains(inner.name()),
+            inner,
+            gate: self.gate.clone(),
+        })
     }
 }
 
@@ -247,7 +273,14 @@ impl Tool for GatedTool {
         if needs_decision {
             let decision = self
                 .gate
-                .request(&call.name, &call.id, &call.arguments, &context.cancel)
+                .request(
+                    &call.name,
+                    &call.id,
+                    &call.arguments,
+                    context.agent.as_deref(),
+                    context.delegation_depth,
+                    &context.cancel,
+                )
                 .await;
             if decision == PermissionDecision::Deny {
                 return ToolResult::error(format!(
@@ -380,7 +413,7 @@ mod tests {
         let prompt = receiver.recv().await.expect("permission prompt");
         prompt.reply.send(PermissionDecision::AllowAlways).unwrap();
         assert!(!pending.await.unwrap().is_error);
-        assert!(gate.is_allowed("edit"));
+        assert!(gate.is_allowed("edit", None));
 
         // allow_always skips the next prompt.
         let result = tool.execute(&call(), &context(), None).await;
@@ -443,19 +476,32 @@ mod tests {
     fn spec_proto_009_config_allow_changes_replace_pre_approval() {
         let (sender, _receiver) = mpsc::unbounded_channel();
         let gate = PermissionGate::new(sender, vec!["edit".to_owned()]);
-        assert!(gate.is_allowed("edit"));
-        assert!(!gate.is_allowed("write"));
+        assert!(gate.is_allowed("edit", None));
+        assert!(!gate.is_allowed("write", None));
 
-        gate.allow_always("bash");
+        gate.allow_always("bash", None);
         gate.set_configured(vec!["write".to_owned()]);
         assert!(
-            !gate.is_allowed("edit"),
+            !gate.is_allowed("edit", None),
             "removed entries stop being allowed"
         );
-        assert!(gate.is_allowed("write"), "new entries are allowed");
+        assert!(gate.is_allowed("write", None), "new entries are allowed");
         assert!(
-            gate.is_allowed("bash"),
+            gate.is_allowed("bash", None),
             "session grants survive a configuration change"
         );
+    }
+
+    #[test]
+    #[spec("AGENT-034")]
+    fn always_is_scoped_to_the_asking_agent() {
+        let (sender, _receiver) = mpsc::unbounded_channel();
+        let gate = PermissionGate::new(sender, Vec::new());
+
+        gate.allow_always("edit", Some("explore"));
+
+        assert!(gate.is_allowed("edit", Some("explore")));
+        assert!(!gate.is_allowed("edit", None));
+        assert!(!gate.is_allowed("edit", Some("general")));
     }
 }

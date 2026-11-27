@@ -92,6 +92,31 @@
           "type": "object"
         }
       ]
+    },
+    "RpcSubagentMode": {
+      "description": "A subagent delegation mode accepted by [`RpcCommand::SetSubagents`].",
+      "oneOf": [
+        {
+          "const": "off",
+          "description": "Delegation is refused for the session.",
+          "type": "string"
+        },
+        {
+          "const": "auto",
+          "description": "The model decides whether to delegate.",
+          "type": "string"
+        },
+        {
+          "const": "force",
+          "description": "The model is told to delegate.",
+          "type": "string"
+        },
+        {
+          "const": "once",
+          "description": "Force delegation for the next prompt only.",
+          "type": "string"
+        }
+      ]
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -342,6 +367,70 @@
       "required": [
         "command",
         "provider"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Report subagent configuration, live runs, and the session mode.",
+      "properties": {
+        "command": {
+          "const": "get_subagents",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Change the session delegation mode or parallelism.",
+      "properties": {
+        "command": {
+          "const": "set_subagents",
+          "type": "string"
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RpcSubagentMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "New mode; omit to keep the current mode."
+        },
+        "parallel": {
+          "description": "New concurrency limit; omit to keep the current limit.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Cancel one running child by its parent `task` call id.",
+      "properties": {
+        "call_id": {
+          "description": "Tool call id of the parent `task` call.",
+          "type": "string"
+        },
+        "command": {
+          "const": "cancel_subagent",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command",
+        "call_id"
       ],
       "type": "object"
     },

@@ -270,4 +270,5 @@ Custom themes must meet a 4.5:1 body contrast ratio. A theme file reloads within
 ## Performance
 
 `cargo bench -p codie-tui --bench streaming` simulates 5,000 tokens over 60 frames. The accepted baseline is
-under 40 ms total and about 0.5 ms per frame, well inside the 16.7 ms frame budget.
+under 40 ms total and about 0.5 ms per frame, well inside the 16.7 ms frame budget. The benchmark measures
+rendering only. Clipboard writes and permission previews run off the UI thread, so neither can extend a frame.

@@ -1,18 +1,19 @@
 //! The append-only session store.
 //!
 //! A [`Session`] owns the in-memory tree and the JSONL file backing it. The file
-//! is created lazily when the first message is appended (SESS-002); metadata
-//! entries written before that point are buffered in memory and flushed together
-//! with the header. Later appends use `O_APPEND` and flush after each line
-//! (SESS-003).
+//! is created lazily when the first conversation message is appended (SESS-002);
+//! metadata entries and the system prompt written before that point are buffered
+//! in memory and flushed together with the header. Later appends use `O_APPEND`
+//! and flush after each line (SESS-003).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use codie_core::{Content, Error, Message, Result, ThinkingLevel, Usage};
+use serde::{Deserialize, Serialize};
 
 use crate::entry::{Entry, HeaderType, SESSION_FORMAT_VERSION, SessionHeader};
 use crate::time::{rfc3339_now, unix_nanos};
@@ -85,7 +86,7 @@ impl Session {
     /// Creates a new, empty session rooted at `cwd`.
     ///
     /// The session directory is created eagerly. The JSONL file itself is not
-    /// created until the first message is appended.
+    /// created until the first conversation message is appended.
     pub fn create(cwd: impl AsRef<Path>, session_dir: impl AsRef<Path>) -> Result<Self> {
         Self::create_with_parent(cwd, session_dir, None)
     }
@@ -266,10 +267,21 @@ impl Session {
         &self.path
     }
 
+    /// Returns true once the session has been written to disk.
+    ///
+    /// A session that only accumulated the system prompt and metadata is still
+    /// in memory and cannot be reopened with `--resume`.
+    #[must_use]
+    pub const fn is_persisted(&self) -> bool {
+        self.persisted
+    }
+
     /// Lists every readable session in `session_dir`, newest first.
     ///
     /// Unreadable or malformed files are skipped so that one damaged session
-    /// cannot break the picker (`SESS-008`).
+    /// cannot break the picker (`SESS-008`). Summaries are cached in a derived
+    /// `.index.json` keyed by file size and modification time, so listing only
+    /// reopens sessions that changed since the previous scan.
     pub fn list(session_dir: impl AsRef<Path>) -> Result<Vec<SessionSummary>> {
         let session_dir = session_dir.as_ref();
         let read_dir = match fs::read_dir(session_dir) {
@@ -278,7 +290,11 @@ impl Session {
             Err(error) => return Err(Error::io(session_dir, error)),
         };
 
+        let mut index = read_index(session_dir);
+        let mut present = std::collections::HashSet::new();
         let mut summaries = Vec::new();
+        let mut dirty = false;
+
         for dir_entry in read_dir {
             let Ok(dir_entry) = dir_entry else {
                 continue;
@@ -287,88 +303,47 @@ impl Session {
             if path.extension().and_then(|extension| extension.to_str()) != Some("jsonl") {
                 continue;
             }
+            let Some(file_name) = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_owned)
+            else {
+                continue;
+            };
+            let Ok(metadata) = dir_entry.metadata() else {
+                continue;
+            };
+            let (size, modified) = file_stamp(&metadata);
+            present.insert(file_name.clone());
+
+            if let Some(cached) = index.sessions.get(&file_name)
+                && cached.size == size
+                && cached.modified == modified
+            {
+                summaries.push(cached.to_summary(path));
+                continue;
+            }
+
             let Ok(session) = Self::open(&path) else {
                 continue;
             };
-            let updated_at = dir_entry
-                .metadata()
-                .and_then(|metadata| metadata.modified())
-                .unwrap_or(SystemTime::UNIX_EPOCH);
-            let projection = session.projection();
-            let first_user = projection.iter().find_map(|message| {
-                let Message::User(user) = message else {
-                    return None;
-                };
-                let text = user
-                    .content
-                    .iter()
-                    .filter_map(Content::as_text)
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                (!text.trim().is_empty()).then_some(text)
-            });
-            let last_user = projection.iter().rev().find_map(|message| {
-                let Message::User(user) = message else {
-                    return None;
-                };
-                let text = user
-                    .content
-                    .iter()
-                    .filter_map(Content::as_text)
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                (!text.trim().is_empty()).then_some(text)
-            });
-            let last_assistant = projection.iter().rev().find_map(|message| {
-                let Message::Assistant(assistant) = message else {
-                    return None;
-                };
-                let text = assistant.text();
-                (!text.trim().is_empty()).then_some(text)
-            });
-            let model = projection.iter().rev().find_map(|message| {
-                let Message::Assistant(assistant) = message else {
-                    return None;
-                };
-                Some(assistant.model.clone())
-            });
-            let tokens = projection.iter().map(estimate_message_tokens).sum::<u64>();
-            let mut cost = 0_u64;
-            for entry in session.branch() {
-                match entry {
-                    Entry::Message {
-                        message: Message::Assistant(assistant),
-                        ..
-                    } => {
-                        cost = cost.saturating_add(assistant.usage.cost.total);
-                    }
-                    Entry::Usage { usage, .. } => {
-                        cost = cost.saturating_add(usage.cost.total);
-                    }
-                    _ => {}
-                }
-            }
-            summaries.push(SessionSummary {
-                path,
-                id: session.id().to_owned(),
-                name: session.name().map(str::to_owned),
-                cwd: session.cwd().to_owned(),
-                created_at: session.header.timestamp.clone(),
-                updated_at,
-                message_count: session
-                    .entries
-                    .iter()
-                    .filter(|entry| entry.message().is_some())
-                    .count(),
-                parent_session: session.header.parent_session.clone(),
-                model,
-                tokens,
-                cost,
-                last_user,
-                first_user,
-                last_assistant,
-            });
+            let summary = summarize_session(&session, path, system_time(modified));
+            index.sessions.insert(
+                file_name,
+                IndexedSummary::from_summary(&summary, size, modified),
+            );
+            summaries.push(summary);
+            dirty = true;
         }
+
+        if index.sessions.keys().any(|name| !present.contains(name)) {
+            index.sessions.retain(|name, _| present.contains(name));
+            dirty = true;
+        }
+        if dirty {
+            write_index(session_dir, &mut index);
+        }
+
         sort_summaries(&mut summaries);
         Ok(summaries)
     }
@@ -1024,9 +999,14 @@ impl Session {
     /// Commits an entry, writing it to disk first and then updating memory.
     fn commit(&mut self, entry: Entry) -> Result<()> {
         if !self.persisted {
-            if !matches!(entry, Entry::Message { .. }) {
-                // SESS-002: metadata entries are buffered until the first
-                // message, then flushed with the header.
+            // SESS-002: metadata is buffered until the first message. The
+            // system prompt alone is not a session yet, so it is buffered too;
+            // a session that never receives a prompt leaves no file behind.
+            let starts_session = matches!(
+                &entry,
+                Entry::Message { message, .. } if !matches!(message, Message::System(_))
+            );
+            if !starts_session {
                 self.leaf = Some(entry.id().to_string());
                 self.entries.push(entry);
                 return Ok(());
@@ -1297,6 +1277,208 @@ fn message_chars(content: &[Content]) -> u64 {
         .sum()
 }
 
+/// Derived summary cache written next to a directory's session files.
+const INDEX_FILE: &str = ".index.json";
+
+/// On-disk version of the summary cache; a mismatch forces a full rescan.
+const INDEX_VERSION: u32 = 1;
+
+/// Cached [`SessionSummary`] values for one session directory.
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct SessionIndex {
+    #[serde(default)]
+    version: u32,
+    #[serde(default)]
+    sessions: BTreeMap<String, IndexedSummary>,
+}
+
+/// Serialized form of one [`SessionSummary`] plus its file stamp.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct IndexedSummary {
+    size: u64,
+    modified: u64,
+    id: String,
+    #[serde(default)]
+    name: Option<String>,
+    cwd: String,
+    created_at: String,
+    message_count: u64,
+    #[serde(default)]
+    parent_session: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    tokens: u64,
+    cost: u64,
+    #[serde(default)]
+    first_user: Option<String>,
+    #[serde(default)]
+    last_user: Option<String>,
+    #[serde(default)]
+    last_assistant: Option<String>,
+}
+
+impl IndexedSummary {
+    fn from_summary(summary: &SessionSummary, size: u64, modified: u64) -> Self {
+        Self {
+            size,
+            modified,
+            id: summary.id.clone(),
+            name: summary.name.clone(),
+            cwd: summary.cwd.clone(),
+            created_at: summary.created_at.clone(),
+            message_count: u64::try_from(summary.message_count).unwrap_or(u64::MAX),
+            parent_session: summary.parent_session.clone(),
+            model: summary.model.clone(),
+            tokens: summary.tokens,
+            cost: summary.cost,
+            first_user: summary.first_user.clone(),
+            last_user: summary.last_user.clone(),
+            last_assistant: summary.last_assistant.clone(),
+        }
+    }
+
+    fn to_summary(&self, path: PathBuf) -> SessionSummary {
+        SessionSummary {
+            path,
+            id: self.id.clone(),
+            name: self.name.clone(),
+            cwd: self.cwd.clone(),
+            created_at: self.created_at.clone(),
+            updated_at: system_time(self.modified),
+            message_count: usize::try_from(self.message_count).unwrap_or(usize::MAX),
+            parent_session: self.parent_session.clone(),
+            model: self.model.clone(),
+            tokens: self.tokens,
+            cost: self.cost,
+            last_user: self.last_user.clone(),
+            first_user: self.first_user.clone(),
+            last_assistant: self.last_assistant.clone(),
+        }
+    }
+}
+
+/// Computes the picker metadata for one open session.
+fn summarize_session(session: &Session, path: PathBuf, updated_at: SystemTime) -> SessionSummary {
+    let projection = session.projection();
+    let first_user = projection.iter().find_map(|message| {
+        let Message::User(user) = message else {
+            return None;
+        };
+        let text = user
+            .content
+            .iter()
+            .filter_map(Content::as_text)
+            .collect::<Vec<_>>()
+            .join(" ");
+        (!text.trim().is_empty()).then_some(text)
+    });
+    let last_user = projection.iter().rev().find_map(|message| {
+        let Message::User(user) = message else {
+            return None;
+        };
+        let text = user
+            .content
+            .iter()
+            .filter_map(Content::as_text)
+            .collect::<Vec<_>>()
+            .join(" ");
+        (!text.trim().is_empty()).then_some(text)
+    });
+    let last_assistant = projection.iter().rev().find_map(|message| {
+        let Message::Assistant(assistant) = message else {
+            return None;
+        };
+        let text = assistant.text();
+        (!text.trim().is_empty()).then_some(text)
+    });
+    let model = projection.iter().rev().find_map(|message| {
+        let Message::Assistant(assistant) = message else {
+            return None;
+        };
+        Some(assistant.model.clone())
+    });
+    let tokens = projection.iter().map(estimate_message_tokens).sum::<u64>();
+    let mut cost = 0_u64;
+    for entry in session.branch() {
+        match entry {
+            Entry::Message {
+                message: Message::Assistant(assistant),
+                ..
+            } => {
+                cost = cost.saturating_add(assistant.usage.cost.total);
+            }
+            Entry::Usage { usage, .. } => {
+                cost = cost.saturating_add(usage.cost.total);
+            }
+            _ => {}
+        }
+    }
+    SessionSummary {
+        path,
+        id: session.id().to_owned(),
+        name: session.name().map(str::to_owned),
+        cwd: session.cwd().to_owned(),
+        created_at: session.header.timestamp.clone(),
+        updated_at,
+        message_count: session
+            .entries
+            .iter()
+            .filter(|entry| entry.message().is_some())
+            .count(),
+        parent_session: session.header.parent_session.clone(),
+        model,
+        tokens,
+        cost,
+        last_user,
+        first_user,
+        last_assistant,
+    }
+}
+
+/// Returns the file size and modification time as nanoseconds since the epoch.
+fn file_stamp(metadata: &fs::Metadata) -> (u64, u64) {
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |value| {
+            u64::try_from(value.as_nanos()).unwrap_or(u64::MAX)
+        });
+    (metadata.len(), modified)
+}
+
+/// Rebuilds a [`SystemTime`] from the nanosecond stamp stored in the index.
+fn system_time(nanos: u64) -> SystemTime {
+    UNIX_EPOCH + Duration::from_nanos(nanos)
+}
+
+/// Reads the summary cache, falling back to an empty index on any problem.
+fn read_index(session_dir: &Path) -> SessionIndex {
+    let Ok(text) = fs::read_to_string(session_dir.join(INDEX_FILE)) else {
+        return SessionIndex::default();
+    };
+    match serde_json::from_str::<SessionIndex>(&text) {
+        Ok(index) if index.version == INDEX_VERSION => index,
+        _ => SessionIndex::default(),
+    }
+}
+
+/// Writes the summary cache atomically. Failures are ignored: the index is a
+/// cache, and the next listing simply rescans.
+fn write_index(session_dir: &Path, index: &mut SessionIndex) {
+    index.version = INDEX_VERSION;
+    let Ok(payload) = serde_json::to_vec(index) else {
+        return;
+    };
+    let temporary = session_dir.join(format!("{INDEX_FILE}.tmp-{}", std::process::id()));
+    if fs::write(&temporary, payload).is_err() {
+        return;
+    }
+    if fs::rename(&temporary, session_dir.join(INDEX_FILE)).is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+}
+
 /// Orders summaries newest first, breaking timestamp ties by session identifier.
 ///
 /// File modification times can be equal when two sessions are written within
@@ -1443,6 +1625,103 @@ mod tests {
         let second = new_session_id();
         assert_ne!(first, second);
         assert!(first.chars().all(|c| c.is_ascii_hexdigit() || c == '-'));
+    }
+
+    #[test]
+    fn listing_writes_and_reuses_a_derived_index() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let mut session =
+            Session::create(directory.path(), directory.path()).expect("create session");
+        session
+            .append_message(&Message::user("hello"))
+            .expect("append");
+        session
+            .append_message(&Message::user("hi"))
+            .expect("append");
+
+        let first = Session::list(directory.path()).expect("list sessions");
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].message_count, 2);
+
+        let index = read_index(directory.path());
+        let file_name = first[0].path.file_name().expect("file name");
+        let cached = index
+            .sessions
+            .get(file_name.to_str().expect("utf-8"))
+            .expect("cached summary");
+        assert_eq!(cached.message_count, 2);
+
+        // The index file itself is never listed as a session.
+        assert_eq!(
+            Session::list(directory.path())
+                .expect("list sessions")
+                .len(),
+            1
+        );
+
+        // A change bumps the file stamp and refreshes the cached entry.
+        session
+            .append_message(&Message::user("again"))
+            .expect("append");
+        let second = Session::list(directory.path()).expect("list sessions");
+        assert_eq!(second[0].message_count, 3);
+    }
+
+    #[test]
+    fn a_corrupt_index_is_ignored_and_rebuilt() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let mut session =
+            Session::create(directory.path(), directory.path()).expect("create session");
+        session
+            .append_message(&Message::user("hello"))
+            .expect("append");
+        fs::write(directory.path().join(INDEX_FILE), "{not json").expect("write corrupt index");
+
+        let summaries = Session::list(directory.path()).expect("list sessions");
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].first_user.as_deref(), Some("hello"));
+        assert!(!read_index(directory.path()).sessions.is_empty());
+    }
+
+    #[test]
+    fn system_only_sessions_leave_no_file() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let mut session =
+            Session::create(directory.path(), directory.path()).expect("create session");
+        session
+            .append_message(&Message::system("You are codie.", Vec::new()))
+            .expect("append system");
+        assert!(!session.path().exists());
+        assert!(!session.is_persisted());
+
+        session
+            .append_message(&Message::user("hello"))
+            .expect("append user");
+        assert!(session.path().exists());
+        assert!(session.is_persisted());
+        let reopened = Session::open(session.path()).expect("reopen");
+        assert!(matches!(
+            reopened.projection().first(),
+            Some(Message::System(_))
+        ));
+    }
+
+    #[test]
+    fn deleted_sessions_are_dropped_from_the_index() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let mut first = Session::create(directory.path(), directory.path()).expect("create");
+        first.append_message(&Message::user("one")).expect("append");
+        let mut second = Session::create(directory.path(), directory.path()).expect("create");
+        second
+            .append_message(&Message::user("two"))
+            .expect("append");
+
+        assert_eq!(Session::list(directory.path()).expect("list").len(), 2);
+        fs::remove_file(second.path()).expect("remove session");
+
+        let summaries = Session::list(directory.path()).expect("list");
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(read_index(directory.path()).sessions.len(), 1);
     }
 
     #[test]

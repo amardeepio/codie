@@ -50,6 +50,19 @@ In the interactive app, use the slash command:
 | `/subagents open N` | Open run `N`'s read-only child transcript |
 | `/subagents stop N` | Cancel run `N` without stopping the parent |
 
+### Desktop app
+
+The desktop app enables delegation by default: it starts the RPC sidecar with `--subagents auto`, so every new
+session declares `task`. A `task` call renders as its own card with the agent type, description, live turn and
+activity, then the status, turns, cost, and child session id. The card can stop one child or open its session.
+
+Use the inspector's **Delegation** section or the command palette to switch between `off`, `auto`, and `force`,
+and to change parallelism. The **Settings → Subagent delegation** toggle and maximum-parallel control are
+desktop preferences; changing them asks for a session restart. Per-type tools and budgets still come from
+`config.toml` and `.codie/agents/*.md`. Child sessions appear in the sidebar with a `subagent` badge. Like the
+TUI, the desktop gates `task` as a mutating capability, so the first delegation prompts unless auto-approve is on;
+child tool calls name their agent and depth on the approval card.
+
 You can also ask in plain language:
 
 ```text

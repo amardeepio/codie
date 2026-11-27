@@ -21,7 +21,7 @@ migration extend it without breaking existing files.
 **SESS-001 (MUST)** Entries are append-only nodes with `id`, `parent_id`, and `timestamp`; the first entry has a null parent and later entries point at the previous leaf. Existing lines are never rewritten.
 Verification: `crates/codie-session/tests/session.rs::spec_sess_001_appends_preserve_parent_links`
 
-**SESS-002 (MUST)** The file is created lazily on the first appended message; the first line is the session header with `type`, `version`, `id`, `timestamp`, and `cwd`.
+**SESS-002 (MUST)** The file is created lazily on the first appended conversation message (the system prompt is buffered until then); the first line is the session header with `type`, `version`, `id`, `timestamp`, and `cwd`. A session that only holds the system prompt never creates a file.
 Verification: `crates/codie-session/tests/session.rs::spec_sess_002_file_is_created_lazily_with_a_header`
 
 **SESS-003 (MUST)** Each append is one JSON object followed by one LF and is flushed before the call returns; reopening reproduces the same order.
@@ -56,3 +56,7 @@ Verification: `crates/codie-session/tests/session.rs::spec_sess_009_system_messa
 
 Sessions contain prompts, file contents, and tool output. They are written under the user's data directory with
 the process umask; they never contain API keys. Appends are O(1); resume reads one file.
+
+Directory listings may keep a derived `.index.json` beside the session files. It caches picker summaries keyed by
+file size and modification time, is never authoritative, and is rebuilt from the JSONL files when missing, stale,
+or corrupt.

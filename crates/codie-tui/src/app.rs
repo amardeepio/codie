@@ -699,6 +699,8 @@ impl Picker {
 
 /// A permission prompt shown to the user.
 pub struct PermissionPrompt {
+    /// Correlates the prompt with an asynchronously built preview.
+    id: u64,
     /// Tool name.
     pub tool: String,
     /// Parsed arguments.
@@ -838,6 +840,8 @@ pub struct App {
     dragging: bool,
     /// Set when the selection should be copied on the next frame.
     pub copy_pending: bool,
+    /// Selected text extracted by the last frame, copied off the UI thread.
+    pub pending_copy: Option<String>,
     /// Set when one more frame is needed, for example after a copy notice.
     pub needs_redraw: bool,
     /// Transient message shown in the editor title until the next input.
@@ -868,6 +872,9 @@ pub struct App {
     pub explicit_key_provider: Option<String>,
     /// Monotonic counter for connect attempts, so stale results never match.
     connect_generation: u64,
+    /// Monotonic counter for permission prompts, so late previews never match
+    /// a different prompt.
+    next_prompt_id: u64,
     /// Persists the last provider/model selection.
     persist_selection: Option<SelectionPersister>,
     /// When the current run started, for live tokens/sec.
@@ -1002,6 +1009,7 @@ impl App {
             selection: None,
             dragging: false,
             copy_pending: false,
+            pending_copy: None,
             needs_redraw: false,
             notice: None,
             should_quit: false,
@@ -1017,6 +1025,7 @@ impl App {
             auth_path: None,
             explicit_key_provider: None,
             connect_generation: 0,
+            next_prompt_id: 0,
             persist_selection: None,
             run_started: None,
             history,
@@ -1201,6 +1210,7 @@ impl App {
         self.selection = None;
         self.dragging = false;
         self.copy_pending = false;
+        self.pending_copy = None;
         self.notice = None;
     }
 
@@ -2960,20 +2970,56 @@ impl App {
     }
 
     /// Adds a permission prompt, showing it when no other prompt is active.
-    pub fn push_permission(&mut self, request: PermissionRequest) {
-        let preview = permission_preview(&self.cwd, &request.tool, &request.arguments);
+    ///
+    /// The rich preview reads the target file and diffs it, so it is built on a
+    /// blocking thread and attached later with [`Self::set_permission_preview`].
+    /// Returns the prompt id used to correlate that result.
+    pub fn push_permission(&mut self, request: PermissionRequest) -> u64 {
+        let id = self.next_prompt_id;
+        self.next_prompt_id = id.wrapping_add(1);
         self.permissions.push_back(PermissionPrompt {
+            id,
             tool: request.tool,
             arguments: request.arguments,
             agent: request.agent,
             depth: request.depth,
             session_id: request.session_id,
-            preview,
+            preview: None,
             scroll: 0,
             expanded: false,
             reply: Some(request.reply),
         });
         self.show_next_prompt();
+        id
+    }
+
+    /// Attaches a preview to the showing prompt or one still queued.
+    ///
+    /// Results for prompts that were already answered are dropped.
+    pub fn set_permission_preview(
+        &mut self,
+        id: u64,
+        preview: Option<codie_protocol::ext::ExtRenderHint>,
+    ) {
+        if let Some(Overlay::Permission(prompt)) = self.overlay.as_mut()
+            && prompt.id == id
+        {
+            prompt.preview = preview;
+            return;
+        }
+        if let Some(prompt) = self.permissions.iter_mut().find(|prompt| prompt.id == id) {
+            prompt.preview = preview;
+        }
+    }
+
+    /// Adds a prompt and builds its preview inline.
+    ///
+    /// Tests use this so rendering is deterministic without the event loop.
+    #[cfg(test)]
+    pub(crate) fn push_permission_with_preview(&mut self, request: PermissionRequest) {
+        let preview = permission_preview(&self.cwd, &request.tool, &request.arguments);
+        let id = self.push_permission(request);
+        self.set_permission_preview(id, preview);
     }
 
     /// Adds a question from a delegated run, showing it when the interface is free.
@@ -3586,6 +3632,20 @@ enum UpdateEvent {
     Progress(codie_ai::update::UpdateProgress),
     /// Installation finished with the installed version or an error.
     Installed(std::result::Result<String, String>),
+    /// A selection copy finished on a blocking thread.
+    Copied {
+        /// Number of copied lines.
+        lines: usize,
+        /// Clipboard failure, if any.
+        error: Option<String>,
+    },
+    /// A permission prompt's rich preview finished building.
+    PermissionPreview {
+        /// Prompt that requested the preview.
+        id: u64,
+        /// Preview, or `None` when the call has nothing worth showing.
+        preview: Option<codie_protocol::ext::ExtRenderHint>,
+    },
 }
 
 fn spawn_update(sender: &mpsc::UnboundedSender<UpdateEvent>, manual: bool) {
@@ -3863,6 +3923,19 @@ async fn event_loop(
             dirty = false;
         }
 
+        // Copies and previews touch the clipboard or the file system, so they
+        // run off the UI thread and report back as update events.
+        if let Some(text) = app.pending_copy.take() {
+            let lines = text.lines().count();
+            let sender = update_tx.clone();
+            tokio::task::spawn_blocking(move || {
+                let error = crate::copy_to_clipboard(&text)
+                    .err()
+                    .map(|error| error.to_string());
+                let _ = sender.send(UpdateEvent::Copied { lines, error });
+            });
+        }
+
         tokio::select! {
             Some(input) = input.recv() => {
                 dirty = true;
@@ -4069,7 +4142,15 @@ async fn event_loop(
             }
             Some(request) = permission_rx.recv() => {
                 dirty = true;
-                app.push_permission(request);
+                let cwd = app.cwd.clone();
+                let tool = request.tool.clone();
+                let arguments = request.arguments.clone();
+                let id = app.push_permission(request);
+                let sender = update_tx.clone();
+                tokio::task::spawn_blocking(move || {
+                    let preview = permission_preview(&cwd, &tool, &arguments);
+                    let _ = sender.send(UpdateEvent::PermissionPreview { id, preview });
+                });
             }
             Some(request) = question_rx.recv() => {
                 dirty = true;
@@ -4175,6 +4256,15 @@ async fn event_loop(
                             },
                             ok: true,
                         });
+                    }
+                    UpdateEvent::Copied { lines, error } => {
+                        app.notice = Some(match error {
+                            Some(error) => format!("clipboard unavailable: {error}"),
+                            None => format!("copied {lines} line(s)"),
+                        });
+                    }
+                    UpdateEvent::PermissionPreview { id, preview } => {
+                        app.set_permission_preview(id, preview);
                     }
                 }
             }
@@ -5657,6 +5747,76 @@ mod tests {
         app.handle_key(key(KeyCode::Char('a')));
         assert_eq!(answer.blocking_recv().unwrap(), Decision::Allow);
         assert!(app.overlay.is_none());
+    }
+
+    #[test]
+    #[spec("TUI-018")]
+    fn permission_preview_attaches_asynchronously() {
+        let mut app = app();
+        let (reply, _answer) = oneshot::channel();
+        let id = app.push_permission(PermissionRequest {
+            tool: "write".to_owned(),
+            arguments: serde_json::json!({"path": "a.txt"}),
+            agent: None,
+            depth: 0,
+            session_id: None,
+            reply,
+        });
+        let Some(Overlay::Permission(prompt)) = &app.overlay else {
+            panic!("expected a permission prompt");
+        };
+        assert!(
+            prompt.preview.is_none(),
+            "the prompt must appear before the preview is built"
+        );
+
+        let hint = codie_protocol::ext::ExtRenderHint {
+            kind: codie_protocol::ext::ExtRenderKind::Code,
+            title: Some("Write a.txt".to_owned()),
+            text: "alpha".to_owned(),
+        };
+        app.set_permission_preview(id, Some(hint));
+        let Some(Overlay::Permission(prompt)) = &app.overlay else {
+            panic!("expected a permission prompt");
+        };
+        assert_eq!(
+            prompt.preview.as_ref().map(|preview| preview.text.as_str()),
+            Some("alpha")
+        );
+
+        app.set_permission_preview(id.wrapping_add(1), None);
+        let Some(Overlay::Permission(prompt)) = &app.overlay else {
+            panic!("expected a permission prompt");
+        };
+        assert!(
+            prompt.preview.is_some(),
+            "a stale id must not clear the showing preview"
+        );
+
+        // A preview for a queued prompt is stored until that prompt is shown.
+        let (reply, _answer) = oneshot::channel();
+        let queued = app.push_permission(PermissionRequest {
+            tool: "write".to_owned(),
+            arguments: serde_json::json!({"path": "b.txt"}),
+            agent: None,
+            depth: 0,
+            session_id: None,
+            reply,
+        });
+        app.set_permission_preview(
+            queued,
+            Some(codie_protocol::ext::ExtRenderHint {
+                kind: codie_protocol::ext::ExtRenderKind::Code,
+                title: Some("Write b.txt".to_owned()),
+                text: "beta".to_owned(),
+            }),
+        );
+        assert!(
+            app.permissions
+                .front()
+                .is_some_and(|prompt| prompt.preview.is_some()),
+            "a queued prompt must keep its preview"
+        );
     }
 
     #[test]

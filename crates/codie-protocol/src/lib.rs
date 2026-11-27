@@ -41,18 +41,21 @@ pub enum RpcFeature {
     Config,
     /// `prompt` attachments.
     Attachments,
+    /// Subagent delegation status and controls.
+    Subagents,
 }
 
 impl RpcFeature {
     /// Every feature this build supports, in documentation order.
     #[must_use]
-    pub const fn all() -> [Self; 5] {
+    pub const fn all() -> [Self; 6] {
         [
             Self::Permissions,
             Self::Auth,
             Self::Catalog,
             Self::Config,
             Self::Attachments,
+            Self::Subagents,
         ]
     }
 }
@@ -108,6 +111,36 @@ impl PermissionDecision {
             Self::AllowOnce => "allow_once",
             Self::AllowAlways => "allow_always",
             Self::Deny => "deny",
+        }
+    }
+}
+
+/// A subagent delegation mode accepted by [`RpcCommand::SetSubagents`].
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum RpcSubagentMode {
+    /// Delegation is refused for the session.
+    Off,
+    /// The model decides whether to delegate.
+    Auto,
+    /// The model is told to delegate.
+    Force,
+    /// Force delegation for the next prompt only.
+    Once,
+}
+
+impl RpcSubagentMode {
+    /// Returns the wire spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Auto => "auto",
+            Self::Force => "force",
+            Self::Once => "once",
         }
     }
 }
@@ -230,6 +263,22 @@ pub enum RpcCommand {
         /// Provider identifier.
         provider: String,
     },
+    /// Report subagent configuration, live runs, and the session mode.
+    GetSubagents,
+    /// Change the session delegation mode or parallelism.
+    SetSubagents {
+        /// New mode; omit to keep the current mode.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<RpcSubagentMode>,
+        /// New concurrency limit; omit to keep the current limit.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parallel: Option<usize>,
+    },
+    /// Cancel one running child by its parent `task` call id.
+    CancelSubagent {
+        /// Tool call id of the parent `task` call.
+        call_id: String,
+    },
     /// Return the projected transcript messages.
     GetMessages,
     /// Return the session entry tree.
@@ -286,6 +335,9 @@ impl RpcCommand {
             Self::AuthStatus => "auth_status",
             Self::AuthSetKey { .. } => "auth_set_key",
             Self::AuthLogout { .. } => "auth_logout",
+            Self::GetSubagents => "get_subagents",
+            Self::SetSubagents { .. } => "set_subagents",
+            Self::CancelSubagent { .. } => "cancel_subagent",
             Self::GetMessages => "get_messages",
             Self::GetEntries => "get_entries",
             Self::GetSessionStats => "get_session_stats",
@@ -364,6 +416,9 @@ pub struct RpcSessionHeader {
     /// Parent session identifier when forked or cloned.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_session: Option<String>,
+    /// True when the session file exists and `--resume` can reopen it.
+    #[serde(default)]
+    pub persisted: bool,
 }
 
 /// The only value of [`RpcSessionHeader::record_type`].
@@ -399,6 +454,12 @@ pub struct RpcPermissionRequest {
     pub tool: String,
     /// Parsed tool arguments.
     pub arguments: Value,
+    /// Agent type that asked for the call; absent for the root run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    /// Delegation depth of the asking run; `0` for the root run.
+    #[serde(default)]
+    pub depth: usize,
 }
 
 /// The only value of [`RpcPermissionRequest::record_type`].
@@ -428,7 +489,17 @@ impl RpcPermissionRequest {
             tool_call_id: tool_call_id.into(),
             tool: tool.into(),
             arguments,
+            agent: None,
+            depth: 0,
         }
+    }
+
+    /// Names the subagent type and depth that asked for the call.
+    #[must_use]
+    pub fn with_origin(mut self, agent: Option<String>, depth: usize) -> Self {
+        self.agent = agent;
+        self.depth = depth;
+        self
     }
 }
 
@@ -668,6 +739,27 @@ mod tests {
                     provider: "deepseek".to_owned(),
                 },
             ),
+            (
+                json!({"command": "get_subagents"}),
+                RpcCommand::GetSubagents,
+            ),
+            (
+                json!({
+                    "command": "set_subagents",
+                    "mode": "force",
+                    "parallel": 2,
+                }),
+                RpcCommand::SetSubagents {
+                    mode: Some(RpcSubagentMode::Force),
+                    parallel: Some(2),
+                },
+            ),
+            (
+                json!({"command": "cancel_subagent", "call_id": "call-7"}),
+                RpcCommand::CancelSubagent {
+                    call_id: "call-7".to_owned(),
+                },
+            ),
         ];
 
         for (value, expected) in requests {
@@ -753,6 +845,20 @@ mod tests {
                 },
                 "auth_logout",
             ),
+            (RpcCommand::GetSubagents, "get_subagents"),
+            (
+                RpcCommand::SetSubagents {
+                    mode: Some(RpcSubagentMode::Auto),
+                    parallel: None,
+                },
+                "set_subagents",
+            ),
+            (
+                RpcCommand::CancelSubagent {
+                    call_id: "call".into(),
+                },
+                "cancel_subagent",
+            ),
             (RpcCommand::GetMessages, "get_messages"),
             (RpcCommand::GetEntries, "get_entries"),
             (RpcCommand::GetSessionStats, "get_session_stats"),
@@ -782,7 +888,14 @@ mod tests {
         assert_eq!(ready["version"], 2);
         assert_eq!(
             ready["features"],
-            json!(["permissions", "auth", "catalog", "config", "attachments"])
+            json!([
+                "permissions",
+                "auth",
+                "catalog",
+                "config",
+                "attachments",
+                "subagents"
+            ])
         );
         assert_eq!(
             serde_json::to_value(RpcSettled::new(true)).expect("settled")["type"],

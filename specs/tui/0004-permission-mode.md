@@ -52,3 +52,7 @@ Persisting full access across runs, per-tool trust policies, and project-level t
 
 Full access is an explicit, visible opt-in and never enabled by default. It bypasses prompts, not the tool
 policy object itself, and the footer makes the state visible. Toggling is O(1) and sends no I/O.
+
+A prompt is shown immediately with its argument summary. When the call has a diff or code preview, the target
+file is read and diffed on a blocking task and the preview is attached when ready, so a large file never stalls
+input or rendering. Previews for prompts that were answered in the meantime are dropped.

@@ -12,8 +12,8 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use anyhow::{Context, Result};
 use codie_ai::{AuthStore, Model, auth_status, fallback_model, find_model, provider};
 use codie_core::{
-    Agent, AgentConfig, AgentEvent, AgentEventStream, ChatClient, Message, ModelRef, RunStatus,
-    ThinkingLevel, Toolbox,
+    Agent, AgentConfig, AgentEvent, AgentEventStream, ChatClient, Cost, Message, ModelRef,
+    RunStatus, ThinkingLevel, ToolDecl, Toolbox, Usage,
 };
 use codie_ext::ExtensionSet;
 use codie_prompt::{
@@ -23,9 +23,13 @@ use codie_prompt::{
 use codie_protocol::ext::ExtSessionInfo;
 use codie_protocol::{
     PermissionDecision, PermissionMode, RpcAttachment, RpcCommand, RpcPermissionRequest, RpcReady,
-    RpcRequest, RpcResponse, RpcSessionHeader, RpcSettled, SessionType,
+    RpcRequest, RpcResponse, RpcSessionHeader, RpcSettled, RpcSubagentMode, SessionType,
 };
-use codie_session::Session;
+use codie_session::{Entry, Session};
+use codie_subagents::{
+    DelegationMode, FORCED_DIRECTIVE, SubagentConfig, SubagentRuntime, SubagentToolbox, TaskTool,
+    ToolSelection, detect_intent, effective_mode, mode_directive,
+};
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
@@ -56,6 +60,10 @@ pub(crate) struct RpcOptions {
     pub(crate) append: Option<String>,
     pub(crate) customizations: Customizations,
     pub(crate) extensions: Arc<ExtensionSet>,
+    /// Resolved subagent configuration, including project personas.
+    pub(crate) subagents: SubagentConfig,
+    /// Initial delegation mode for the session.
+    pub(crate) subagent_mode: DelegationMode,
 }
 
 struct ActiveRun {
@@ -66,6 +74,9 @@ struct ActiveRun {
 struct State {
     options: RpcOptions,
     agent: Arc<Agent>,
+    /// The root toolbox, including `task` when delegation is enabled. System
+    /// messages must declare exactly this set.
+    toolbox: Arc<dyn Toolbox>,
     session: Option<Session>,
     history: Vec<Message>,
     model: ModelRef,
@@ -77,17 +88,86 @@ struct State {
     gate: PermissionGate,
     pending_permissions: HashMap<String, oneshot::Sender<PermissionDecision>>,
     permission_sequence: u64,
+    subagent_runtime: Option<Arc<SubagentRuntime>>,
+    subagent_config: SubagentConfig,
+    subagent_mode: DelegationMode,
+    subagent_force_once: bool,
 }
 
 /// Runs the RPC server until stdin closes, `shutdown`, or a signal.
 pub(crate) async fn run(options: RpcOptions) -> Result<u8> {
     let (permission_tx, mut permission_rx) = mpsc::unbounded_channel();
     let gate = PermissionGate::new(permission_tx, options.allowed.clone());
-    let toolbox: Arc<dyn Toolbox> = Arc::new(RpcToolbox::new(
+    // The permission wrapper is the parent toolbox for children and the outer
+    // layer for the root, so `task` itself is gated like any mutating tool
+    // (`SEC-009`) while children inherit the same policy (`AGENT-022`).
+    let permission = Arc::new(RpcToolbox::new(
         Arc::clone(&options.toolbox),
         options.allowed.clone(),
         gate.clone(),
     ));
+    let parent_toolbox: Arc<dyn Toolbox> = permission.clone();
+
+    let subagent_config = options.subagents.clone();
+    let subagent_mode = if subagent_config.enabled {
+        options.subagent_mode
+    } else {
+        DelegationMode::Off
+    };
+    let subagent_runtime = if subagent_config.enabled {
+        let prompt_input = PromptInput {
+            cwd: options.cwd.clone(),
+            tools: Vec::new(),
+            preamble: options.preamble.clone(),
+            append: options.append.clone(),
+            skills: options.customizations.skills().to_vec(),
+            project_context: load_project_context(&options.cwd),
+            project_memory: load_project_memory(&options.cwd),
+        };
+        let runtime = Arc::new(
+            SubagentRuntime::new(
+                subagent_config.clone(),
+                Arc::clone(&options.client),
+                Arc::clone(&parent_toolbox),
+                prompt_input,
+                options.session_dir.clone(),
+                options
+                    .session
+                    .as_ref()
+                    .map(|session| session.id().to_owned()),
+                options.model.clone(),
+                options
+                    .models
+                    .iter()
+                    .map(|model| model.id.clone())
+                    .collect(),
+            )
+            .map_err(anyhow::Error::msg)?,
+        );
+        runtime.set_mode(subagent_mode);
+        runtime.set_thinking(options.thinking);
+        // A nested `task` (max_depth > 0) must pass the same permission gate as
+        // the root call instead of spawning unguarded (`AGENT-038`).
+        runtime.set_nested_task(permission.guard(Arc::new(TaskTool::new(Arc::clone(&runtime)))));
+        Some(runtime)
+    } else {
+        None
+    };
+
+    let toolbox: Arc<dyn Toolbox> = match &subagent_runtime {
+        Some(runtime) => {
+            let subagents = Arc::new(SubagentToolbox::new(
+                Arc::clone(&options.toolbox),
+                Arc::clone(runtime),
+            ));
+            Arc::new(RpcToolbox::new(
+                subagents,
+                options.allowed.clone(),
+                gate.clone(),
+            ))
+        }
+        None => Arc::clone(&parent_toolbox),
+    };
     let agent = Arc::new(match options.extensions.hooks() {
         Some(hooks) => Agent::with_hooks(Arc::clone(&options.client), Arc::clone(&toolbox), hooks),
         None => Agent::new(Arc::clone(&options.client), Arc::clone(&toolbox)),
@@ -95,6 +175,7 @@ pub(crate) async fn run(options: RpcOptions) -> Result<u8> {
     let mut state = State {
         options,
         agent,
+        toolbox,
         session: None,
         history: Vec::new(),
         model: ModelRef {
@@ -110,8 +191,17 @@ pub(crate) async fn run(options: RpcOptions) -> Result<u8> {
         gate,
         pending_permissions: HashMap::new(),
         permission_sequence: 0,
+        subagent_runtime,
+        subagent_config,
+        subagent_mode,
+        subagent_force_once: false,
     };
     state.take_options();
+    // The system prompt must be built from the assembled toolbox (including
+    // `task`) rather than the raw registry. A resumed session may carry a
+    // stale prompt from before delegation was enabled, so repair it in memory
+    // before the first request.
+    state.ensure_system_message()?;
     let session_id = state
         .session
         .as_ref()
@@ -224,6 +314,7 @@ impl State {
                 timestamp: session.header().timestamp.clone(),
                 cwd: session.header().cwd.clone(),
                 parent_session: session.header().parent_session.clone(),
+                persisted: session.is_persisted(),
             })?,
             None => self.emit(&RpcSessionHeader {
                 record_type: SessionType::Session,
@@ -232,6 +323,7 @@ impl State {
                 timestamp: String::new(),
                 cwd: self.options.cwd.display().to_string(),
                 parent_session: None,
+                persisted: false,
             })?,
         }
         Ok(())
@@ -311,6 +403,11 @@ impl State {
                     .await
             }
             RpcCommand::AuthLogout { provider } => self.auth_logout(id, command, &provider),
+            RpcCommand::GetSubagents => self.get_subagents(id, command),
+            RpcCommand::SetSubagents { mode, parallel } => {
+                self.set_subagents(id, command, mode, parallel)
+            }
+            RpcCommand::CancelSubagent { call_id } => self.cancel_subagent(id, command, &call_id),
             RpcCommand::GetMessages => self.get_messages(id, command),
             RpcCommand::GetEntries => self.get_entries(id, command),
             RpcCommand::GetSessionStats => self.get_session_stats(id, command),
@@ -448,6 +545,28 @@ impl State {
             ));
         }
 
+        // Delegation mode is resolved per prompt, matching the interactive
+        // interface. A prompt that asks for (or suppresses) delegation wins over
+        // the session mode, and a force run records the directive the model saw.
+        let intent = detect_intent(&text);
+        let plan = effective_mode(
+            self.subagent_config.enabled,
+            self.subagent_mode,
+            self.subagent_force_once,
+            intent,
+        );
+        self.subagent_force_once = false;
+        if let Some(runtime) = &self.subagent_runtime {
+            runtime.set_mode(plan.mode);
+        }
+        if plan.is_forced() {
+            let directive = Message::system(FORCED_DIRECTIVE, Vec::new());
+            if let Some(session) = self.session.as_mut() {
+                session.append_message(&directive)?;
+            }
+            self.history.push(directive);
+        }
+
         let cancel = CancellationToken::new();
         let config = self.agent_config(cancel.clone())?;
         let stream = self.agent.run(prompt, self.history.clone(), config);
@@ -458,7 +577,7 @@ impl State {
             json!({
                 "started": true,
                 "session": self.session.as_ref().map(Session::id),
-
+                "subagents": plan.mode.as_str(),
                 "warnings": warnings,
             }),
         ))
@@ -511,7 +630,8 @@ impl State {
             prompt.tool_call_id,
             prompt.tool,
             prompt.arguments,
-        );
+        )
+        .with_origin(prompt.agent, prompt.depth);
         self.emit(&request)?;
         self.pending_permissions.insert(request.id, prompt.reply);
         Ok(())
@@ -676,6 +796,9 @@ impl State {
                 if let Some(level) = thinking {
                     self.thinking = level;
                     self.options.thinking = level;
+                    if let Some(runtime) = &self.subagent_runtime {
+                        runtime.set_thinking(level);
+                    }
                     if let Some(session) = self.session.as_mut() {
                         session.append_thinking_level_change(level)?;
                     }
@@ -849,6 +972,167 @@ impl State {
         }
     }
 
+    /// Reports delegation configuration and every child run known to the host.
+    fn get_subagents(&self, id: Option<String>, command: &str) -> Result<()> {
+        self.respond(RpcResponse::success(id, command, self.subagents_status()))
+    }
+
+    fn subagents_status(&self) -> Value {
+        let runs = self
+            .subagent_runtime
+            .as_ref()
+            .map(|runtime| runtime.runs())
+            .unwrap_or_default();
+        let runs = runs
+            .iter()
+            .map(|run| {
+                json!({
+                    "call_id": run.call_id,
+                    "agent": run.agent,
+                    "description": run.description,
+                    "depth": run.depth,
+                    "session_id": run.session_id,
+                    "turns": run.turns,
+                    "activity": run.activity,
+                    "state": run.state.as_str(),
+                    "elapsed_ms": u64::try_from(run.elapsed.as_millis()).unwrap_or(u64::MAX),
+                    "cost_usd": run.cost_nanos as f64 / 1_000_000_000.0,
+                    "error": run.error,
+                    "persisted": run.persisted,
+                })
+            })
+            .collect::<Vec<_>>();
+        let types = self
+            .subagent_config
+            .ordered_type_names()
+            .into_iter()
+            .filter_map(|name| {
+                let agent = self.subagent_config.agent_type(&name)?;
+                Some(json!({
+                    "name": name,
+                    "description": agent.description,
+                    "model": agent.model,
+                    "tools": match &agent.tools {
+                        ToolSelection::Inherit => json!("inherit"),
+                        ToolSelection::Only(tools) => json!(tools),
+                    },
+                    "max_turns": agent.max_turns,
+                    "timeout_secs": agent.timeout.map(|timeout| timeout.as_secs()),
+                }))
+            })
+            .collect::<Vec<_>>();
+        let active = self.subagent_runtime.is_some();
+        json!({
+            "active": active,
+            "enabled": self.subagent_config.enabled,
+            "mode": self.subagent_mode.as_str(),
+            "force_once": self.subagent_force_once,
+            "max_parallel": self
+                .subagent_runtime
+                .as_ref()
+                .map_or(self.subagent_config.max_parallel, |runtime| {
+                    runtime.max_parallel()
+                }),
+            "max_depth": self.subagent_config.max_depth,
+            "max_turns": self.subagent_config.max_turns,
+            "timeout_secs": self.subagent_config.timeout.as_secs(),
+            "result_max_bytes": self.subagent_config.result_max_bytes,
+            "types": types,
+            "runs": runs,
+        })
+    }
+
+    fn set_subagents(
+        &mut self,
+        id: Option<String>,
+        command: &str,
+        mode: Option<RpcSubagentMode>,
+        parallel: Option<usize>,
+    ) -> Result<()> {
+        let Some(runtime) = self.subagent_runtime.clone() else {
+            return self.respond(RpcResponse::failure(
+                id,
+                command,
+                "subagents_disabled",
+                "Subagent delegation is disabled for this session. Enable it in settings and restart.",
+            ));
+        };
+
+        if let Some(limit) = parallel {
+            if !runtime.set_max_parallel(limit) {
+                return self.respond(RpcResponse::failure(
+                    id,
+                    command,
+                    "subagents_busy",
+                    "Stop queued or running subagents before changing parallelism.",
+                ));
+            }
+            self.subagent_config.max_parallel = limit;
+        }
+
+        if let Some(mode) = mode {
+            match mode {
+                RpcSubagentMode::Once => {
+                    self.subagent_force_once = true;
+                    runtime.set_mode(DelegationMode::Force);
+                }
+                RpcSubagentMode::Off | RpcSubagentMode::Auto | RpcSubagentMode::Force => {
+                    let next = match mode {
+                        RpcSubagentMode::Off => DelegationMode::Off,
+                        RpcSubagentMode::Force => DelegationMode::Force,
+                        _ => DelegationMode::Auto,
+                    };
+                    self.subagent_mode = next;
+                    self.subagent_force_once = false;
+                    runtime.set_mode(next);
+                    self.record_subagent_mode(next)?;
+                }
+            }
+        }
+
+        self.respond(RpcResponse::success(id, command, self.subagents_status()))
+    }
+
+    /// Persists a session mode change the same way the interactive interface
+    /// does, so a replay sees the instruction the model received.
+    fn record_subagent_mode(&mut self, mode: DelegationMode) -> Result<()> {
+        let directive = Message::system(mode_directive(mode), Vec::new());
+        if let Some(session) = self.session.as_mut() {
+            session.append_custom(
+                "subagent_settings",
+                json!({"mode": mode.as_str(), "force_once": false}),
+            )?;
+            session.append_message(&directive)?;
+        }
+        self.history.push(directive);
+        Ok(())
+    }
+
+    fn cancel_subagent(&mut self, id: Option<String>, command: &str, call_id: &str) -> Result<()> {
+        let Some(runtime) = self.subagent_runtime.as_ref() else {
+            return self.respond(RpcResponse::failure(
+                id,
+                command,
+                "subagents_disabled",
+                "Subagent delegation is disabled for this session.",
+            ));
+        };
+        if runtime.cancel_run(call_id) {
+            self.respond(RpcResponse::success(
+                id,
+                command,
+                json!({"call_id": call_id, "cancelled": true}),
+            ))
+        } else {
+            self.respond(RpcResponse::failure(
+                id,
+                command,
+                "unknown_subagent",
+                format!("no queued or running subagent for call `{call_id}`"),
+            ))
+        }
+    }
+
     fn get_state(&self, id: Option<String>, command: &str) -> Result<()> {
         let mut total_tokens = 0_u64;
         let mut cost = 0_u64;
@@ -858,11 +1142,22 @@ impl State {
                 cost = cost.saturating_add(assistant.usage.cost.total);
             }
         }
+        // Delegated work is recorded as usage entries, not assistant messages.
+        // Include it so the desktop's totals (and `/usage`) stay truthful.
+        if let Some(session) = &self.session {
+            for entry in session.entries() {
+                if let Entry::Usage { usage, .. } = entry {
+                    total_tokens = total_tokens.saturating_add(usage.total_tokens);
+                    cost = cost.saturating_add(usage.cost.total);
+                }
+            }
+        }
         self.respond(RpcResponse::success(
             id,
             command,
             json!({
                 "session": self.session.as_ref().map(Session::id),
+                "persisted": self.session.as_ref().is_some_and(Session::is_persisted),
                 "cwd": self.options.cwd.display().to_string(),
                 "model": &self.model,
                 "context_window": self.context_window,
@@ -942,6 +1237,9 @@ impl State {
         self.history = vec![system];
         let session_id = session.id().to_owned();
         self.session = Some(session);
+        if let Some(runtime) = &self.subagent_runtime {
+            runtime.set_parent_session_id(Some(session_id.clone()));
+        }
         self.options
             .extensions
             .set_session_id(Some(session_id.clone()));
@@ -986,6 +1284,16 @@ impl State {
             .unwrap_or_else(|| fallback_model(&provider, model_id));
         self.model.model = model_id.to_owned();
         self.context_window = u64::from(model.context_window);
+        if let Some(runtime) = &self.subagent_runtime {
+            runtime.set_parent_model(
+                self.model.clone(),
+                self.options
+                    .models
+                    .iter()
+                    .map(|model| model.id.clone())
+                    .collect(),
+            );
+        }
         if let Some(session) = self.session.as_mut() {
             session.append_model_change(&provider, model_id)?;
         }
@@ -1006,6 +1314,9 @@ impl State {
             ));
         };
         self.thinking = thinking;
+        if let Some(runtime) = &self.subagent_runtime {
+            runtime.set_thinking(thinking);
+        }
         if let Some(session) = self.session.as_mut() {
             session.append_thinking_level_change(thinking)?;
         }
@@ -1114,10 +1425,25 @@ impl State {
     }
 
     fn handle_event(&mut self, event: AgentEvent) -> Result<()> {
-        if let AgentEvent::MessageEnd { message } = &event
-            && let Some(session) = self.session.as_mut()
-        {
-            session.append_message(message)?;
+        if let AgentEvent::MessageEnd { message } = &event {
+            if let Some(session) = self.session.as_mut() {
+                session.append_message(message)?;
+            }
+            // Child usage is not in the parent's assistant messages; record it
+            // in the session ledger so cost and token totals include it.
+            if let Message::ToolResult(result) = message
+                && result.tool_name == "task"
+                && let Some(usage) = result.details.as_ref().and_then(subagent_usage)
+                && let Some(session) = self.session.as_mut()
+                && let Err(error) = session.append_usage(
+                    "subagent",
+                    self.model.provider.clone(),
+                    self.model.model.clone(),
+                    usage,
+                )
+            {
+                eprintln!("warning: cannot record subagent usage: {error}");
+            }
         }
 
         match &event {
@@ -1153,7 +1479,10 @@ impl State {
     }
 
     fn system_message(&self) -> Message {
-        let declarations = self.options.toolbox.declarations();
+        self.render_system_message(self.toolbox.declarations())
+    }
+
+    fn render_system_message(&self, declarations: Vec<ToolDecl>) -> Message {
         let input = PromptInput {
             cwd: self.options.cwd.clone(),
             tools: declarations.clone(),
@@ -1164,6 +1493,40 @@ impl State {
             project_memory: load_project_memory(&self.options.cwd),
         };
         build_system_message(&input, declarations)
+    }
+
+    /// Ensures the model-visible system message declares the current toolbox.
+    ///
+    /// Fresh sessions persist the message. A resumed session whose persisted
+    /// prompt pre-dates a tool-set change is repaired in memory, because the
+    /// session format is append-only and the model must still see `task`.
+    fn ensure_system_message(&mut self) -> Result<()> {
+        let system = self.system_message();
+        let stale = match (self.history.first(), &system) {
+            (Some(Message::System(existing)), Message::System(next)) => {
+                existing.tools != next.tools || existing.content != next.content
+            }
+            _ => true,
+        };
+        if !stale {
+            return Ok(());
+        }
+
+        if self.history.is_empty() {
+            if let Some(session) = self.session.as_mut() {
+                session.append_message(&system)?;
+            }
+            self.history.insert(0, system);
+            return Ok(());
+        }
+        if let Some(Message::System(existing)) = self.history.first_mut() {
+            if let Message::System(next) = system {
+                *existing = next;
+            }
+        } else {
+            self.history.insert(0, system);
+        }
+        Ok(())
     }
 
     fn estimated_tokens(&self) -> u64 {
@@ -1182,6 +1545,39 @@ impl State {
             }
         }
     }
+}
+
+/// Rebuilds child usage from a `task` result's structured details.
+fn subagent_usage(details: &Value) -> Option<Usage> {
+    let usage = details.get("usage")?;
+    let input = usage.get("input_tokens")?.as_u64()?;
+    let output = usage
+        .get("output_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let total = usage
+        .get("total_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or_else(|| input.saturating_add(output));
+    let nanos = Cost::nanos_from_usd(
+        usage
+            .get("cost_usd")
+            .and_then(Value::as_f64)
+            .unwrap_or_default(),
+    );
+    Some(Usage {
+        input,
+        output,
+        cache_read: 0,
+        cache_write: 0,
+        reasoning: None,
+        total_tokens: total,
+        cost: Cost {
+            total: nanos,
+            total_from_provider: true,
+            ..Cost::default()
+        },
+    })
 }
 
 fn history_tokens(history: &[Message]) -> u64 {

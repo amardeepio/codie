@@ -50,6 +50,10 @@ struct Rpc {
 
 impl Rpc {
     fn start(server: &MockServer, home: &TempHome, cwd: &Path) -> Self {
+        Self::start_with_args(server, home, cwd, &[])
+    }
+
+    fn start_with_args(server: &MockServer, home: &TempHome, cwd: &Path, extra: &[&str]) -> Self {
         let mut command = Command::new(env!("CARGO_BIN_EXE_codie"));
         for (key, value) in home.envs() {
             command.env(key, value);
@@ -66,6 +70,7 @@ impl Rpc {
             .arg(server.uri())
             .arg("--cwd")
             .arg(cwd)
+            .args(extra)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -373,6 +378,53 @@ async fn mount_sequence(server: &MockServer, bodies: Vec<String>, expected: Opti
     mock.mount(server).await;
 }
 
+/// Mounts a scripted sequence and records every request body for assertions
+/// about what the model was actually offered.
+async fn mount_capture(
+    server: &MockServer,
+    bodies: Vec<String>,
+    expected: Option<u64>,
+) -> Arc<Mutex<Vec<Value>>> {
+    let queue = Arc::new(Mutex::new(VecDeque::from(bodies)));
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let responder_queue = Arc::clone(&queue);
+    let responder_captured = Arc::clone(&captured);
+    let mut mock = Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(move |request: &wiremock::Request| {
+            if let Ok(body) = serde_json::from_slice::<Value>(&request.body) {
+                responder_captured.lock().expect("capture").push(body);
+            }
+            let mut queue = responder_queue.lock().expect("script queue");
+            let body = queue.pop_front().expect("a scripted response per request");
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body)
+        });
+    if let Some(expected) = expected {
+        mock = mock.expect(expected);
+    }
+    mock.mount(server).await;
+    captured
+}
+
+fn request_tool_names(body: &Value) -> Vec<String> {
+    body.get("tools")
+        .and_then(Value::as_array)
+        .map(|tools| {
+            tools
+                .iter()
+                .filter_map(|tool| {
+                    tool.pointer("/function/name")
+                        .or_else(|| tool.get("name"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn write_script(path: &str, content: &str) -> Vec<String> {
     let arguments = json!({"path": path, "content": content}).to_string();
     vec![
@@ -404,7 +456,14 @@ async fn spec_proto_011_handshake_advertises_v2_features() {
     assert_eq!(ready["type"], "rpc_ready");
     assert_eq!(ready["version"], 2);
     let features = ready["features"].as_array().expect("features");
-    for expected in ["permissions", "auth", "catalog", "config", "attachments"] {
+    for expected in [
+        "permissions",
+        "auth",
+        "catalog",
+        "config",
+        "attachments",
+        "subagents",
+    ] {
         assert!(
             features.iter().any(|feature| feature == expected),
             "missing feature {expected}: {ready:?}"
@@ -826,4 +885,538 @@ async fn spec_proto_012_themes_are_semantic_hex_palettes() {
     rpc.send(json!({"id": "stop", "command": "shutdown"}));
     assert!(rpc.response("stop")["success"].as_bool().unwrap());
     assert!(rpc.finish().status.success());
+}
+
+/// Returns the tool names declared by the first persisted system message.
+fn persisted_system_tools(path: &Path) -> Option<Vec<String>> {
+    let contents = std::fs::read_to_string(path).ok()?;
+    for line in contents.lines() {
+        let entry: Value = serde_json::from_str(line).ok()?;
+        if entry["type"] == "message" && entry["message"]["role"] == "system" {
+            let tools = entry["message"]["tools"].as_array()?;
+            return Some(
+                tools
+                    .iter()
+                    .filter_map(|tool| tool["name"].as_str().map(str::to_owned))
+                    .collect(),
+            );
+        }
+    }
+    None
+}
+
+/// Returns every session JSONL file under `directory`, recursively.
+fn session_files(directory: &Path) -> Vec<std::path::PathBuf> {
+    let mut files = Vec::new();
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return files;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            files.extend(session_files(&path));
+        } else if path
+            .extension()
+            .is_some_and(|extension| extension == "jsonl")
+        {
+            files.push(path);
+        }
+    }
+    files
+}
+
+/// The desktop connects before any key exists and stores one over RPC, so the
+/// server must start without a provider key and must not create an empty
+/// session file just by running.
+#[test]
+fn rpc_starts_without_a_provider_key() {
+    let home = TempHome::new().expect("temp home");
+    let work = tempfile::tempdir().expect("temp repo");
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_codie"));
+    home.apply(&mut command);
+    for name in [
+        "DEEPSEEK_API_KEY",
+        "OPENROUTER_API_KEY",
+        "GEMINI_API_KEY",
+        "NEBIUS_API_KEY",
+    ] {
+        command.env_remove(name);
+    }
+    let mut child = command
+        .arg("--mode")
+        .arg("rpc")
+        .arg("--provider")
+        .arg("nebius")
+        .arg("--cwd")
+        .arg(work.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn codie rpc");
+
+    let mut stdout = BufReader::new(child.stdout.take().expect("stdout"));
+    let mut line = String::new();
+    stdout.read_line(&mut line).expect("read rpc_ready");
+    assert!(line.contains(r#""type":"rpc_ready""#), "{line}");
+
+    line.clear();
+    stdout.read_line(&mut line).expect("read session");
+    let session: Value = serde_json::from_str(line.trim()).expect("session record");
+    assert_eq!(session["type"], "session");
+    assert_eq!(session["persisted"], false, "{session}");
+
+    let mut stdin = child.stdin.take().expect("stdin");
+    writeln!(stdin, r#"{{"id":"state","command":"get_state"}}"#).expect("write state");
+    writeln!(stdin, r#"{{"id":"stop","command":"shutdown"}}"#).expect("write shutdown");
+    stdin.flush().expect("flush shutdown");
+
+    line.clear();
+    stdout.read_line(&mut line).expect("read state response");
+    let state: Value = serde_json::from_str(line.trim()).expect("state response");
+    assert_eq!(state["data"]["persisted"], false, "{state}");
+    assert!(child.wait().expect("wait").success());
+
+    let session_files = session_files(&home.session_dir());
+    assert!(session_files.is_empty(), "{session_files:?}");
+}
+
+fn task_script() -> Vec<String> {
+    let arguments = json!({
+        "description": "Audit provider retries",
+        "prompt": "Read the retry paths and summarize them.",
+        "agent": "explore",
+    })
+    .to_string();
+    vec![
+        sse(&[
+            &tool_call_frame("call_task", "task", &arguments),
+            &finish_frame("tool_calls"),
+            usage_frame(),
+        ]),
+        sse(&[
+            &text_frame("child summary"),
+            &finish_frame("stop"),
+            usage_frame(),
+        ]),
+        sse(&[
+            &text_frame("parent done"),
+            &finish_frame("stop"),
+            usage_frame(),
+        ]),
+    ]
+}
+
+/// An explicit `--subagents off` wins over `[subagents] enabled = true`, so the
+/// desktop's Settings toggle can disable delegation on the next start.
+#[tokio::test]
+#[spec("PROTO-013")]
+async fn spec_proto_013_off_flag_disables_configured_delegation() {
+    let server = MockServer::start().await;
+    let home = TempHome::new().expect("temp home");
+    std::fs::write(
+        home.config_dir().join("config.toml"),
+        "[subagents]\nenabled = true\n",
+    )
+    .expect("write config");
+    let work = tempfile::tempdir().expect("temp repo");
+    let mut rpc = Rpc::start_with_args(&server, &home, work.path(), &["--subagents", "off"]);
+    assert_eq!(rpc.next()["type"], "rpc_ready");
+    assert_eq!(rpc.next()["type"], "session");
+
+    rpc.send(json!({"id": "status", "command": "get_subagents"}));
+    let status = rpc.response("status");
+    assert_eq!(status["success"], true, "{status:?}");
+    assert_eq!(status["data"]["active"], false);
+    assert_eq!(status["data"]["enabled"], false);
+    assert_eq!(status["data"]["mode"], "off");
+
+    rpc.send(json!({"id": "stop", "command": "shutdown"}));
+    assert!(rpc.response("stop")["success"].as_bool().unwrap());
+    assert!(rpc.finish().status.success());
+}
+
+fn text_completion(text: &str) -> String {
+    sse(&[&text_frame(text), &finish_frame("stop"), usage_frame()])
+}
+
+/// The model request, not just the runtime toolbox, must declare `task`.
+#[tokio::test]
+#[spec("PROTO-013")]
+async fn spec_proto_013_rpc_declares_task_in_the_model_request() {
+    let server = MockServer::start().await;
+    let requests = mount_capture(&server, vec![text_completion("hello")], Some(1)).await;
+    let home = TempHome::new().expect("temp home");
+    let work = tempfile::tempdir().expect("temp repo");
+    let mut rpc = Rpc::start_with_args(&server, &home, work.path(), &["--subagents", "auto"]);
+    assert_eq!(rpc.next()["type"], "rpc_ready");
+    assert_eq!(rpc.next()["type"], "session");
+
+    rpc.send(json!({"id": "run", "command": "prompt", "message": "hello"}));
+    assert!(rpc.response("run")["success"].as_bool().unwrap());
+    let (settled, records) = rpc.settle();
+    assert_eq!(settled["aborted"], false, "{records:?}");
+
+    let body = requests
+        .lock()
+        .expect("requests")
+        .first()
+        .cloned()
+        .expect("request");
+    let names = request_tool_names(&body);
+    assert!(names.iter().any(|name| name == "task"), "{names:?}");
+
+    rpc.send(json!({"id": "stop", "command": "shutdown"}));
+    assert!(rpc.response("stop")["success"].as_bool().unwrap());
+    assert!(rpc.finish().status.success());
+
+    let files = session_files(&home.session_dir());
+    let persisted = files
+        .iter()
+        .find_map(|path| persisted_system_tools(path).map(|tools| (path.clone(), tools)))
+        .expect("persisted system message");
+    assert!(
+        persisted.1.iter().any(|name| name == "task"),
+        "{:?}",
+        persisted.0
+    );
+}
+
+/// A resumed session may have been written before delegation was enabled. The
+/// live request must repair the stale system prompt even though the session file
+/// is append-only.
+#[tokio::test]
+#[spec("PROTO-013")]
+async fn spec_proto_013_resume_repairs_a_stale_system_prompt() {
+    let server = MockServer::start().await;
+    let requests = mount_capture(
+        &server,
+        vec![text_completion("seed"), text_completion("hello")],
+        Some(2),
+    )
+    .await;
+    let home = TempHome::new().expect("temp home");
+    let work = tempfile::tempdir().expect("temp repo");
+
+    let mut rpc = Rpc::start_with_args(&server, &home, work.path(), &["--subagents", "off"]);
+    assert_eq!(rpc.next()["type"], "rpc_ready");
+    let session = rpc.next();
+    let id = session["id"].as_str().expect("session id").to_owned();
+    rpc.send(json!({"id": "seed", "command": "prompt", "message": "seed"}));
+    assert!(rpc.response("seed")["success"].as_bool().unwrap());
+    assert_eq!(rpc.settle().0["aborted"], false);
+    rpc.send(json!({"id": "stop", "command": "shutdown"}));
+    assert!(rpc.response("stop")["success"].as_bool().unwrap());
+    assert!(rpc.finish().status.success());
+
+    let first = requests
+        .lock()
+        .expect("requests")
+        .first()
+        .cloned()
+        .expect("first request");
+    let first_names = request_tool_names(&first);
+    assert!(
+        !first_names.iter().any(|name| name == "task"),
+        "{first_names:?}"
+    );
+
+    let mut rpc = Rpc::start_with_args(
+        &server,
+        &home,
+        work.path(),
+        &["--subagents", "auto", "--resume", id.as_str()],
+    );
+    assert_eq!(rpc.next()["type"], "rpc_ready");
+    assert_eq!(rpc.next()["type"], "session");
+    rpc.send(json!({"id": "run", "command": "prompt", "message": "hello"}));
+    assert!(rpc.response("run")["success"].as_bool().unwrap());
+    assert_eq!(rpc.settle().0["aborted"], false);
+
+    let second = requests
+        .lock()
+        .expect("requests")
+        .get(1)
+        .cloned()
+        .expect("second request");
+    let second_names = request_tool_names(&second);
+    assert!(
+        second_names.iter().any(|name| name == "task"),
+        "{second_names:?}"
+    );
+
+    rpc.send(json!({"id": "stop", "command": "shutdown"}));
+    assert!(rpc.response("stop")["success"].as_bool().unwrap());
+    assert!(rpc.finish().status.success());
+}
+
+/// The desktop needs delegation to work over RPC: the `task` tool must be
+/// declared, live progress forwarded, the child session linked, and the run
+/// list and controls available.
+#[tokio::test]
+#[spec("AGENT-024")]
+#[spec("AGENT-021")]
+#[spec("PROTO-013")]
+async fn spec_proto_013_subagents_run_over_rpc() {
+    let server = MockServer::start().await;
+    mount_sequence(&server, task_script(), Some(3)).await;
+    let home = TempHome::new().expect("temp home");
+    let work = tempfile::tempdir().expect("temp repo");
+    let mut rpc = Rpc::start_with_args(&server, &home, work.path(), &["--subagents", "auto"]);
+
+    let ready = rpc.next();
+    assert_eq!(ready["type"], "rpc_ready");
+    assert!(
+        ready["features"]
+            .as_array()
+            .expect("features")
+            .iter()
+            .any(|feature| feature == "subagents"),
+        "{ready:?}"
+    );
+    let session = rpc.next();
+    let parent_id = session["id"]
+        .as_str()
+        .expect("parent session id")
+        .to_owned();
+
+    rpc.send(json!({"id": "mode", "command": "set_permission_mode", "mode": "ask"}));
+    assert!(rpc.response("mode")["success"].as_bool().unwrap());
+
+    rpc.send(json!({"id": "run", "command": "prompt", "message": "audit the retries"}));
+    let started = rpc.response("run");
+    assert!(started["success"].as_bool().unwrap(), "{started:?}");
+    assert_eq!(started["data"]["subagents"], "auto");
+
+    // `task` is a mutating capability, so the root run asks before delegating.
+    let permission = loop {
+        let record = rpc.next();
+        if record["type"] == "permission_request" {
+            break record;
+        }
+    };
+    assert_eq!(permission["tool"], "task");
+    assert_eq!(permission["depth"], 0);
+    assert!(permission.get("agent").is_none() || permission["agent"].is_null());
+    rpc.send(json!({
+        "id": "answer",
+        "command": "permission_response",
+        "request_id": permission["id"],
+        "decision": "allow_once",
+    }));
+    assert!(rpc.response("answer")["success"].as_bool().unwrap());
+
+    let (settled, records) = rpc.settle();
+    assert_eq!(settled["aborted"], false, "{records:?}");
+
+    let progress = records
+        .iter()
+        .find(|record| record["type"] == "tool_execution_update" && record["tool_name"] == "task")
+        .expect("live subagent progress");
+    assert_eq!(
+        progress["partial"]["details"]["subagent"]["agent"],
+        "explore"
+    );
+    assert!(
+        progress["partial"]["details"]["subagent"]["turns"]
+            .as_u64()
+            .is_some()
+    );
+
+    let result = records
+        .iter()
+        .find(|record| record["type"] == "tool_execution_end" && record["tool_name"] == "task")
+        .expect("task result");
+    let details = &result["result"]["details"];
+    assert_eq!(details["agent"], "explore");
+    assert_eq!(details["status"], "completed");
+    assert_eq!(details["persisted"], true);
+    let child_id = details["session_id"]
+        .as_str()
+        .expect("child session id")
+        .to_owned();
+    assert!(records.iter().any(|record| {
+        record["type"] == "message_end"
+            && record["message"]["role"] == "tool_result"
+            && record["message"]["tool_name"] == "task"
+    }));
+
+    rpc.send(json!({"id": "status", "command": "get_subagents"}));
+    let status = rpc.response("status");
+    assert_eq!(status["success"], true, "{status:?}");
+    assert_eq!(status["data"]["active"], true);
+    assert_eq!(status["data"]["mode"], "auto");
+    assert_eq!(status["data"]["max_parallel"], 4);
+    assert!(
+        status["data"]["types"]
+            .as_array()
+            .expect("types")
+            .iter()
+            .any(|entry| entry["name"] == "explore"),
+        "{status:?}"
+    );
+    let run = status["data"]["runs"]
+        .as_array()
+        .expect("runs")
+        .first()
+        .expect("one run")
+        .clone();
+    assert_eq!(run["agent"], "explore");
+    assert_eq!(run["state"], "completed");
+    assert_eq!(run["session_id"], child_id);
+
+    rpc.send(json!({"id": "mode", "command": "set_subagents", "mode": "force"}));
+    let mode = rpc.response("mode");
+    assert_eq!(mode["success"], true, "{mode:?}");
+    assert_eq!(mode["data"]["mode"], "force");
+
+    rpc.send(json!({
+        "id": "cancel",
+        "command": "cancel_subagent",
+        "call_id": "call_task",
+    }));
+    let cancel = rpc.response("cancel");
+    assert_eq!(cancel["success"], false);
+    assert_eq!(cancel["error"]["code"], "unknown_subagent");
+
+    rpc.send(json!({"id": "stop", "command": "shutdown"}));
+    assert!(rpc.response("stop")["success"].as_bool().unwrap());
+    assert!(rpc.finish().status.success());
+
+    // The child session header links back to the parent that delegated it.
+    let mut linked = None;
+    for path in session_files(&home.session_dir()) {
+        let contents = std::fs::read_to_string(&path).expect("read session");
+        let header: Value = serde_json::from_str(contents.lines().next().expect("session header"))
+            .expect("parse header");
+        if header["id"] == child_id.as_str() {
+            linked = Some(header);
+        }
+    }
+    let header = linked.expect("child session file");
+    assert_eq!(header["parent_session"], parent_id);
+}
+
+fn child_permission_script() -> Vec<String> {
+    let task = json!({
+        "description": "Write the child file",
+        "prompt": "Write child.txt.",
+        "agent": "general",
+    })
+    .to_string();
+    let child_write = json!({"path": "child.txt", "content": "child"}).to_string();
+    let root_write = json!({"path": "root.txt", "content": "root"}).to_string();
+    vec![
+        sse(&[
+            &tool_call_frame("call_task", "task", &task),
+            &finish_frame("tool_calls"),
+            usage_frame(),
+        ]),
+        sse(&[
+            &tool_call_frame("call_child_write", "write", &child_write),
+            &finish_frame("tool_calls"),
+            usage_frame(),
+        ]),
+        sse(&[
+            &text_frame("child done"),
+            &finish_frame("stop"),
+            usage_frame(),
+        ]),
+        sse(&[
+            &tool_call_frame("call_root_write", "write", &root_write),
+            &finish_frame("tool_calls"),
+            usage_frame(),
+        ]),
+        sse(&[
+            &text_frame("parent done"),
+            &finish_frame("stop"),
+            usage_frame(),
+        ]),
+    ]
+}
+
+/// A child permission request names the asking agent and depth, and
+/// `allow_always` applies only to that agent type (`AGENT-034`).
+#[tokio::test]
+#[spec("AGENT-034")]
+#[spec("PROTO-007")]
+async fn spec_proto_013_child_permissions_are_attributed_and_scoped() {
+    let server = MockServer::start().await;
+    mount_sequence(&server, child_permission_script(), Some(5)).await;
+    let home = TempHome::new().expect("temp home");
+    let work = tempfile::tempdir().expect("temp repo");
+    let mut rpc = Rpc::start_with_args(&server, &home, work.path(), &["--subagents", "auto"]);
+    assert_eq!(rpc.next()["type"], "rpc_ready");
+    assert_eq!(rpc.next()["type"], "session");
+
+    rpc.send(json!({"id": "mode", "command": "set_permission_mode", "mode": "ask"}));
+    assert!(rpc.response("mode")["success"].as_bool().unwrap());
+    rpc.send(json!({"id": "run", "command": "prompt", "message": "write both files"}));
+    assert!(rpc.response("run")["success"].as_bool().unwrap());
+
+    let mut records = Vec::new();
+    let mut permission = next_permission(&mut rpc, &mut records);
+    assert_eq!(permission["tool"], "task");
+    assert_eq!(permission["depth"], 0);
+    assert!(permission.get("agent").is_none() || permission["agent"].is_null());
+    answer(&mut rpc, &permission, "allow_once", &mut records);
+
+    permission = next_permission(&mut rpc, &mut records);
+    assert_eq!(permission["tool"], "write");
+    assert_eq!(permission["arguments"]["path"], "child.txt");
+    assert_eq!(permission["agent"], "general");
+    assert_eq!(permission["depth"], 1);
+    answer(&mut rpc, &permission, "allow_always", &mut records);
+
+    // The child's "always" grant must not cover the root run.
+    permission = next_permission(&mut rpc, &mut records);
+    assert_eq!(permission["tool"], "write");
+    assert_eq!(permission["arguments"]["path"], "root.txt");
+    assert!(permission.get("agent").is_none() || permission["agent"].is_null());
+    answer(&mut rpc, &permission, "deny", &mut records);
+
+    let (settled, tail) = rpc.settle();
+    records.extend(tail);
+    assert_eq!(settled["aborted"], false, "{records:?}");
+    assert_eq!(
+        std::fs::read_to_string(work.path().join("child.txt")).expect("child file"),
+        "child"
+    );
+    assert!(!work.path().join("root.txt").exists());
+
+    rpc.send(json!({"id": "stop", "command": "shutdown"}));
+    assert!(rpc.response("stop")["success"].as_bool().unwrap());
+    assert!(rpc.finish().status.success());
+}
+
+fn next_permission(rpc: &mut Rpc, records: &mut Vec<Value>) -> Value {
+    loop {
+        let record = rpc.next();
+        let permission = record["type"] == "permission_request";
+        records.push(record.clone());
+        if permission {
+            return record;
+        }
+    }
+}
+
+fn answer(rpc: &mut Rpc, permission: &Value, decision: &str, records: &mut Vec<Value>) {
+    let request_id = permission["id"].as_str().expect("permission id").to_owned();
+    let response_id = format!("answer-{request_id}");
+    rpc.send(json!({
+        "id": response_id,
+        "command": "permission_response",
+        "request_id": request_id,
+        "decision": decision,
+    }));
+    loop {
+        let record = rpc.next();
+        let done = record["type"] == "response" && record["id"] == response_id.as_str();
+        records.push(record.clone());
+        if done {
+            assert_eq!(record["success"], true, "{record:?}");
+            return;
+        }
+    }
 }

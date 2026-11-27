@@ -10,7 +10,7 @@ codie --mode rpc --provider deepseek
 The first two records are the version handshake and the session header:
 
 ```json
-{"type":"rpc_ready","version":2,"features":["permissions","auth","catalog","config","attachments"]}
+{"type":"rpc_ready","version":2,"features":["permissions","auth","catalog","config","attachments","subagents"]}
 {"type":"session","version":1,"id":"...","timestamp":"...","cwd":"/path/to/project"}
 ```
 
@@ -45,6 +45,9 @@ the same as [`--mode json`](../../schemas/json-events.schema.json).
 | `auth_status` | — | Credential state for every provider, without keys |
 | `auth_set_key` | `provider`, `key`, optional `verify` | Stores a key for one provider |
 | `auth_logout` | `provider` | Removes a stored key |
+| `get_subagents` | — | Delegation mode, bounds, types, and child runs |
+| `set_subagents` | optional `mode`, optional `parallel` | Changes the session mode or concurrency |
+| `cancel_subagent` | `call_id` | Cancels one queued or running child |
 | `get_messages` | — | Transcript messages, excluding the system prompt |
 | `get_entries` | — | Session entry tree |
 | `get_session_stats` | — | Counts, tokens, context, last usage |
@@ -71,8 +74,11 @@ configuration. A GUI opts into prompts:
 Each mutating call that is not read-only and not pre-approved then emits a request:
 
 ```json
-{"type":"permission_request","version":2,"id":"perm-1","tool_call_id":"call_7","tool":"edit","arguments":{"path":"src/main.rs","edits":[...]}}
+{"type":"permission_request","version":2,"id":"perm-1","tool_call_id":"call_7","tool":"edit","agent":"explore","depth":1,"arguments":{"path":"src/main.rs","edits":[...]}}
 ```
+
+`agent` is absent for the root run. `allow_always` grants the tool only to the asking agent type, so approving a
+child does not approve the same tool for the root or another persona.
 
 Answer with `allow_once`, `allow_always`, or `deny`:
 

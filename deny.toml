@@ -18,7 +18,7 @@ unmaintained = "workspace"
 unsound = "workspace"
 
 [licenses]
-# Permissive licenses compatible with `MIT OR Apache-2.0`.
+# Permissive licenses compatible with this MIT-licensed project.
 confidence-threshold = 0.8
 allow = [
     "MIT",

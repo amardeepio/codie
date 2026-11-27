@@ -325,10 +325,13 @@ fn spec_sess_009_system_message_is_persisted_and_replayed() {
     session
         .append_message(&system)
         .expect("append system message");
+    session
+        .append_message(&Message::user("hello"))
+        .expect("append user message");
 
     let reopened = Session::open(session.path()).expect("reopen");
     let projection = reopened.projection();
-    assert_eq!(projection.len(), 1);
+    assert_eq!(projection.len(), 2);
     assert_eq!(projection[0], system);
     let Message::System(persisted) = &projection[0] else {
         panic!("the first message must be the system message");

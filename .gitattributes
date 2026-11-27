@@ -17,7 +17,6 @@
 *.snap text
 *.txt text
 LICENSE-MIT text
-LICENSE-APACHE text
 .gitattributes text
 .editorconfig text
 deny.toml text
