@@ -339,9 +339,17 @@ async fn spec_prov_034_api_key_is_ephemeral() {
 async fn signals_map_to_documented_exit_codes() {
     for (signal, expected) in [("INT", 130), ("TERM", 143), ("HUP", 129)] {
         let server = MockServer::start().await;
+        // Signal only once the child has reached the provider request. A fixed
+        // sleep raced cold debug startup and killed the process before the
+        // signal handlers were installed.
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let started = Arc::new(Mutex::new(Some(started_tx)));
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
-            .respond_with(|_request: &wiremock::Request| {
+            .respond_with(move |_request: &wiremock::Request| {
+                if let Some(sender) = started.lock().expect("started lock").take() {
+                    let _ = sender.send(());
+                }
                 std::thread::sleep(Duration::from_secs(2));
                 ResponseTemplate::new(200)
                     .insert_header("content-type", "text/event-stream")
@@ -370,7 +378,9 @@ async fn signals_map_to_documented_exit_codes() {
             .stderr(Stdio::null());
 
         let mut child = command.spawn().expect("spawn codie");
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        started_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("codie did not reach the provider request");
         let signal_status = std::process::Command::new("kill")
             .arg(format!("-{signal}"))
             .arg(child.id().to_string())

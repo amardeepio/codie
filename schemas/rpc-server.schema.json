@@ -75,14 +75,33 @@
           "const": "attachments",
           "description": "`prompt` attachments.",
           "type": "string"
+        },
+        {
+          "const": "subagents",
+          "description": "Subagent delegation status and controls.",
+          "type": "string"
         }
       ]
     },
     "RpcPermissionRequest": {
       "description": "A mutating tool call waiting for a client decision.\n\nEmitted only after the client sends [`RpcCommand::SetPermissionMode`] with\n`ask` or `allow`; version 1 clients never receive it.",
       "properties": {
+        "agent": {
+          "description": "Agent type that asked for the call; absent for the root run.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "arguments": {
           "description": "Parsed tool arguments."
+        },
+        "depth": {
+          "default": 0,
+          "description": "Delegation depth of the asking run; `0` for the root run.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
         },
         "id": {
           "description": "Identifier to send back in [`RpcCommand::PermissionResponse`].",
@@ -212,6 +231,11 @@
             "string",
             "null"
           ]
+        },
+        "persisted": {
+          "default": false,
+          "description": "True when the session file exists and `--resume` can reopen it.",
+          "type": "boolean"
         },
         "timestamp": {
           "description": "Creation time as an RFC 3339 string.",

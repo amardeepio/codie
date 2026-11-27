@@ -348,10 +348,15 @@ pub(crate) async fn run(args: RunArgs, deferred_flags: BTreeMap<String, String>)
     }
 
     let requires_key = provider::requires_key(&provider_id);
+    // The RPC server must start even without a provider key: a host such as the
+    // desktop app stores the key through `auth_set_key` after connecting, and
+    // sends prompts only once one exists. Prompts surface the missing-key error
+    // instead of the process dying before the handshake.
+    let start_without_key = interactive || matches!(args.mode, OutputMode::Rpc);
     let key = match key {
         Ok(key) => Some(key),
         Err(_) if !requires_key => Some(String::new()),
-        Err(error) if !interactive => {
+        Err(error) if !start_without_key => {
             return Err(anyhow::Error::new(error)).with_context(|| {
                 format!(
                     "no API key for {provider_id}; run `codie auth login {provider_id}` or set {}",
@@ -586,9 +591,12 @@ pub(crate) async fn run(args: RunArgs, deferred_flags: BTreeMap<String, String>)
         None => DelegationMode::Auto,
     };
     let mut subagent_config = config.subagents.clone();
-    if (args.subagents.is_some() || args.subagents_parallel.is_some())
-        && subagent_mode != DelegationMode::Off
-    {
+    // An explicit flag is authoritative: `--subagents off` disables delegation
+    // even when config.toml enabled it, while `auto`/`force` opt in. A parallel
+    // override alone also opts in.
+    if args.subagents.is_some() {
+        subagent_config.enabled = subagent_mode != DelegationMode::Off;
+    } else if args.subagents_parallel.is_some() {
         subagent_config.enabled = true;
     }
     if let Some(limit) = args.subagents_parallel {
@@ -671,20 +679,14 @@ pub(crate) async fn run(args: RunArgs, deferred_flags: BTreeMap<String, String>)
     let mut toolbox: Arc<dyn Toolbox> = Arc::clone(&inner_toolbox);
 
     if matches!(args.mode, OutputMode::Rpc) {
-        let mut session = open_session(&args, &cwd, &session_dir)?;
-        let mut history = session
+        // The RPC server builds its system message after it has assembled the
+        // subagent-aware toolbox; building it here from the raw registry would
+        // omit `task` from the model-visible declarations.
+        let session = open_session(&args, &cwd, &session_dir)?;
+        let history = session
             .as_ref()
             .map(Session::projection)
             .unwrap_or_default();
-        ensure_system_message(
-            &mut history,
-            &mut session,
-            registry.as_ref(),
-            &cwd,
-            preamble.as_deref(),
-            append.as_deref(),
-            &customizations,
-        )?;
         let model_ref = ModelRef {
             api: model.api.to_string(),
             provider: provider_id.clone(),
@@ -708,6 +710,8 @@ pub(crate) async fn run(args: RunArgs, deferred_flags: BTreeMap<String, String>)
             append,
             customizations,
             extensions: Arc::clone(&extensions),
+            subagents: subagent_config,
+            subagent_mode,
         })
         .await;
     }

@@ -234,7 +234,10 @@ pub struct SubagentRuntime {
     /// Directory for child session files.
     pub session_dir: PathBuf,
     /// Parent session identifier, when persisted.
-    pub parent_session_id: Option<String>,
+    ///
+    /// Mutable so a host that starts a new session keeps linking later
+    /// children to the current parent instead of the startup session.
+    parent_session_id: std::sync::RwLock<Option<String>>,
     /// Parent model, inherited unless an override is configured.
     ///
     /// Swappable at runtime so `/model` and `/provider` also change the model
@@ -278,7 +281,7 @@ impl SubagentRuntime {
             parent_toolbox,
             prompt,
             session_dir: session_dir.into(),
-            parent_session_id,
+            parent_session_id: std::sync::RwLock::new(parent_session_id),
             parent_model: std::sync::RwLock::new(parent_model),
             known_models: std::sync::RwLock::new(known_models),
             thinking: std::sync::RwLock::new(ThinkingLevel::default()),
@@ -344,6 +347,26 @@ impl SubagentRuntime {
             .thinking
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Returns the parent session identifier used for new child sessions.
+    #[must_use]
+    pub fn parent_session_id(&self) -> Option<String> {
+        self.parent_session_id
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Replaces the parent session identifier used for new child sessions.
+    ///
+    /// Hosts call this when `new_session` swaps the parent session so later
+    /// children link to the current session instead of the startup one.
+    pub fn set_parent_session_id(&self, session_id: Option<String>) {
+        *self
+            .parent_session_id
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = session_id;
     }
 
     /// Returns the model children inherit right now.
@@ -452,7 +475,7 @@ impl std::fmt::Debug for SubagentRuntime {
         formatter
             .debug_struct("SubagentRuntime")
             .field("config", &self.config())
-            .field("parent_session_id", &self.parent_session_id)
+            .field("parent_session_id", &self.parent_session_id())
             .field("parent_model", &self.parent_model())
             .finish_non_exhaustive()
     }
@@ -770,8 +793,7 @@ fn create_child_session(
         return Ok((None, None));
     }
     let parent = runtime
-        .parent_session_id
-        .clone()
+        .parent_session_id()
         .unwrap_or_else(|| "ephemeral".to_owned());
     let mut session = Session::create_child(&runtime.prompt.cwd, &runtime.session_dir, &parent)
         .map_err(|error| error.to_string())?;

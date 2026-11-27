@@ -37,6 +37,10 @@ const NARROW_FOOTER_WIDTH: u16 = 80;
 const DETAILED_FOOTER_WIDTH: u16 = 120;
 
 /// Draws one frame.
+///
+/// Rendering is pure: it never spawns a process or reads a file. A pending
+/// selection copy is only extracted here and handed to the event loop through
+/// [`App::pending_copy`], because the text lives in the rendered buffer.
 pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
     let area = frame.area();
     let palette = app.theme.palette;
@@ -80,12 +84,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
     {
         let text = selection_text(frame.buffer_mut(), selection);
         if !text.trim().is_empty() {
-            let lines = text.lines().count();
-            app.notice = Some(match crate::copy_to_clipboard(&text) {
-                Ok(()) => format!("copied {lines} line(s)"),
-                Err(error) => format!("clipboard unavailable: {error}"),
-            });
-            app.needs_redraw = true;
+            app.pending_copy = Some(text);
         }
     }
 }
@@ -2348,6 +2347,20 @@ mod tests {
     }
 
     #[test]
+    #[spec("TUI-029")]
+    fn selection_copy_is_handed_to_the_event_loop() {
+        let mut app = app();
+        app.begin_selection(1, 1);
+        app.drag_selection(40, 6);
+        assert!(!app.end_selection(40, 6), "a moved drag is a selection");
+        let _ = buffer(&mut app);
+        let text = app
+            .pending_copy
+            .expect("the frame must capture the selected text");
+        assert!(!text.trim().is_empty(), "{text}");
+    }
+
+    #[test]
     #[spec("TUI-006")]
     fn empty_state_and_footer_render() {
         let mut app = app();
@@ -2806,7 +2819,7 @@ mod tests {
             crate::keybindings::Bindings::default(),
         );
         let (reply, _answer) = tokio::sync::oneshot::channel();
-        app.push_permission(crate::permissions::PermissionRequest {
+        app.push_permission_with_preview(crate::permissions::PermissionRequest {
             tool: "edit".to_owned(),
             arguments: serde_json::json!({
                 "path": "file.txt",
@@ -3121,7 +3134,7 @@ mod tests {
     fn spec_tui_025_permission_overlay_hugs_content_and_pads_the_preview() {
         let mut app = permission_app();
         let (reply, _answer) = tokio::sync::oneshot::channel();
-        app.push_permission(crate::permissions::PermissionRequest {
+        app.push_permission_with_preview(crate::permissions::PermissionRequest {
             tool: "bash".to_owned(),
             arguments: serde_json::json!({"command": "cargo test"}),
             agent: None,
@@ -3193,7 +3206,7 @@ mod tests {
     fn permission_overlay_colors_each_decision_and_dims_the_transcript() {
         let mut app = permission_app();
         let (reply, _answer) = tokio::sync::oneshot::channel();
-        app.push_permission(crate::permissions::PermissionRequest {
+        app.push_permission_with_preview(crate::permissions::PermissionRequest {
             tool: "bash".to_owned(),
             arguments: serde_json::json!({"command": "cargo test"}),
             agent: None,
@@ -3227,7 +3240,7 @@ mod tests {
     fn permission_overlay_warns_before_destructive_commands() {
         let mut app = permission_app();
         let (reply, _answer) = tokio::sync::oneshot::channel();
-        app.push_permission(crate::permissions::PermissionRequest {
+        app.push_permission_with_preview(crate::permissions::PermissionRequest {
             tool: "bash".to_owned(),
             arguments: serde_json::json!({"command": "rm -rf target && cargo build"}),
             agent: None,
@@ -3248,7 +3261,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         let (reply, _answer) = tokio::sync::oneshot::channel();
-        app.push_permission(crate::permissions::PermissionRequest {
+        app.push_permission_with_preview(crate::permissions::PermissionRequest {
             tool: "bash".to_owned(),
             arguments: serde_json::json!({"command": command}),
             agent: None,
@@ -3274,7 +3287,7 @@ mod tests {
     fn permission_overlay_renders() {
         let mut app = app();
         let (reply, _answer) = tokio::sync::oneshot::channel();
-        app.push_permission(crate::permissions::PermissionRequest {
+        app.push_permission_with_preview(crate::permissions::PermissionRequest {
             tool: "bash".to_owned(),
             arguments: serde_json::json!({"command": "cargo test"}),
             agent: None,

@@ -89,7 +89,7 @@ Verification: `crates/codie-subagents/tests/subagents.rs::persona_prompt_reaches
 Verification: `crates/codie-core/tests/agent_loop.rs::tool_progress_is_forwarded_before_the_end`
 
 **AGENT-034 (MUST)** The agent type that owns a call is available as `AgentConfig.agent` and `ToolContext.agent`, and is `None` for the root run. An interactive permission request names the asking agent and its depth, and an "always" approval applies only to that agent type; it does not grant the same tool to another persona or to the root run.
-Verification: `crates/codie-tui/src/permissions.rs::always_is_scoped_to_the_asking_agent`
+Verification: `crates/codie-tui/src/permissions.rs::always_is_scoped_to_the_asking_agent`, `crates/codie-cli/src/permissions.rs::always_is_scoped_to_the_asking_agent`, `crates/codie-cli/tests/rpc.rs::spec_proto_013_child_permissions_are_attributed_and_scoped`
 
 **AGENT-035 (SHOULD)** A host may expose a `question` tool to the parent and its children. The tool asks one question, returns the answer as text, and returns an explicit dismissal notice when the user declines. A child never blocks the whole batch: the tool is scheduled sequentially.
 Verification: `crates/codie-tui/src/questions.rs::answers_round_trip_through_the_broker`, `crates/codie-tui/src/questions.rs::tool_reports_the_answer_and_dismissal`
