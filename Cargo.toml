@@ -32,7 +32,7 @@ codie-spec-macro = { path = "crates/codie-spec-macro", version = "0.9.5" }
 
 # Runtime
 anyhow = "1"
-base64 = "0.22"
+base64 = "0.23"
 async-trait = "0.1"
 bytes = "1"
 clap = { version = "4", features = ["derive", "env", "wrap_help"] }
