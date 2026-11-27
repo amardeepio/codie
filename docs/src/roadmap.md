@@ -25,8 +25,9 @@ clipboard image attachments, full-width Markdown tables, and live `/theme` previ
 registry, TUI `/connect` and key validation, 22 additional providers, live OpenAI-compatible model catalogs,
 keyless local providers, and persisted provider/model selection. `0.9.4` adds subagent delegation with personas
 and live child activity, RPC v2 interactive permissions, a per-entry TUI transcript cache, shared context
-estimates, and a 7 KiB project-memory entry cap. Signing, notarization, SBOM, fuzzing, and the full terminal
-matrix remain for the `1.0.0` gate.
+estimates, and a 7 KiB project-memory entry cap. `0.9.5` brings subagent delegation to RPC and GUI clients,
+attributes child permission requests to the asking agent, and moves the project to MIT-only licensing. Signing,
+notarization, SBOM, fuzzing, and the full terminal matrix remain for the `1.0.0` gate.
 
 ## Phase 0 exit criteria (met 2026-11-11)
 

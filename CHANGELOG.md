@@ -11,15 +11,7 @@ that major series, with migrations applied on read.
 
 ### Added
 
-- Desktop subagent delegation. The desktop app starts the RPC sidecar with delegation enabled, renders
-  `task` calls as dedicated cards with live turn/activity and final cost/session details, and adds
-  inspector plus command-palette controls for `off`, `auto`, and `force`. A running child can be
-  cancelled, its session opened, and child sessions are badged in the sidebar. Child permission
-  requests now name the asking agent and depth, and `allow_always` is scoped to that agent type
-  (`AGENT-034`, `PROTO-013`).
-- RPC commands `get_subagents`, `set_subagents`, and `cancel_subagent`, with delegated usage included
-  in `get_state` totals. The sidecar now wires subagents into `--mode rpc` when `[subagents] enabled`
-  or `--subagents` is set.
+- Nothing yet.
 
 ### Changed
 
@@ -27,9 +19,38 @@ that major series, with migrations applied on read.
 
 ### Fixed
 
-- RPC sessions now declare `task` in the model-visible system prompt when delegation is enabled.
-  Resumed sessions whose persisted prompt predates delegation are repaired in memory before the
-  first request, so the desktop's subagent tool is no longer invisible to the model.
+- Nothing yet.
+
+### Removed
+
+- Nothing yet.
+
+### Security
+
+- Nothing yet.
+
+## [0.9.5] - 2026-11-27
+
+### Added
+
+- RPC-mode subagent delegation. `--mode rpc` declares `task` when delegation is enabled, forwards live child
+  progress on the parent call, records delegated usage in session totals, and adds `get_subagents`,
+  `set_subagents`, and `cancel_subagent` so GUI clients can show live runs, switch modes, stop one child, and
+  open child sessions (`PROTO-013`).
+- Child permission requests now carry the asking agent and depth, and `allow_always` is scoped to that agent
+  type rather than the whole session (`AGENT-034`).
+
+### Changed
+
+- The project is now **MIT-only**. The `MIT OR Apache-2.0` option, `LICENSE-APACHE`, and the dual-license plan
+  entries were removed; `Cargo.toml`, the README, and the published metadata now say MIT.
+- The README is roughly 40 percent shorter, with installation moved to a prominent callout near the top.
+
+### Fixed
+
+- RPC sessions now declare `task` in the model-visible system prompt when delegation is enabled. Resumed
+  sessions whose persisted prompt predates delegation are repaired in memory before the first request, so
+  the subagent tool is no longer invisible to the model.
 
 ### Removed
 

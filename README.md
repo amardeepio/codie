@@ -17,7 +17,7 @@ Codie is a deliberate reimplementation of the architecture proven by [`pi`](http
 a small event-driven core, an append-only session tree, and one OpenAI-compatible provider adapter. The command is
 `codie`.
 
-**Stable release `0.9.4`.** The one-shot agent, interactive TUI, sessions, customization, automation, extensions,
+**Stable release `0.9.5`.** The one-shot agent, interactive TUI, sessions, customization, automation, extensions,
 subagent delegation, and RPC v2 work end to end. See [`ROADMAP.md`](ROADMAP.md) and
 [`docs/src/`](docs/src/).
 
@@ -51,7 +51,7 @@ Pin a version or choose another directory:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh \
-  | sh -s -- --version 0.9.4
+  | sh -s -- --version 0.9.5
 
 curl -fsSL https://raw.githubusercontent.com/amardeepio/codie/main/install.sh \
   | sh -s -- --bin-dir "$HOME/bin"
